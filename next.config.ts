@@ -1,4 +1,5 @@
 import type { NextConfig } from "next";
+import { withSentryConfig } from "@sentry/nextjs";
 
 // Phase 23 — baseline production security headers.
 //
@@ -58,4 +59,19 @@ const nextConfig: NextConfig = {
   },
 };
 
-export default nextConfig;
+// Wrap with Sentry so source maps are uploaded on each Vercel build and
+// server errors get auto-instrumented. Requires SENTRY_AUTH_TOKEN at
+// build time to upload sourcemaps; without it the build still succeeds
+// but uploads are skipped.
+export default withSentryConfig(nextConfig, {
+  org: "flowtora",
+  project: "flowtora",
+  // Silence the upload log spam in CI. Flip to true locally if you
+  // need to debug the sourcemap step.
+  silent: !process.env.CI,
+  // Tree-shake the Sentry SDK's logger statements in production.
+  disableLogger: true,
+  // Route Sentry tunnel through /monitoring so ad-blockers don't
+  // swallow client-side errors. Cheap and invisible.
+  tunnelRoute: "/monitoring",
+});

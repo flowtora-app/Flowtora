@@ -1,6 +1,7 @@
 "use client";
 
 import { useEffect } from "react";
+import * as Sentry from "@sentry/nextjs";
 
 // Root-level error boundary. Required by Next.js to avoid the dev-mode
 // "missing required error components, refreshing…" loop when something
@@ -15,6 +16,9 @@ export default function GlobalError({
 }) {
   useEffect(() => {
     console.error("[global-boundary]", error);
+    // Hand the error to Sentry. A no-op when the DSN isn't set, so
+    // local dev without a key still behaves like before.
+    Sentry.captureException(error);
   }, [error]);
 
   return (
