@@ -1,0 +1,3616 @@
+// Tracksign — multi-tenant SaaS for sign/print shops.
+// Tenancy model: shared Postgres, every tenant-scoped row carries `tenantId`.
+// Tenant access is enforced in app code via getTenantContext() + RBAC checks.
+
+generator client {
+  provider = "prisma-client-js"
+}
+
+datasource db {
+  provider = "postgresql"
+  url      = env("DATABASE_URL")
+}
+
+// ────────────────────────────────────────────────────────────
+// Tenants & billing
+// ────────────────────────────────────────────────────────────
+
+model Tenant {
+  id                   String       @id @default(cuid())
+  slug                 String       @unique
+  name                 String
+  status               TenantStatus @default(TRIAL)
+  plan                 Plan         @default(STARTER)
+  trialEndsAt          DateTime?
+  stripeCustomerId     String?      @unique
+  stripeSubscriptionId String?      @unique
+
+  // Profile / settings
+  logoUrl      String?
+  timezone     String  @default("UTC")
+  currency     String  @default("USD")
+  taxId        String?
+  phone        String?
+  website      String?
+  addressLine1 String?
+  addressLine2 String?
+  city         String?
+  region       String?
+  postalCode   String?
+  country      String?
+
+  // Phase 21 Slice A — email sender customization. Customer-facing emails
+  // use the tenant's display name and route replies to their inbox, but
+  // the actual envelope sender stays on Tracksign's verified Resend domain
+  // (otherwise DKIM / SPF fails and deliverability tanks). Shape:
+  //   From: "{emailFromName} <noreply@tracksign.app>"
+  //   Reply-To: {emailReplyTo}
+  emailFromName String?
+  emailReplyTo  String?
+
+  // Phase 21 Slice B — document output customization. Rendered at the
+  // bottom of customer-facing quote/invoice emails and on the portal's
+  // invoice/quote detail pages. Plain text (no HTML passthrough) so shops
+  // can't accidentally break portal layout or email rendering.
+  quoteFooterText     String?
+  invoiceFooterText   String?
+  paymentInstructions String?
+
+  // Phase 21 Slice C — tenant-wide notification defaults. Shape matches
+  // Membership.notifPrefs so admins can set a house default that new
+  // members inherit on invite-accept. Existing members keep their
+  // personal overrides; if a key is missing from a member's prefs the
+  // resolver falls back through tenant defaults, then the built-in
+  // { inApp: true, email: false }.
+  defaultNotifPrefs Json?
+
+  // Phase 21 Slice D — locale / formatting preferences. Controls how
+  // dates render on customer-facing surfaces (portal, emails). Internal
+  // staff screens keep ISO (YYYY-MM-DD) because it's unambiguous for
+  // operators working across tenants. weekStartsOn picks which column
+  // the calendar-like views lead with.
+  //   "ISO"  → 2026-04-18
+  //   "US"   → 04/18/2026
+  //   "EU"   → 18/04/2026
+  dateFormat    String @default("US")
+  weekStartsOn  Int    @default(0)  // 0=Sun, 1=Mon, 6=Sat
+
+  // Onboarding
+  onboardingCompletedAt DateTime?
+  businessType          BusinessType?
+  services              String[]      @default([])
+  leadSources           String[]      @default([])
+
+  // ── Phase 4 (Onboarding & Activation) ──
+  // When the tenant loads the sample data set from the onboarding flow.
+  // We keep the timestamp (not just a boolean) because support needs to
+  // know WHEN the sample data landed — sometimes shops call us after
+  // they've mixed real customers into the sample set and want it gone.
+  sampleDataLoadedAt    DateTime?
+  sampleDataClearedAt   DateTime?
+  // Owners can dismiss the persistent "finish setup" nudge. The banner
+  // rearms itself after 7 days so a genuinely stuck workspace still gets
+  // the prompt — but day-one users aren't hounded on every page load.
+  activationDismissedAt DateTime?
+
+  // Quote / order / invoice numbering — prefix + last issued number.
+  quoteNumberPrefix   String @default("Q-")
+  quoteLastNumber     Int    @default(1000)
+  orderNumberPrefix   String @default("O-")
+  orderLastNumber     Int    @default(1000)
+  invoiceNumberPrefix String @default("INV-")
+  invoiceLastNumber   Int    @default(1000)
+  // Phase 14 — credit memos reuse the same prefix-and-counter pattern
+  // as invoices. Default prefix "CM-"; counter starts at 1000 to match
+  // the shape tenants are already used to.
+  creditMemoNumberPrefix String @default("CM-")
+  creditMemoLastNumber   Int    @default(1000)
+
+  // Financial defaults
+  defaultTaxRate        Decimal      @default(0) @db.Decimal(6, 4) // e.g. 0.0875
+  defaultDepositPercent Int          @default(50)
+  defaultPaymentTerms   PaymentTerms @default(NET_30)
+  proofRequiresApproval Boolean      @default(true)
+
+  // ── Phase 13: workflow / approval rules ──
+  // A quote whose discount % exceeds this threshold needs a manager/owner to
+  // "approve for sending". 0 disables the discount gate entirely.
+  approvalDiscountThresholdPct Int     @default(0)
+  // A quote whose total exceeds this amount needs approval before sending.
+  // 0 disables the large-job gate.
+  approvalLargeJobThreshold    Decimal @default(0) @db.Decimal(12, 2)
+  // Orders can't advance to IN_PRODUCTION unless they have an APPROVED proof.
+  requireProofBeforeProduction Boolean @default(false)
+  // Phase A Slice 1 — orders can't advance to IN_PRODUCTION until the deposit
+  // % has been paid. Parallel to requireDepositBeforeInstall, but earlier in
+  // the funnel — stops shop work from starting on unfunded jobs.
+  requireDepositBeforeProduction Boolean @default(false)
+  // Installs can't be scheduled until the order has collected its deposit %.
+  requireDepositBeforeInstall  Boolean @default(false)
+
+  // ── Phase 22 Slice C: auto-assignment defaults ──
+  // When a new quote is created without an explicit sales rep, we fall back
+  // to this user. Same idea for orders and their production manager. Null =
+  // no default (creator must pick, or the field stays null).
+  defaultSalesRepId          String?
+  defaultProductionManagerId String?
+
+  // ── Phase 22 Slice D: auto-apply default checklist templates ──
+  // Seeded onto new orders / install events the moment they're created, so
+  // production staff don't have to remember to "Apply template". Null = no
+  // auto-apply (existing manual apply flow still works).
+  defaultOrderChecklistTemplateId   String?
+  defaultInstallChecklistTemplateId String?
+
+  // ── Phase 13: smart pricing ──
+  // Default rush markup (percent of subtotal) applied when a user clicks
+  // "Apply rush fee" on a quote. Shows up as its own line so the customer
+  // sees it called out. 0 = no rush workflow.
+  rushFeePercent Int @default(0)
+
+  // ── Phase 15 Slice D: franchise / multi-tenant grouping ──
+  // A tenant can be a "group root" (the franchisor / parent company) that
+  // owns shared templates other tenants in its group inherit. Children point
+  // at their parent via `parentTenantId`. Inheritance is one level deep —
+  // we don't recursively walk up the chain, which keeps queries flat and
+  // avoids accidental visibility through transitive grouping.
+  parentTenantId    String?
+  parent            Tenant?  @relation("TenantHierarchy", fields: [parentTenantId], references: [id], onDelete: SetNull)
+  children          Tenant[] @relation("TenantHierarchy")
+  isGroupRoot       Boolean  @default(false)
+  // Brand kit fields a child tenant may fall back to when its own value is null.
+  // Today only used as a comparison hint; future slice will wire actual UI fallback.
+  brandPrimaryColor String?
+
+  // ── Phase 17 Slice A: platform-staff visibility & support fields ──
+  // Free-form notes only platform staff (super admin / site mgr / support) can
+  // see — never exposed to the tenant. Use for "spoke with owner re: integration
+  // troubles", "abusive billing dispute pending", etc.
+  notes            String?
+  // Denormalized "any audit log written for this tenant" timestamp. Bumped by
+  // logAudit() best-effort so the platform tenants list can show health-at-a-
+  // glance ("dead 47 days") without per-row aggregate queries.
+  lastActivityAt   DateTime?
+  // When status flips to SUSPENDED we capture *why* — surfaced on the
+  // /account-suspended landing page so the tenant owner has a path to resolve.
+  suspensionReason String?
+
+  // ── Phase 1 (Core SaaS Foundation): environment + lifecycle fields ──
+  // `environment` separates real paying customers from test/demo tenants
+  // used for sales demos, QA, and internal playground accounts. The
+  // workspace shell shows a persistent ribbon when env != LIVE so nobody
+  // confuses a sandbox for production data. Platform dashboards can filter
+  // to LIVE only to get accurate health metrics.
+  environment         TenantEnvironment @default(LIVE)
+  // Phase 19 — release cohort. Segments tenants into rollout waves so
+  // platform staff can flip a beta feature for "all ALPHA tenants" without
+  // touching every record individually. NONE = general availability.
+  betaCohort          BetaCohort        @default(NONE)
+  // Archive is a soft-delete with a grace period. Setting `archivedAt`
+  // flips the tenant to ARCHIVED status and records who/when; tenant
+  // members can no longer sign in but the data stays intact so platform
+  // staff can restore within the grace window. `scheduledDeletionAt`
+  // marks the point after which the archive becomes permanent (a cron
+  // job can later hard-delete). Restore clears all three fields.
+  archivedAt          DateTime?
+  archivedBy          String?
+  archiveReason       String?
+  scheduledDeletionAt DateTime?
+  // Trial nudge tracking — stamped when the "ends in Xd" banner is first
+  // acknowledged or dismissed so we don't hammer owners with the same
+  // warning. Billing alert tracking does the same for PAST_DUE.
+  trialEndingNoticeAt DateTime?
+  pastDueNoticeAt     DateTime?
+
+  createdAt DateTime @default(now())
+  updatedAt DateTime @updatedAt
+
+  memberships        Membership[]
+  invites            Invite[]
+  auditLogs          AuditLog[]
+  customers          Customer[]
+  contacts           Contact[]
+  interactions       Interaction[]
+  tasks              Task[]
+  products           Product[]
+  productPackages    ProductPackage[]
+  quoteTemplates     QuoteTemplate[]
+  quotes             Quote[]
+  orders             Order[]
+  orderBlockers      OrderBlocker[]
+  invoices           Invoice[]
+  payments           Payment[]
+  files              File[]
+  proofs             Proof[]
+  proofDecisions     ProofDecision[]
+  installEvents      InstallEvent[]
+  portalTokens       PortalToken[]
+  // Phase 15 — unauthenticated public share links (proofs / invoices).
+  shareTokens        ShareToken[]
+  notifications      Notification[]
+  checklistTemplates ChecklistTemplate[]
+  checklistItems     ChecklistItem[]
+  comments           Comment[]
+  emailEvents        EmailEvent[]
+  messageTemplates   MessageTemplate[]
+  portalMessages     PortalMessage[]
+  locations          Location[]
+  supportTickets     SupportTicket[]
+  dataExportRequests DataExportRequest[]
+  deletionRequests   AccountDeletionRequest[]
+  feedback           Feedback[]
+  palettePins        PalettePin[]
+  savedViews         SavedView[]
+  // Phase 12 — production management.
+  departments        Department[]
+  workStations       WorkStation[]
+  productionStages   ProductionStage[]
+  defectReports      DefectReport[]
+  materialUsages     MaterialUsage[]
+  // Phase 13 — field execution evidence + site surveys + issue escalation.
+  installPhotos      InstallPhoto[]
+  installSignatures  InstallSignature[]
+  installIssues      InstallIssue[]
+  siteSurveys        SiteSurvey[]
+  // Phase 14 — financial operations: expenses, vendors, refunds, credits,
+  // write-offs. Every new model is tenant-scoped with Cascade delete so a
+  // tenant deletion cleans up the entire financial footprint.
+  vendors            Vendor[]
+  expenses           Expense[]
+  refunds            Refund[]
+  creditMemos        CreditMemo[]
+  creditApplications CreditApplication[]
+  writeOffs          WriteOff[]
+  // Phase 22 — approval requests generated by workflow rule gates.
+  approvalRequests   ApprovalRequest[]
+}
+
+// ────────────────────────────────────────────────────────────
+// Phase 15 Slice A — Location (branch) of a tenant.
+//
+// A tenant can have one or more locations (branches / storefronts).
+// Every new tenant gets a default "Main" location so existing single-shop
+// flows keep working without asking the user to configure anything. Jobs,
+// customers, invoices etc. optionally belong to a location; null = tenant-
+// wide / shared resource.
+//
+// We deliberately scope *staff to location* in Slice B via a
+// `Membership.locationIds` array rather than a many-to-many — shops typically
+// have <10 locations and each staff member is in 1-2 at most, so an array
+// keeps the query model trivial.
+// ────────────────────────────────────────────────────────────
+
+model Location {
+  id       String @id @default(cuid())
+  tenantId String
+
+  name      String // e.g. "Downtown Showroom"
+  code      String? // optional short code, e.g. "DTS" — used in numbering prefixes later
+  isDefault Boolean @default(false) // the tenant's primary/HQ location
+
+  // Address + contact — mirrors Customer's billing address shape.
+  addressLine1 String?
+  addressLine2 String?
+  city         String?
+  region       String?
+  postalCode   String?
+  country      String?
+  phone        String?
+  email        String?
+
+  // Optional override of tenant business hours / timezone — not enforced yet,
+  // but shops with branches in different time zones will need these soon.
+  timezone String?
+
+  active    Boolean  @default(true)
+  createdAt DateTime @default(now())
+  updatedAt DateTime @updatedAt
+
+  tenant        Tenant         @relation(fields: [tenantId], references: [id], onDelete: Cascade)
+  customers     Customer[]
+  quotes        Quote[]
+  orders        Order[]
+  invoices      Invoice[]
+  installEvents InstallEvent[]
+
+  @@unique([tenantId, name])
+  @@unique([tenantId, code])
+  @@index([tenantId, active])
+}
+
+enum BusinessType {
+  SIGN_SHOP
+  PRINT_SHOP
+  HYBRID
+  OTHER
+}
+
+enum PaymentTerms {
+  DUE_ON_RECEIPT
+  NET_15
+  NET_30
+  NET_45
+  NET_60
+}
+
+enum TenantStatus {
+  TRIAL
+  ACTIVE
+  PAST_DUE
+  SUSPENDED
+  CANCELED
+  // Phase 1 — soft-deleted tenant with a restore window. Behaves like
+  // SUSPENDED for auth (owner cannot sign in) but is filtered out of
+  // the platform tenants list by default and carries a scheduled
+  // deletion timestamp after which a cron can hard-delete.
+  ARCHIVED
+}
+
+// Phase 1 — test/demo tenants vs. real paying customers.
+//
+// LIVE  — paying or trialling-into-paying customer. Default for new signups.
+// DEMO  — sales/marketing demo account shown to prospects. Billing disabled.
+// TEST  — QA sandbox or internal playground. Banner visible across shell.
+//
+// Environment is orthogonal to TenantStatus — a DEMO tenant can be ACTIVE,
+// SUSPENDED, etc. just like a LIVE one. It only changes UI chrome and
+// platform-dashboard filtering.
+enum TenantEnvironment {
+  LIVE
+  DEMO
+  TEST
+}
+
+// Phase 19 — release cohort. Used to segment tenants into rollout waves
+// (alpha/beta/pilot programs) so feature flags and comms can target
+// groups. NONE = general availability, no special cohort.
+enum BetaCohort {
+  NONE
+  ALPHA
+  BETA
+  PILOT
+}
+
+enum Plan {
+  STARTER
+  GROWTH
+  PRO
+  ENTERPRISE
+}
+
+// ────────────────────────────────────────────────────────────
+// Users & auth (NextAuth-compatible)
+// ────────────────────────────────────────────────────────────
+
+model User {
+  id            String    @id @default(cuid())
+  email         String    @unique
+  name          String?
+  passwordHash  String?
+  emailVerified DateTime?
+  image         String?
+
+  // Non-null only for SaaS-platform staff (super admin / site mgr / support).
+  platformRole PlatformRole?
+
+  twoFactorEnabled Boolean   @default(false)
+  lastLoginAt      DateTime?
+
+  // ── Phase 2 (Auth/Security) ──
+  // Bump this on password change or "sign out everywhere". The session
+  // callback in `auth.ts` compares it to the token copy and nukes the
+  // session when it drifts — effective session revocation without
+  // switching off the JWT strategy.
+  sessionVersion   Int       @default(0)
+  // Rate-limit / lockout state for the credentials provider. Every
+  // failed login increments `failedLoginCount`; reaching the threshold
+  // writes `lockedUntil` and login refuses until it passes.
+  failedLoginCount Int       @default(0)
+  lockedUntil      DateTime?
+
+  createdAt DateTime @default(now())
+  updatedAt DateTime @updatedAt
+
+  memberships            Membership[]
+  sessions               Session[]
+  accounts               Account[]
+  twoFactor              UserTwoFactor?
+  passwordResets         PasswordResetToken[]
+  emailVerifications     EmailVerificationToken[]
+  securityEvents         SecurityEvent[]
+  twoFactorPendingLogins TwoFactorPendingLogin[]
+  palettePins            PalettePin[]
+  savedViews             SavedView[]
+  portalMessageReplies   PortalMessage[]          @relation("PortalMessageSender")
+}
+
+enum PlatformRole {
+  SUPER_ADMIN
+  SITE_MANAGER
+  SUPPORT_AGENT
+}
+
+model Membership {
+  id       String           @id @default(cuid())
+  userId   String
+  tenantId String
+  role     TenantRole
+  status   MembershipStatus @default(ACTIVE)
+
+  // Phase 15 — per-member branch scope. Empty array means "all branches"
+  // (the default for owners/admins and for single-location shops). When
+  // populated, the member only sees & operates on these locations.
+  locationIds String[] @default([])
+
+  // Phase 4 — first-run welcome card dismissal. Stamped once the non-admin
+  // member has closed the "Welcome to {workspace}" card on their first
+  // dashboard visit. Null for fresh memberships; set once, never cleared.
+  welcomeSeenAt DateTime?
+
+  // Phase 16 — per-user notification delivery preferences stored as JSON.
+  // Shape: { [NotificationType]: { inApp: boolean; email: boolean } }
+  // Null means "use defaults" (all in-app on, email off by default).
+  notifPrefs Json?
+
+  createdAt DateTime @default(now())
+  updatedAt DateTime @updatedAt
+
+  user   User   @relation(fields: [userId], references: [id], onDelete: Cascade)
+  tenant Tenant @relation(fields: [tenantId], references: [id], onDelete: Cascade)
+
+  @@unique([userId, tenantId])
+  @@index([tenantId])
+}
+
+enum TenantRole {
+  OWNER
+  ADMIN
+  SALES_REP
+  CSR
+  DESIGNER
+  PRODUCTION_MANAGER
+  INSTALLER
+  ACCOUNTING
+  EMPLOYEE
+  CUSTOMER_PORTAL
+}
+
+enum MembershipStatus {
+  ACTIVE
+  SUSPENDED
+}
+
+model Invite {
+  id         String     @id @default(cuid())
+  tenantId   String
+  email      String
+  role       TenantRole
+  token      String     @unique
+  invitedBy  String
+  expiresAt  DateTime
+  acceptedAt DateTime?
+  createdAt  DateTime   @default(now())
+
+  tenant Tenant @relation(fields: [tenantId], references: [id], onDelete: Cascade)
+
+  @@index([tenantId, email])
+}
+
+// NextAuth adapter tables
+model Session {
+  id           String   @id @default(cuid())
+  sessionToken String   @unique
+  userId       String
+  expires      DateTime
+  user         User     @relation(fields: [userId], references: [id], onDelete: Cascade)
+}
+
+model Account {
+  id                String  @id @default(cuid())
+  userId            String
+  type              String
+  provider          String
+  providerAccountId String
+  refresh_token     String?
+  access_token      String?
+  expires_at        Int?
+  token_type        String?
+  scope             String?
+  id_token          String?
+  session_state     String?
+  user              User    @relation(fields: [userId], references: [id], onDelete: Cascade)
+
+  @@unique([provider, providerAccountId])
+}
+
+model VerificationToken {
+  identifier String
+  token      String   @unique
+  expires    DateTime
+
+  @@unique([identifier, token])
+}
+
+// ────────────────────────────────────────────────────────────
+// Auditing
+// ────────────────────────────────────────────────────────────
+
+// ────────────────────────────────────────────────────────────
+// CRM — customers, contacts, interactions, tasks
+// ────────────────────────────────────────────────────────────
+
+model Customer {
+  id         String         @id @default(cuid())
+  tenantId   String
+  // Phase 15 — branch this customer is served from. Null = shared /
+  // tenant-wide. Backfilled to the tenant's default location on first write.
+  locationId String?
+  kind       CustomerKind   @default(BUSINESS)
+  name       String
+  status     CustomerStatus @default(ACTIVE)
+
+  // Pipeline / sales tracking
+  stage            PipelineStage @default(NEW_LEAD)
+  estimatedValue   Decimal?      @db.Decimal(12, 2)
+  closeProbability Int? // 0-100
+  lostReason       String?
+  source           String? // lead source — free text or canonical value
+
+  // Phase 13 — per-customer default discount %. Auto-applied when creating a
+  // new quote for this customer. 0 = no default. Rep can still override.
+  defaultDiscountPct Int @default(0)
+
+  tags  String[] @default([])
+  notes String?
+
+  // Owner = assigned tenant user. Plain id; we resolve names in queries.
+  ownerId String?
+
+  // Primary contact info (for individuals, or shop-floor contact for businesses)
+  email   String?
+  phone   String?
+  website String?
+
+  // Billing address
+  billingAddressLine1 String?
+  billingAddressLine2 String?
+  billingCity         String?
+  billingRegion       String?
+  billingPostalCode   String?
+  billingCountry      String?
+
+  // Install / shipping address
+  installAddressLine1 String?
+  installAddressLine2 String?
+  installCity         String?
+  installRegion       String?
+  installPostalCode   String?
+  installCountry      String?
+
+  createdAt DateTime @default(now())
+  updatedAt DateTime @updatedAt
+
+  tenant        Tenant         @relation(fields: [tenantId], references: [id], onDelete: Cascade)
+  location      Location?      @relation(fields: [locationId], references: [id], onDelete: SetNull)
+  contacts      Contact[]
+  interactions  Interaction[]
+  tasks         Task[]
+  quotes        Quote[]
+  orders        Order[]
+  invoices      Invoice[]
+  files         File[]
+  installEvents InstallEvent[]
+  portalTokens   PortalToken[]
+  comments       Comment[]
+  emailEvents    EmailEvent[]
+  portalMessages PortalMessage[]
+  // Phase 14 — a credit memo belongs to a customer and can be applied
+  // against any of their invoices. Carrying the relation here lets the
+  // customer detail page surface outstanding credit balance at a glance.
+  creditMemos   CreditMemo[]
+
+  @@index([tenantId, stage])
+  @@index([tenantId, status])
+  @@index([tenantId, name])
+  @@index([tenantId, ownerId])
+  @@index([tenantId, locationId])
+}
+
+enum CustomerKind {
+  BUSINESS
+  INDIVIDUAL
+}
+
+enum CustomerStatus {
+  ACTIVE
+  INACTIVE
+  ARCHIVED
+}
+
+enum PipelineStage {
+  NEW_LEAD
+  CONTACTED
+  QUOTED
+  NEGOTIATING
+  WON
+  LOST
+}
+
+model Contact {
+  id         String  @id @default(cuid())
+  tenantId   String
+  customerId String
+  firstName  String
+  lastName   String?
+  title      String?
+  email      String?
+  phone      String?
+  isPrimary  Boolean @default(false)
+  notes      String?
+
+  createdAt DateTime @default(now())
+  updatedAt DateTime @updatedAt
+
+  tenant   Tenant   @relation(fields: [tenantId], references: [id], onDelete: Cascade)
+  customer Customer @relation(fields: [customerId], references: [id], onDelete: Cascade)
+
+  @@index([tenantId, customerId])
+}
+
+model Interaction {
+  id         String          @id @default(cuid())
+  tenantId   String
+  customerId String
+  userId     String // who logged it
+  type       InteractionType
+  subject    String?
+  body       String?
+  occurredAt DateTime        @default(now())
+  createdAt  DateTime        @default(now())
+
+  tenant   Tenant   @relation(fields: [tenantId], references: [id], onDelete: Cascade)
+  customer Customer @relation(fields: [customerId], references: [id], onDelete: Cascade)
+
+  @@index([tenantId, customerId, occurredAt])
+}
+
+enum InteractionType {
+  NOTE
+  CALL
+  EMAIL
+  MEETING
+  TEXT
+}
+
+model Task {
+  id           String       @id @default(cuid())
+  tenantId     String
+  customerId   String?
+  // Phase 10 — tasks can be pinned to an order for shop-floor coordination.
+  // Keeps standalone tasks (customer-scoped or ad-hoc) working unchanged.
+  orderId      String?
+  // Phase 10 — self-referential subtasks so a "Install Monday" task can
+  // have "Pack truck", "Confirm site contact", "Pick up permit" underneath
+  // without spawning a separate model.
+  parentTaskId String?
+  assignedTo   String? // userId
+  createdBy    String // userId
+  title        String
+  description  String?
+  dueDate      DateTime?
+  completedAt  DateTime?
+  priority     TaskPriority @default(NORMAL)
+
+  createdAt DateTime @default(now())
+  updatedAt DateTime @updatedAt
+
+  tenant     Tenant    @relation(fields: [tenantId], references: [id], onDelete: Cascade)
+  customer   Customer? @relation(fields: [customerId], references: [id], onDelete: SetNull)
+  order      Order?    @relation(fields: [orderId], references: [id], onDelete: SetNull)
+  parentTask Task?     @relation("TaskSubtasks", fields: [parentTaskId], references: [id], onDelete: Cascade)
+  subtasks   Task[]    @relation("TaskSubtasks")
+  comments   Comment[]
+
+  @@index([tenantId, completedAt, dueDate])
+  @@index([tenantId, assignedTo, completedAt])
+  @@index([tenantId, customerId])
+  @@index([tenantId, orderId, completedAt])
+  @@index([parentTaskId])
+}
+
+enum TaskPriority {
+  LOW
+  NORMAL
+  HIGH
+}
+
+// ────────────────────────────────────────────────────────────
+// Catalog — products, services, fees + option groups
+// ────────────────────────────────────────────────────────────
+
+model Product {
+  id           String       @id @default(cuid())
+  tenantId     String
+  name         String
+  description  String?
+  sku          String?
+  category     String?
+  pricingModel PricingModel @default(FIXED)
+  basePrice    Decimal      @default(0) @db.Decimal(12, 2)
+  cost         Decimal?     @db.Decimal(12, 2)
+  unit         String? // display label: "each", "sq ft", "ft", "hour"
+  taxable      Boolean      @default(true)
+  active       Boolean      @default(true)
+  imageUrl     String?
+
+  // Phase 8 — catalog taxonomy. The "kind" classifies what sort of thing
+  // this row is (a print product, an install service, a delivery fee, etc.).
+  // Used to adapt form defaults, filter the catalog, and let the quote
+  // builder surface the right items in the right sections. Old rows default
+  // to STANDARD so the column is safe to add without data migration.
+  kind ProductKind @default(STANDARD)
+
+  // Phase 8 — formula pricing. When set to MANUAL (the default) the shop
+  // enters `basePrice` directly and we honor it. When set to COST_PLUS_PCT
+  // or COST_PLUS_FIXED, the catalog derives basePrice from cost + markup
+  // and ignores the manually-entered basePrice. This keeps pricing
+  // consistent with the shop's margin targets without requiring every
+  // product to be hand-priced.
+  priceFormula PriceFormula @default(MANUAL)
+  markupPct    Decimal?     @db.Decimal(6, 2) // used when priceFormula = COST_PLUS_PCT
+  markupFixed  Decimal?     @db.Decimal(12, 2) // used when priceFormula = COST_PLUS_FIXED
+
+  // Phase 8 — internal-only fields. These never surface on a customer-facing
+  // quote or portal view. Production notes tell the shop floor what matters
+  // about this item; spec sheet is a longer technical reference; internalSku
+  // is a separate code for inventory or purchasing systems.
+  productionNotes String?
+  specSheet       String? @db.Text
+  internalSku     String?
+
+  // Phase 18 Slice F — industry pricing. Trim / offcut waste expressed as a
+  // percentage (0-100). For dimension-based pricing (PER_SQFT, PER_LINEAR_FT)
+  // this grosses up the area / length by (1 + wasteFactorPct/100) before the
+  // price is applied. Lets sign/print shops quote the way they actually cut
+  // material without hand-doing the math on every line. Zero by default so
+  // nothing changes for existing products.
+  wasteFactorPct Decimal @default(0) @db.Decimal(6, 2)
+
+  // Phase 15 Slice D — when true AND the owning tenant is a group root,
+  // every child tenant in the group sees this product as inherited. Has no
+  // effect on non-group-root tenants. Children can't edit inherited rows.
+  shared Boolean @default(false)
+
+  createdAt DateTime @default(now())
+  updatedAt DateTime @updatedAt
+
+  tenant            Tenant                    @relation(fields: [tenantId], references: [id], onDelete: Cascade)
+  optionGroups      ProductOptionGroup[]
+  quantityTiers     ProductQuantityTier[]
+  quoteItems        QuoteItem[]
+  orderItems        OrderItem[]
+  packageComponents ProductPackageComponent[] @relation("ComponentProduct")
+  templateItems     QuoteTemplateItem[]       @relation("TemplateProduct")
+
+  @@index([tenantId, active])
+  @@index([tenantId, category])
+  @@index([tenantId, name])
+  @@index([tenantId, kind])
+}
+
+// Phase 8 — product classification.
+//
+// Sign / print shops don't just sell "products" — their catalogue is a mix
+// of physical goods, recurring services, and conditional fees. Classifying
+// each row lets the UI group and present them sensibly and lets the quote
+// builder suggest the right things in the right slots (e.g. "add an
+// install service" vs "add a rush fee").
+enum ProductKind {
+  STANDARD // generic physical good (fallback / legacy)
+  PRINT // printed items (banners, business cards, decals…)
+  SIGN // fabricated signs, channel letters, monument signs
+  INSTALL_SERVICE // on-site installation labor
+  DESIGN_SERVICE // artwork / design labor
+  LABOR // general shop labor (not tied to install or design)
+  SETUP_FEE // one-time setup charge (prepress, plate, tooling)
+  RUSH_FEE // expedite surcharge
+  DELIVERY_FEE // delivery / shipping line
+  CUSTOM // one-off custom-quoted item
+}
+
+// Phase 8 — pricing formula mode.
+//
+// MANUAL — the shop typed the basePrice themselves. We use it as-is.
+// COST_PLUS_PCT — basePrice = cost * (1 + markupPct/100). We derive at
+// save time. A shop with a 40% margin target can set "40" once and every
+// product priced this way stays consistent.
+// COST_PLUS_FIXED — basePrice = cost + markupFixed. Used for low-margin
+// parts where a flat $ uplift is more predictable than a percentage.
+enum PriceFormula {
+  MANUAL
+  COST_PLUS_PCT
+  COST_PLUS_FIXED
+}
+
+// Phase 13 — quantity breaks. Each tier says "when ordered quantity >=
+// minQuantity, use this pricePerUnit instead of the product's basePrice."
+// Only meaningful for quantity-based pricing models (PER_UNIT, PER_SQFT,
+// PER_LINEAR_FT). The snapshot is copied onto QuoteItem.quantityTiers at
+// add-time so later catalog edits don't retroactively reprice.
+model ProductQuantityTier {
+  id           String  @id @default(cuid())
+  productId    String
+  minQuantity  Int // apply this tier when quantity >= minQuantity
+  pricePerUnit Decimal @db.Decimal(12, 2)
+  sortOrder    Int     @default(0)
+
+  product Product @relation(fields: [productId], references: [id], onDelete: Cascade)
+
+  @@index([productId])
+}
+
+enum PricingModel {
+  FIXED // single flat price
+  PER_UNIT // basePrice × quantity
+  PER_SQFT // basePrice × area (square feet)
+  PER_LINEAR_FT // basePrice × length (feet)
+  LABOR_HOURLY // basePrice × hours
+  CUSTOM_QUOTE // sales rep enters price per quote
+}
+
+model ProductOptionGroup {
+  id        String  @id @default(cuid())
+  productId String
+  name      String
+  required  Boolean @default(false)
+  sortOrder Int     @default(0)
+
+  product Product         @relation(fields: [productId], references: [id], onDelete: Cascade)
+  options ProductOption[]
+
+  @@index([productId])
+}
+
+model ProductOption {
+  id              String  @id @default(cuid())
+  optionGroupId   String
+  label           String
+  priceAdjustment Decimal @default(0) @db.Decimal(12, 2)
+  sortOrder       Int     @default(0)
+
+  optionGroup ProductOptionGroup @relation(fields: [optionGroupId], references: [id], onDelete: Cascade)
+
+  @@index([optionGroupId])
+}
+
+// Phase 8 — package templates.
+//
+// A "package" is a reusable bundle of products — the shop names the bundle
+// ("Storefront starter pack") and lists the components with default
+// quantities. When a rep adds a package to a quote, we expand it to the
+// corresponding quote items in one click. The source `ProductPackage` row
+// is NOT deleted from the quote — we only use it to drive the expansion.
+// Components keep a FK to the underlying Product so swapping out a
+// component's source updates future expansions but not historical quotes.
+model ProductPackage {
+  id          String  @id @default(cuid())
+  tenantId    String
+  name        String
+  description String?
+  active      Boolean @default(true)
+
+  // Optional internal-only notes — shown to reps when they hover/select
+  // the package, not to customers.
+  internalNotes String?
+
+  createdAt DateTime @default(now())
+  updatedAt DateTime @updatedAt
+
+  tenant     Tenant                    @relation(fields: [tenantId], references: [id], onDelete: Cascade)
+  components ProductPackageComponent[]
+
+  @@index([tenantId, active])
+  @@index([tenantId, name])
+}
+
+model ProductPackageComponent {
+  id              String  @id @default(cuid())
+  packageId       String
+  productId       String
+  // Default quantity pre-filled when the package is expanded into a quote.
+  // A rep can override the quantity after expansion. For dimension-based
+  // products this multiplies the computed area/length at add-time.
+  defaultQuantity Decimal @default(1) @db.Decimal(12, 3)
+  // Optional note that follows the expanded line onto the quote — useful
+  // for "Includes 2 hours of on-site adjustment" context.
+  note            String?
+  sortOrder       Int     @default(0)
+
+  package ProductPackage @relation(fields: [packageId], references: [id], onDelete: Cascade)
+  product Product        @relation("ComponentProduct", fields: [productId], references: [id], onDelete: Restrict)
+
+  @@index([packageId])
+  @@index([productId])
+}
+
+// ────────────────────────────────────────────────────────────
+// Quotes
+// ────────────────────────────────────────────────────────────
+
+model Quote {
+  id         String      @id @default(cuid())
+  tenantId   String
+  customerId String
+  // Phase 15 — branch the quote was written at. Defaults to the customer's
+  // location if one is set.
+  locationId String?
+  number     String // e.g. "Q-1001" — unique within tenant
+  status     QuoteStatus @default(DRAFT)
+
+  issuedAt   DateTime?
+  expiresAt  DateTime?
+  sentAt     DateTime?
+  viewedAt   DateTime?
+  approvedAt DateTime?
+  declinedAt DateTime?
+
+  // Stored totals (recomputed whenever items/meta change).
+  subtotal       Decimal      @default(0) @db.Decimal(12, 2)
+  discountType   DiscountType @default(NONE)
+  discountValue  Decimal      @default(0) @db.Decimal(12, 2) // flat $ or 0-100 %
+  discountAmount Decimal      @default(0) @db.Decimal(12, 2)
+  taxRate        Decimal      @default(0) @db.Decimal(6, 4) // snapshot from tenant at creation
+  taxAmount      Decimal      @default(0) @db.Decimal(12, 2)
+  total          Decimal      @default(0) @db.Decimal(12, 2)
+
+  // Meta
+  notes        String? // internal
+  customerNote String? // visible to customer
+  terms        String?
+
+  createdBy  String // userId
+  salesRepId String? // userId
+
+  // Phase 13: approval override state. When a quote trips a discount or
+  // large-job threshold, a manager/owner must stamp `approvedToSendAt` before
+  // it can move DRAFT→SENT. Null = untouched (no approval has ever been applied).
+  approvedToSendAt   DateTime?
+  approvedToSendById String?
+
+  // Phase 9 — deposit required before the job moves into production. Recomputed
+  // alongside other totals; mirrors the discount pattern (type + value + amount).
+  // PERCENT is 0–100 of the post-tax total; FIXED is a flat $ amount.
+  depositType   DepositType @default(NONE)
+  depositValue  Decimal     @default(0) @db.Decimal(12, 2)
+  depositAmount Decimal     @default(0) @db.Decimal(12, 2)
+
+  // Phase 9 — optional-items rollup. Optional lines are EXCLUDED from the main
+  // subtotal/tax/total (they're upsells the customer chooses); this field
+  // records the sum of their subtotals so the UI can show "Optional add-ons".
+  optionalSubtotal Decimal @default(0) @db.Decimal(12, 2)
+
+  // Phase 9 — public share link. One-time unguessable token gating the
+  // customer-facing /q/[token] page. Null means the quote hasn't been shared
+  // publicly yet (it can still be viewed through the /portal link).
+  shareToken String? @unique
+
+  // Phase 9 — revision chain. A new revision clones the parent and sets
+  // `parentQuoteId`; the parent is stamped `supersededAt` so it stops showing
+  // in normal lists. `revisionNumber` starts at 1 and increments per revision.
+  parentQuoteId  String?
+  revisionNumber Int       @default(1)
+  supersededAt   DateTime?
+
+  createdAt DateTime @default(now())
+  updatedAt DateTime @updatedAt
+
+  tenant      Tenant         @relation(fields: [tenantId], references: [id], onDelete: Cascade)
+  customer    Customer       @relation(fields: [customerId], references: [id], onDelete: Restrict)
+  location    Location?      @relation(fields: [locationId], references: [id], onDelete: SetNull)
+  items       QuoteItem[]
+  sections    QuoteSection[]
+  order       Order?
+  files       File[]
+  comments    Comment[]
+  parentQuote Quote?         @relation("QuoteRevisions", fields: [parentQuoteId], references: [id], onDelete: SetNull)
+  revisions   Quote[]        @relation("QuoteRevisions")
+
+  @@unique([tenantId, number])
+  @@index([tenantId, status])
+  @@index([tenantId, customerId])
+  @@index([tenantId, updatedAt])
+  @@index([tenantId, locationId])
+  @@index([parentQuoteId])
+}
+
+// Phase 9 — groups quote lines under a heading ("Signage", "Installation",
+// "Optional upgrades"). Sections are ordered; lines reference a section via
+// `sectionId`. A null sectionId means the line sits in the un-grouped area
+// at the top of the quote (backwards compatible with pre-Phase-9 quotes).
+model QuoteSection {
+  id          String  @id @default(cuid())
+  quoteId     String
+  title       String
+  description String?
+  sortOrder   Int     @default(0)
+
+  createdAt DateTime @default(now())
+  updatedAt DateTime @updatedAt
+
+  quote Quote       @relation(fields: [quoteId], references: [id], onDelete: Cascade)
+  items QuoteItem[]
+
+  @@index([quoteId])
+}
+
+enum DepositType {
+  NONE
+  FIXED
+  PERCENT
+}
+
+// ────────────────────────────────────────────────────────────
+// Phase 9 — Quote templates
+// ────────────────────────────────────────────────────────────
+//
+// Snapshot-style starting points for recurring jobs. Templates store their
+// sections + item snapshots locally — new-from-template copies the data
+// into a fresh Quote/QuoteSection/QuoteItem tree. Edits to a template
+// never touch quotes already created from it, and vice versa.
+
+model QuoteTemplate {
+  id          String  @id @default(cuid())
+  tenantId    String
+  name        String
+  description String?
+
+  // Meta copied onto new quotes when this template is used. Blank fields
+  // mean "don't override whatever the new quote already picked up from
+  // tenant defaults."
+  customerNote String?
+  terms        String?
+
+  // Default discount + deposit settings, preserved so a repeat job can
+  // carry its negotiated terms without hand-re-entry.
+  discountType  DiscountType @default(NONE)
+  discountValue Decimal      @default(0) @db.Decimal(12, 2)
+  depositType   DepositType  @default(NONE)
+  depositValue  Decimal      @default(0) @db.Decimal(12, 2)
+
+  active Boolean @default(true)
+
+  createdAt DateTime @default(now())
+  updatedAt DateTime @updatedAt
+
+  tenant   Tenant                 @relation(fields: [tenantId], references: [id], onDelete: Cascade)
+  sections QuoteTemplateSection[]
+  items    QuoteTemplateItem[]
+
+  @@index([tenantId, active])
+  @@index([tenantId, name])
+}
+
+model QuoteTemplateSection {
+  id          String  @id @default(cuid())
+  templateId  String
+  title       String
+  description String?
+  sortOrder   Int     @default(0)
+
+  template QuoteTemplate       @relation(fields: [templateId], references: [id], onDelete: Cascade)
+  items    QuoteTemplateItem[]
+
+  @@index([templateId])
+}
+
+model QuoteTemplateItem {
+  id         String  @id @default(cuid())
+  templateId String
+  sectionId  String?
+
+  // Optional link back to the catalog product the line snapshot came from.
+  // Kept nullable so a template can carry an ad-hoc line (like a pre-made
+  // "Project management" bullet) without requiring a Product row.
+  productId String?
+
+  // Snapshot — mirrors QuoteItem so new-from-template is a straight copy.
+  name         String
+  description  String?
+  pricingModel PricingModel
+  basePrice    Decimal      @db.Decimal(12, 2)
+  unit         String?
+  taxable      Boolean      @default(true)
+
+  quantity Decimal? @db.Decimal(12, 3)
+  width    Decimal? @db.Decimal(12, 3)
+  height   Decimal? @db.Decimal(12, 3)
+  length   Decimal? @db.Decimal(12, 3)
+  hours    Decimal? @db.Decimal(12, 3)
+
+  manualPrice     Decimal? @db.Decimal(12, 2)
+  selectedOptions Json     @default("[]")
+  quantityTiers   Json     @default("[]")
+  wasteFactorPct  Decimal  @default(0) @db.Decimal(6, 2)
+  costSnapshot    Decimal? @db.Decimal(12, 2)
+
+  isOptional Boolean @default(false)
+  sortOrder  Int     @default(0)
+
+  createdAt DateTime @default(now())
+
+  template QuoteTemplate         @relation(fields: [templateId], references: [id], onDelete: Cascade)
+  section  QuoteTemplateSection? @relation(fields: [sectionId], references: [id], onDelete: SetNull)
+  product  Product?              @relation("TemplateProduct", fields: [productId], references: [id], onDelete: SetNull)
+
+  @@index([templateId])
+  @@index([sectionId])
+  @@index([productId])
+}
+
+enum QuoteStatus {
+  DRAFT
+  SENT
+  VIEWED
+  APPROVED
+  DECLINED
+  EXPIRED
+}
+
+enum DiscountType {
+  NONE
+  FIXED
+  PERCENT
+}
+
+// A line on a quote. Snapshots the product's pricing data at the time the line
+// was added, so later product edits don't mutate historical quotes.
+model QuoteItem {
+  id        String  @id @default(cuid())
+  quoteId   String
+  productId String? // nullable: ad-hoc line items OK, or product deleted later
+
+  // Snapshot
+  name         String
+  description  String?
+  pricingModel PricingModel
+  basePrice    Decimal      @db.Decimal(12, 2)
+  unit         String?
+  taxable      Boolean      @default(true)
+
+  // Inputs (depend on pricingModel)
+  quantity Decimal? @db.Decimal(12, 3)
+  width    Decimal? @db.Decimal(12, 3)
+  height   Decimal? @db.Decimal(12, 3)
+  length   Decimal? @db.Decimal(12, 3)
+  hours    Decimal? @db.Decimal(12, 3)
+
+  // For CUSTOM_QUOTE lines — rep enters final price.
+  manualPrice Decimal? @db.Decimal(12, 2)
+
+  // JSON array: [{ groupName, label, adjustment }]
+  selectedOptions Json @default("[]")
+
+  // Phase 13 — JSON snapshot of product quantity tiers at add-time:
+  // [{ minQuantity, pricePerUnit }]. Empty array = no tier pricing.
+  // Snapshot keeps historical quotes stable when the catalog later changes.
+  quantityTiers Json @default("[]")
+
+  // Phase 18 Slice F — waste factor snapshot from the product at add-time.
+  // Percentage 0-100; grosses up the billable area / length for PER_SQFT
+  // and PER_LINEAR_FT. Snapshot so later catalog edits don't reprice
+  // historical quotes. Zero for ad-hoc lines and legacy rows.
+  wasteFactorPct Decimal @default(0) @db.Decimal(6, 2)
+
+  // Phase 18 Slice F — cost snapshot from the product at add-time so we can
+  // show gross margin on the quote without re-reading the catalog (which may
+  // have drifted). Nullable for ad-hoc lines where cost isn't known.
+  costSnapshot Decimal? @db.Decimal(12, 2)
+
+  subtotal  Decimal @default(0) @db.Decimal(12, 2)
+  sortOrder Int     @default(0)
+
+  // Phase 9 — grouping + optional-line markers.
+  // `sectionId` null = the line sits in the default un-grouped band at the top.
+  // `isOptional` true = customer-selectable upsell; excluded from the main
+  // totals, summed separately into Quote.optionalSubtotal.
+  sectionId  String?
+  isOptional Boolean @default(false)
+
+  createdAt DateTime @default(now())
+
+  quote   Quote         @relation(fields: [quoteId], references: [id], onDelete: Cascade)
+  product Product?      @relation(fields: [productId], references: [id], onDelete: SetNull)
+  section QuoteSection? @relation(fields: [sectionId], references: [id], onDelete: SetNull)
+
+  @@index([quoteId])
+  @@index([sectionId])
+}
+
+// ────────────────────────────────────────────────────────────
+// Orders — produced from approved quotes
+// ────────────────────────────────────────────────────────────
+
+model Order {
+  id         String      @id @default(cuid())
+  tenantId   String
+  customerId String
+  // Phase 15 — branch fulfilling the order. Inherited from the quote (or
+  // customer) at conversion time; can be re-pointed mid-job if another
+  // branch takes over production.
+  locationId String?
+  quoteId    String?     @unique // source quote (one order per quote)
+  number     String // e.g. "O-1001" — unique within tenant
+  status     OrderStatus @default(NEW)
+
+  // Totals snapshotted from the quote at conversion time.
+  subtotal       Decimal @default(0) @db.Decimal(12, 2)
+  discountAmount Decimal @default(0) @db.Decimal(12, 2)
+  taxAmount      Decimal @default(0) @db.Decimal(12, 2)
+  total          Decimal @default(0) @db.Decimal(12, 2)
+
+  // Deposit tracking (Phase 7 Invoices will update paidAmount via payments).
+  depositPercent Int     @default(0)
+  paidAmount     Decimal @default(0) @db.Decimal(12, 2)
+
+  // Schedule / timestamps
+  dueDate      DateTime?
+  scheduledFor DateTime?
+  startedAt    DateTime?
+  readyAt      DateTime?
+  completedAt  DateTime?
+  canceledAt   DateTime?
+  cancelReason String?
+
+  // Assignees (userIds)
+  productionManagerId String?
+  installerId         String?
+  createdBy           String
+
+  // Notes
+  customerNote    String?
+  productionNotes String?
+  installNotes    String?
+
+  // Phase 10 — rush / priority flag. Separate from tenant-level rush fee
+  // (which is a pricing concern on the quote). Shows up as a pill on the
+  // detail page, a filter on the list, and a sort-ahead hint for reps.
+  priority OrderPriority @default(NORMAL)
+
+  // Phase 10 — job specs. These answer "what are we actually making?"
+  // at the order level. Kept as concrete columns instead of a generic JSON
+  // blob so the UI can render labels, migrations can index if needed, and
+  // tenants don't fight with schema-less sludge.
+  material            String?
+  finish              String?
+  colorSpecs          String? // Pantone / CMYK / RGB / custom
+  installMethod       String?
+  specialInstructions String?
+
+  createdAt DateTime @default(now())
+  updatedAt DateTime @updatedAt
+
+  tenant         Tenant            @relation(fields: [tenantId], references: [id], onDelete: Cascade)
+  customer       Customer          @relation(fields: [customerId], references: [id], onDelete: Restrict)
+  location       Location?         @relation(fields: [locationId], references: [id], onDelete: SetNull)
+  quote          Quote?            @relation(fields: [quoteId], references: [id], onDelete: SetNull)
+  items          OrderItem[]
+  invoices       Invoice[]
+  files          File[]
+  proofs         Proof[]
+  installEvents  InstallEvent[]
+  comments       Comment[]
+  checklistItems ChecklistItem[]
+  // Phase 10 — on-hold reasons tracked as a separate model so history
+  // survives the resolve step (reason + who blocked it + when).
+  blockers       OrderBlocker[]
+  // Phase 10 — order-scoped tasks (Task.orderId is nullable so ad-hoc
+  // and customer tasks keep working as before).
+  tasks          Task[]
+  // Phase 12 — production stages (department-typed work pipeline).
+  // Each stage represents a unit of work for a specific department/machine.
+  // Different from OrderItem (= line items quoted + sold): stages track the
+  // physical production path through the shop. An order with three line
+  // items might still run through a single "Cut + Weed + Laminate" sequence
+  // of stages if the shop wants; or each line item gets its own stages.
+  stages         ProductionStage[]
+  // Defect reports and material usage roll up to the order so the
+  // job-costing report can compute real margin (material + rework).
+  defectReports  DefectReport[]
+  materialUsages MaterialUsage[]
+  // Phase 14 — job-linked expenses. Margin computation pulls these to
+  // subtract costs from invoice revenue on the order detail page.
+  expenses       Expense[]
+
+  @@unique([tenantId, number])
+  @@index([tenantId, status])
+  @@index([tenantId, customerId])
+  @@index([tenantId, dueDate])
+  @@index([tenantId, updatedAt])
+  @@index([tenantId, locationId])
+  @@index([tenantId, priority])
+}
+
+enum OrderStatus {
+  NEW
+  IN_PRODUCTION
+  READY
+  OUT_FOR_INSTALL
+  COMPLETED
+  CANCELED
+}
+
+// Phase 10 — escalation level for a shop-floor order. Derived from the
+// sales-side rush fee on the quote, but re-stated on the order so it
+// survives edits to the source quote and so production can raise / lower
+// priority without fiddling with the quote.
+enum OrderPriority {
+  NORMAL
+  HIGH
+  RUSH
+}
+
+// Phase 10 — a single on-hold reason. An order can accumulate multiple
+// blockers over its lifetime; the UI shows active blockers prominently
+// and keeps resolved ones for history. The `orderCanEnterProduction`
+// gate (Phase 13) is extended to also block when any unresolved blocker
+// exists, so the sales team can't accidentally push a paused job.
+model OrderBlocker {
+  id         String        @id @default(cuid())
+  tenantId   String
+  orderId    String
+  reason     BlockerReason
+  notes      String?
+  blockedBy  String // userId who flagged it
+  createdAt  DateTime      @default(now())
+  resolvedAt DateTime?
+  resolvedBy String? // userId who resolved it
+
+  tenant Tenant @relation(fields: [tenantId], references: [id], onDelete: Cascade)
+  order  Order  @relation(fields: [orderId], references: [id], onDelete: Cascade)
+
+  @@index([tenantId, orderId, resolvedAt])
+  @@index([orderId, resolvedAt])
+}
+
+enum BlockerReason {
+  AWAITING_CUSTOMER
+  AWAITING_APPROVAL
+  AWAITING_MATERIALS
+  AWAITING_PROOF
+  AWAITING_PAYMENT
+  CUSTOM
+}
+
+// Each line item is snapshotted from the quote so production proceeds on frozen data.
+model OrderItem {
+  id        String  @id @default(cuid())
+  orderId   String
+  productId String?
+
+  name         String
+  description  String?
+  pricingModel PricingModel
+  basePrice    Decimal      @db.Decimal(12, 2)
+  unit         String?
+  taxable      Boolean      @default(true)
+
+  quantity    Decimal? @db.Decimal(12, 3)
+  width       Decimal? @db.Decimal(12, 3)
+  height      Decimal? @db.Decimal(12, 3)
+  length      Decimal? @db.Decimal(12, 3)
+  hours       Decimal? @db.Decimal(12, 3)
+  manualPrice Decimal? @db.Decimal(12, 2)
+
+  selectedOptions Json    @default("[]")
+  subtotal        Decimal @default(0) @db.Decimal(12, 2)
+  sortOrder       Int     @default(0)
+
+  // Production tracking
+  producedAt DateTime?
+
+  createdAt DateTime @default(now())
+
+  order   Order    @relation(fields: [orderId], references: [id], onDelete: Cascade)
+  product Product? @relation(fields: [productId], references: [id], onDelete: SetNull)
+
+  @@index([orderId])
+}
+
+// ────────────────────────────────────────────────────────────
+// Invoices & payments
+// ────────────────────────────────────────────────────────────
+
+model Invoice {
+  id         String        @id @default(cuid())
+  tenantId   String
+  customerId String
+  orderId    String? // invoices may stand alone
+  // Phase 15 — branch that issued / collects on this invoice. Inherited
+  // from the linked order or customer; accounting runs can roll up by
+  // location.
+  locationId String?
+  number     String // e.g. "INV-1001"
+  status     InvoiceStatus @default(DRAFT)
+  kind       InvoiceKind   @default(STANDARD)
+
+  issuedAt DateTime?
+  dueDate  DateTime?
+  sentAt   DateTime?
+  paidAt   DateTime?
+  voidedAt DateTime?
+
+  // Stored totals (recomputed whenever items or tax/discount change).
+  subtotal       Decimal      @default(0) @db.Decimal(12, 2)
+  discountType   DiscountType @default(NONE)
+  discountValue  Decimal      @default(0) @db.Decimal(12, 2)
+  discountAmount Decimal      @default(0) @db.Decimal(12, 2)
+  taxRate        Decimal      @default(0) @db.Decimal(6, 4)
+  taxAmount      Decimal      @default(0) @db.Decimal(12, 2)
+  total          Decimal      @default(0) @db.Decimal(12, 2)
+  amountPaid     Decimal      @default(0) @db.Decimal(12, 2)
+
+  terms         PaymentTerms @default(NET_30)
+  customerNote  String?
+  internalNotes String?
+
+  // Phase 14 — denormalized refund / credit / write-off totals kept in sync
+  // by recomputeInvoiceTotals(). This lets list views render "balance" /
+  // "overdue" without a five-way aggregate on every row.
+  refundedAmount Decimal @default(0) @db.Decimal(12, 2)
+  creditedAmount Decimal @default(0) @db.Decimal(12, 2)
+  writtenOffAmount Decimal @default(0) @db.Decimal(12, 2)
+
+  createdBy String
+
+  createdAt DateTime @default(now())
+  updatedAt DateTime @updatedAt
+
+  tenant   Tenant        @relation(fields: [tenantId], references: [id], onDelete: Cascade)
+  customer Customer      @relation(fields: [customerId], references: [id], onDelete: Restrict)
+  order    Order?        @relation(fields: [orderId], references: [id], onDelete: SetNull)
+  location Location?     @relation(fields: [locationId], references: [id], onDelete: SetNull)
+  items    InvoiceItem[]
+  payments Payment[]
+  // Phase 14 — post-payment financial actions.
+  refunds            Refund[]
+  creditApplications CreditApplication[]
+  writeOffs          WriteOff[]
+  // Phase 15 — unauthenticated public share links for this invoice.
+  shareTokens        ShareToken[]
+
+  @@unique([tenantId, number])
+  @@index([tenantId, status])
+  @@index([tenantId, customerId])
+  @@index([tenantId, dueDate])
+  @@index([tenantId, orderId])
+  @@index([tenantId, locationId])
+}
+
+enum InvoiceStatus {
+  DRAFT
+  SENT
+  PARTIAL
+  PAID
+  OVERDUE
+  VOID
+  // Phase 14 — the invoice has been closed as uncollectable. A write-off is
+  // an accounting acknowledgment that the remaining balance won't be paid;
+  // distinct from VOID (which says the invoice shouldn't have existed).
+  WRITTEN_OFF
+}
+
+enum InvoiceKind {
+  STANDARD
+  DEPOSIT
+  BALANCE
+}
+
+model InvoiceItem {
+  id          String  @id @default(cuid())
+  invoiceId   String
+  name        String
+  description String?
+  quantity    Decimal @default(1) @db.Decimal(12, 3)
+  unitPrice   Decimal @default(0) @db.Decimal(12, 2)
+  taxable     Boolean @default(true)
+  subtotal    Decimal @default(0) @db.Decimal(12, 2)
+  sortOrder   Int     @default(0)
+
+  createdAt DateTime @default(now())
+
+  invoice Invoice @relation(fields: [invoiceId], references: [id], onDelete: Cascade)
+
+  @@index([invoiceId])
+}
+
+model Payment {
+  id        String @id @default(cuid())
+  tenantId  String
+  invoiceId String
+
+  amount     Decimal       @db.Decimal(12, 2)
+  method     PaymentMethod
+  reference  String? // check #, last 4, txn id
+  note       String?
+  receivedAt DateTime      @default(now())
+  recordedBy String
+  voidedAt   DateTime?
+  voidReason String?
+
+  // Phase 14 — mark payments that fell through (card declined, ACH returned,
+  // check bounced). failedAt is distinct from voidedAt: voided means the
+  // recorder retracted a correctly-captured payment (wrong amount etc.);
+  // failed means the money never actually landed. Both zero out the payment's
+  // contribution to invoice.amountPaid, but the history + reason stay.
+  failedAt      DateTime?
+  failureReason String?
+
+  createdAt DateTime @default(now())
+
+  tenant  Tenant  @relation(fields: [tenantId], references: [id], onDelete: Cascade)
+  invoice Invoice @relation(fields: [invoiceId], references: [id], onDelete: Cascade)
+  // Refunds against this specific payment (typical flow — refund the card
+  // that was charged). Refunds may also stand alone with no source payment.
+  refunds Refund[]
+
+  @@index([tenantId, invoiceId])
+  @@index([tenantId, receivedAt])
+}
+
+enum PaymentMethod {
+  CASH
+  CHECK
+  CARD
+  ACH
+  // Phase 14 — applying a credit memo to an invoice is recorded as a
+  // Payment so the invoice's amountPaid math is uniform. The payment row
+  // links back to the CreditApplication via its reference field.
+  CREDIT_MEMO
+  OTHER
+}
+
+// ────────────────────────────────────────────────────────────
+// Files & Proofs
+// ────────────────────────────────────────────────────────────
+
+// URL-based file records. Real blob storage (S3 / Vercel Blob / R2) comes in
+// Phase 14 — for now `storageUrl` is any hosted URL the user pastes in.
+// Each file is attached to at most one parent entity.
+model File {
+  id         String @id @default(cuid())
+  tenantId   String
+  uploaderId String
+
+  filename     String
+  mimeType     String?
+  sizeBytes    Int?
+  storageUrl   String
+  thumbnailUrl String?
+
+  kind  FileKind @default(ATTACHMENT)
+  notes String?
+
+  // Phase 11 — soft archive. We never hard-delete old proof files because
+  // there's legal/dispute value in "what did we show the customer on v1?"
+  // archivedAt flips this out of the main list but keeps it referenceable
+  // from the audit trail and the revision history.
+  archivedAt DateTime?
+  archivedBy String?
+
+  // Phase 11 — designer-facing iteration label. This is separate from
+  // Proof.version: a single art piece can go through 4 internal tweaks
+  // before it ever reaches a customer-facing proof version. Null = no
+  // versioning (reference photos, briefs, etc.).
+  assetVersion Int?
+
+  // Phase 11 — dimensions for display purposes (px or in — we don't
+  // enforce units because shops mix digital & physical; treat as metadata).
+  widthPx  Int?
+  heightPx Int?
+
+  // Parent — at most one should be set. Not enforced in DB but validated in actions.
+  customerId String?
+  quoteId    String?
+  orderId    String?
+  proofId    String?
+
+  createdAt DateTime @default(now())
+
+  tenant   Tenant    @relation(fields: [tenantId], references: [id], onDelete: Cascade)
+  customer Customer? @relation(fields: [customerId], references: [id], onDelete: Cascade)
+  quote    Quote?    @relation(fields: [quoteId], references: [id], onDelete: Cascade)
+  order    Order?    @relation(fields: [orderId], references: [id], onDelete: Cascade)
+  proof    Proof?    @relation(fields: [proofId], references: [id], onDelete: Cascade)
+
+  @@index([tenantId, createdAt])
+  @@index([customerId])
+  @@index([quoteId])
+  @@index([orderId])
+  @@index([proofId])
+  @@index([proofId, archivedAt])
+}
+
+enum FileKind {
+  ATTACHMENT // generic — briefs, photos, email threads
+  REFERENCE // customer-provided inspiration / existing signs
+  ARTWORK // production-ready art (deprecated in favor of the split below; kept for back-compat)
+  PROOF // customer-facing proof mock-up (what the customer sees on portal)
+  // Phase 11 — richer taxonomy so a designer can tell "source file" (Illustrator
+  // .ai for editing), "production ready" (flattened PDF for the plotter), and
+  // "reference" (inspiration) apart at a glance. The old ARTWORK value is
+  // preserved so existing rows still work; new uploads should use the split.
+  DESIGN_SOURCE // native design file (.ai, .psd, .indd) — designer-only
+  PRODUCTION_READY // final production file sent to the machine (cut-ready PDF, RIP file)
+  MOCKUP // rendered visualization on a location/building — internal
+  INVOICE // scanned PO / receipt
+  // Phase 15 — customer-uploaded file from the portal (site photo, brief,
+  // existing branding pack). Distinct from REFERENCE so staff can filter
+  // "things the customer just handed us" on the order timeline.
+  CUSTOMER_UPLOAD
+  OTHER
+}
+
+// Proofs are versioned per order. Each version can include multiple files
+// (PDF mock-ups, JPG renderings). Customer can approve / request changes.
+model Proof {
+  id          String      @id @default(cuid())
+  tenantId    String
+  orderId     String
+  version     Int // 1, 2, 3... unique per order
+  title       String?
+  description String?
+  status      ProofStatus @default(DRAFT)
+
+  // Phase 11 — designer-only notes. These never render on the customer
+  // portal; they're where the artist leaves context for the next designer
+  // ("trapping to 0.5pt for outdoor legibility", "used ink key B from the
+  // Pantone book, not the digital sim"). Kept separate from `description`,
+  // which IS customer-visible on the portal.
+  internalNotes String?
+
+  // Phase 11 — customer response deadline. We use this in two places:
+  // (1) the portal shows "respond by X" prominently, and (2) the reminder
+  // cron bumps stale proofs once past this date. If null, no deadline is
+  // enforced — older shops operate that way.
+  dueAt DateTime?
+
+  // Phase 11 — revision-round counter. Every time the proof goes from
+  // CHANGES_REQUESTED back to SENT with new files, this increments. So
+  // v1 might ship as "v1, round 3" if it took three bounces before the
+  // customer signed off. Different from `version`: version = "new art
+  // entirely", round = "same art, reworked".
+  revisionRound Int @default(1)
+
+  // Phase 11 — watermark intent flag. Actual on-the-fly image stamping
+  // needs blob storage (coming later), so for now this records the
+  // designer's intent; the portal page will display a "PROOF ONLY"
+  // overlay CSS-side when enabled. Cheap and still a useful deterrent.
+  watermarkEnabled Boolean @default(true)
+
+  // Phase 11 — lock fields. Once APPROVED, the proof is immutable:
+  // no file add/remove, no title/description edits, no status revert.
+  // Nulls = not locked. We write both at the same time.
+  lockedAt DateTime?
+  lockedBy String?
+
+  // Phase 11 — revision chain. When CHANGES_REQUESTED bounces to a new
+  // proof version, the newer proof points back here. Combined with the
+  // per-order `version` field, this lets us render "v1 → v2 → v3" while
+  // also supporting the occasional branch (v2a vs v2b).
+  supersededByProofId String?
+  supersededAt        DateTime?
+
+  sentAt           DateTime?
+  respondedAt      DateTime?
+  customerResponse String? // free-text feedback, if any
+
+  createdBy String
+
+  createdAt DateTime @default(now())
+  updatedAt DateTime @updatedAt
+
+  tenant    Tenant          @relation(fields: [tenantId], references: [id], onDelete: Cascade)
+  order     Order           @relation(fields: [orderId], references: [id], onDelete: Cascade)
+  files     File[]
+  comments  Comment[]
+  // Phase 11 — structured decision ledger. Replaces the loose audit-log
+  // approach for anything proof-related; makes "show me every decision"
+  // a single table read.
+  decisions ProofDecision[]
+  // Phase 15 — unauthenticated public share links for this proof.
+  shareTokens ShareToken[]
+
+  @@unique([orderId, version])
+  @@index([tenantId, status])
+  @@index([orderId])
+}
+
+enum ProofStatus {
+  DRAFT // being prepared
+  SENT // awaiting customer
+  APPROVED // customer signed off
+  CHANGES_REQUESTED // needs another version
+  REJECTED // customer rejected; requires escalation
+}
+
+// Phase 11 — every proof decision (sent, approved, changes requested,
+// locked, reopened) gets one row here. Why a dedicated table instead of
+// just reading the audit log? Three reasons:
+//  1. The audit log is a flat event stream across the whole tenant; a
+//     dedicated table lets us load "history of this proof" with one
+//     indexed query.
+//  2. We want stable, queryable fields (round number, actor kind,
+//     customer IP for share-link decisions) that the audit log stores
+//     as opaque JSON metadata.
+//  3. We render this as a timeline on the proof detail page — it's a
+//     first-class UI concept, not just a dev debugging aid.
+model ProofDecision {
+  id       String @id @default(cuid())
+  tenantId String
+  proofId  String
+
+  // Which round this decision happened in. Copied off the proof at the
+  // moment the decision was made so it stays correct even if we bump
+  // the round later. (Otherwise a v1/round-1 decision would "move" into
+  // round 3 once the customer sent it back twice.)
+  round Int
+
+  decision ProofDecisionKind
+
+  // Exactly one of these should be set. Staff decisions use userId; customer
+  // portal/share-link decisions use customerId (or leave both null for
+  // anonymous share-link clicks and store the context in metadata.ipHash).
+  decidedByUserId     String?
+  decidedByCustomerId String?
+
+  notes    String?
+  // Free-form metadata for channel-specific context: { via: "portal" | "share" | "staff",
+  // tokenId?: string, ipHash?: string, userAgent?: string, previousStatus?: string }.
+  metadata Json?
+
+  createdAt DateTime @default(now())
+
+  tenant Tenant @relation(fields: [tenantId], references: [id], onDelete: Cascade)
+  proof  Proof  @relation(fields: [proofId], references: [id], onDelete: Cascade)
+
+  @@index([proofId, createdAt])
+  @@index([tenantId, createdAt])
+}
+
+enum ProofDecisionKind {
+  CREATED // new draft proof spun up
+  REVISED // file(s) added or swapped on a proof in progress
+  SENT // staff sent to customer
+  APPROVED // customer approved
+  CHANGES_REQUESTED // customer asked for changes
+  REJECTED // customer rejected outright
+  LOCKED // staff locked (happens automatically on APPROVED)
+  REOPENED // a rejected / changes_requested proof was put back in DRAFT
+  SUPERSEDED // a newer proof version took over
+}
+
+// ────────────────────────────────────────────────────────────
+// Install events — scheduled visits tied to an order
+// ────────────────────────────────────────────────────────────
+
+// An install event is a calendar-visible visit: site survey, the install
+// itself, or a follow-up service call. Each event has a start + end time,
+// a primary assignee (installer), and optional additional crew (userIds).
+//
+// An order may have many events across its lifecycle (survey → install →
+// service). This is intentionally decoupled from Order.status so production
+// and scheduling can evolve independently.
+model InstallEvent {
+  id         String  @id @default(cuid())
+  tenantId   String
+  orderId    String
+  customerId String
+  // Phase 15 — branch whose crew runs this visit. Inherits from the order
+  // by default; dispatchers can reassign between branches.
+  locationId String?
+
+  kind   InstallEventKind   @default(INSTALL)
+  title  String? // free-form override; falls back to "Install for {order.number}"
+  status InstallEventStatus @default(SCHEDULED)
+
+  scheduledStart DateTime
+  scheduledEnd   DateTime
+  arrivedAt      DateTime?
+  completedAt    DateTime?
+  canceledAt     DateTime?
+  cancelReason   String?
+
+  // Address snapshot — starts from the customer's install address but users
+  // can override per event (some jobs install at a different site).
+  addressLine1 String?
+  addressLine2 String?
+  city         String?
+  region       String?
+  postalCode   String?
+  country      String?
+
+  // Primary assignee + extra crew (plain userIds, resolved by memberLookup).
+  installerId String?
+  crewIds     String[] @default([])
+
+  notes     String?
+  createdBy String
+
+  // Phase 13 — logistics + readiness hints captured by dispatch up front.
+  // These support the field UI (driving directions, "what to bring") without
+  // adding a whole extra table. None are required.
+  toolsList          String? // free-form: tools/equipment to bring (bucket truck, ladder, drills…)
+  materialsList      String? // free-form: materials to load (hardware pack, channel letters, etc.)
+  accessNotes        String? // gate codes, who to ask for, parking, loading dock instructions
+  hazardsNotes       String? // overhead lines, sloped roof, traffic, electrical hazards
+  // Optional GPS destination — if populated, field mode renders a one-tap map link.
+  gpsLat             Float?
+  gpsLng             Float?
+  // Odometer / mileage captured on the truck. Filled at start + end of day.
+  odometerStart      Int?
+  odometerEnd        Int?
+  // Phase 13 — completion evidence pointers. We also track whether dispatch
+  // has explicitly waived evidence (some visits legitimately have neither a
+  // signature nor photos — e.g. simple pickups).
+  evidenceWaived     Boolean @default(false)
+  evidenceWaivedBy   String?
+  evidenceWaivedNote String?
+
+  createdAt DateTime @default(now())
+  updatedAt DateTime @updatedAt
+
+  tenant         Tenant             @relation(fields: [tenantId], references: [id], onDelete: Cascade)
+  order          Order              @relation(fields: [orderId], references: [id], onDelete: Cascade)
+  customer       Customer           @relation(fields: [customerId], references: [id], onDelete: Restrict)
+  location       Location?          @relation(fields: [locationId], references: [id], onDelete: SetNull)
+  checklistItems ChecklistItem[]
+  comments       Comment[]
+  // Phase 13 — evidence + field-side records.
+  photos         InstallPhoto[]
+  signatures     InstallSignature[]
+  issues         InstallIssue[]
+  siteSurvey     SiteSurvey?
+
+  @@index([tenantId, scheduledStart])
+  @@index([tenantId, status, scheduledStart])
+  @@index([tenantId, installerId, scheduledStart])
+  @@index([tenantId, locationId, scheduledStart])
+  @@index([orderId])
+}
+
+enum InstallEventKind {
+  SURVEY // pre-install site visit / measurement
+  INSTALL // main install
+  SERVICE // post-install service / warranty visit
+  // Phase 13 — final-mile fulfillment. DELIVERY is "drop the sign off";
+  // PICKUP is "collect the product from supplier or shop". Both use the
+  // same calendar/UX as installs but usually skip the heavy evidence.
+  DELIVERY
+  PICKUP
+}
+
+enum InstallEventStatus {
+  SCHEDULED // on the calendar, not confirmed with customer
+  CONFIRMED // customer has confirmed
+  IN_PROGRESS // crew on site
+  COMPLETED // done
+  CANCELED // called off
+  NO_SHOW // scheduled, nobody there
+}
+
+// ────────────────────────────────────────────────────────────
+// Phase 13 — field evidence: photos, signatures, issues, site surveys
+// ────────────────────────────────────────────────────────────
+//
+// Why these live next to InstallEvent rather than on Order: a single order
+// can produce several events (survey → install → service) and each one
+// needs its own paper trail. Pushing photos/signatures up to the order
+// would lose that phase-level accountability.
+//
+// Storage note. We store `url` as an opaque string — it can point at a
+// Next.js /api/files/... route, an S3-signed URL, or a data: URL for tiny
+// captures (used today for signatures). The app never trusts the URL
+// beyond tenant-scoped auth on render; replacing the backing store is an
+// implementation detail.
+
+enum InstallPhotoPhase {
+  BEFORE // pre-work / site condition
+  DURING // progress / during-install
+  AFTER // completed / final result
+  ISSUE // documentation attached to a reported issue
+  SURVEY // measurement / site-survey reference
+}
+
+model InstallPhoto {
+  id             String  @id @default(cuid())
+  tenantId       String
+  installEventId String
+  // Optional link to an issue — when populated, the photo is evidence for
+  // a specific reported problem instead of a general install photo.
+  issueId        String?
+
+  url      String
+  caption  String?
+  phase    InstallPhotoPhase @default(DURING)
+  // Dimensions are cached on upload so the gallery can reserve aspect-ratio
+  // slots without a round-trip. null = unknown (data-URL signatures etc).
+  widthPx  Int?
+  heightPx Int?
+
+  capturedBy String // userId of the installer/admin who uploaded
+  capturedAt DateTime @default(now())
+
+  createdAt DateTime @default(now())
+
+  tenant       Tenant        @relation(fields: [tenantId], references: [id], onDelete: Cascade)
+  installEvent InstallEvent  @relation(fields: [installEventId], references: [id], onDelete: Cascade)
+  issue        InstallIssue? @relation(fields: [issueId], references: [id], onDelete: SetNull)
+
+  @@index([tenantId, installEventId, phase])
+  @@index([installEventId, createdAt])
+  @@index([issueId])
+}
+
+enum InstallSignerRole {
+  CUSTOMER // the customer or their on-site representative
+  INSTALLER // lead installer / crew chief
+  WITNESS // third-party witness (inspector, landlord, etc.)
+}
+
+model InstallSignature {
+  id             String @id @default(cuid())
+  tenantId       String
+  installEventId String
+
+  // dataUrl — stored inline. Signatures are small PNGs (<30KB) and the
+  // roundtrip-to-S3 dance isn't worth it. Column keeps the whole capture.
+  dataUrl     String
+  signerName  String
+  signerRole  InstallSignerRole @default(CUSTOMER)
+  signerTitle String? // "Facilities manager", etc.
+  // Disclaimer text the signer agreed to, captured verbatim at sign time
+  // so future wording changes don't retroactively alter what was signed.
+  disclaimer  String?
+  notes       String?
+
+  // Captured metadata — not an audit trail by itself, but useful when a
+  // dispute reaches legal.
+  capturedBy String // userId that triggered the capture
+  capturedAt DateTime @default(now())
+
+  tenant       Tenant       @relation(fields: [tenantId], references: [id], onDelete: Cascade)
+  installEvent InstallEvent @relation(fields: [installEventId], references: [id], onDelete: Cascade)
+
+  @@index([tenantId, installEventId])
+  @@index([installEventId, capturedAt])
+}
+
+enum InstallIssueSeverity {
+  LOW // cosmetic / nice-to-fix later
+  MEDIUM // functional problem, not blocking completion
+  HIGH // serious, needs same-day response
+  BLOCKER // can't finish the job until this is resolved
+}
+
+enum InstallIssueStatus {
+  OPEN
+  ACKNOWLEDGED // office has seen it
+  RESOLVED
+}
+
+model InstallIssue {
+  id             String @id @default(cuid())
+  tenantId       String
+  installEventId String
+
+  title       String
+  description String?
+  severity    InstallIssueSeverity @default(MEDIUM)
+  status      InstallIssueStatus   @default(OPEN)
+
+  // Reporter is always a crew member (field side). Resolver is typically an
+  // admin / production manager closing the loop.
+  reportedBy String
+  reportedAt DateTime  @default(now())
+  ackBy      String?
+  ackAt      DateTime?
+  resolvedBy String?
+  resolvedAt DateTime?
+  resolution String?
+
+  // Does the issue block completion? If true, the Complete transition will
+  // refuse until the issue resolves (or dispatcher overrides). This is a
+  // snapshot of severity=BLOCKER, kept on the row so severity changes don't
+  // silently un-block a completed event.
+  blocksCompletion Boolean @default(false)
+
+  createdAt DateTime @default(now())
+  updatedAt DateTime @updatedAt
+
+  tenant       Tenant         @relation(fields: [tenantId], references: [id], onDelete: Cascade)
+  installEvent InstallEvent   @relation(fields: [installEventId], references: [id], onDelete: Cascade)
+  photos       InstallPhoto[]
+
+  @@index([tenantId, status, severity])
+  @@index([installEventId, status])
+}
+
+enum PermitStatus {
+  NONE // not required
+  NEEDED // required but not yet applied
+  APPLIED // application submitted
+  APPROVED // permit in hand
+  REJECTED // application denied
+  EXPIRED // permit lapsed
+}
+
+model SiteSurvey {
+  // One-to-one with a SURVEY-kind InstallEvent. Surveys can also be
+  // attached to INSTALL events when the installer takes fresh measurements
+  // on arrival ("it didn't match the quote") — the relation is on the
+  // InstallEvent so either works, enforced as @unique below.
+  id             String @id @default(cuid())
+  tenantId       String
+  installEventId String @unique
+
+  // Dimensions (mm). Tenant-configured unit display converts on read.
+  widthMm  Int?
+  heightMm Int?
+  depthMm  Int?
+
+  mountingSurface  String? // brick / metal / drywall / existing channel letters / ...
+  mountingMethod   String? // lag bolts / welded frame / magnet / ...
+  powerAvailable   Boolean @default(false)
+  powerNotes       String?
+  electricalNotes  String?
+  // Access / logistics that didn't fit the InstallEvent fields.
+  accessNotes      String?
+  // Ceiling/clearance height, sightline observations, parking notes.
+  clearanceNotes   String?
+  siteContactName  String?
+  siteContactPhone String?
+
+  // Permit / code compliance.
+  permitStatus     PermitStatus @default(NONE)
+  permitNumber     String?
+  permitNotes      String?
+  permitAppliedAt  DateTime?
+  permitApprovedAt DateTime?
+  permitExpiresAt  DateTime?
+
+  // Freeform summary the salesperson or installer leaves for the shop.
+  summary       String?
+  // If the surveyor rejected the job ("site can't support this"), capture why.
+  blocked       Boolean @default(false)
+  blockedReason String?
+
+  surveyedBy String?
+  surveyedAt DateTime?
+
+  createdAt DateTime @default(now())
+  updatedAt DateTime @updatedAt
+
+  tenant       Tenant       @relation(fields: [tenantId], references: [id], onDelete: Cascade)
+  installEvent InstallEvent @relation(fields: [installEventId], references: [id], onDelete: Cascade)
+
+  @@index([tenantId, permitStatus])
+}
+
+// ────────────────────────────────────────────────────────────
+// Customer portal — tokenized public access
+// ────────────────────────────────────────────────────────────
+
+// A portal token grants a customer contact read (+ limited write) access to
+// their own quotes, orders, invoices, proofs, and install schedule via a
+// public URL like /portal/<token>. No login required.
+//
+// Tokens can be revoked or expired; the raw `token` field is the secret shown
+// in URLs. We store it plainly because it's a long random cuid(2) — treat like
+// an unguessable capability. A future phase can layer email magic links over
+// this (email the token-URL instead of showing it in the app).
+model PortalToken {
+  id         String @id @default(cuid())
+  tenantId   String
+  customerId String
+
+  token      String    @unique @default(cuid())
+  label      String? // user-facing note, e.g. "Jane @ ACME"
+  createdBy  String // staff userId who issued it
+  expiresAt  DateTime?
+  revokedAt  DateTime?
+  lastUsedAt DateTime?
+
+  createdAt DateTime @default(now())
+  updatedAt DateTime @updatedAt
+
+  tenant   Tenant   @relation(fields: [tenantId], references: [id], onDelete: Cascade)
+  customer Customer @relation(fields: [customerId], references: [id], onDelete: Cascade)
+
+  @@index([tenantId, customerId])
+}
+
+// ────────────────────────────────────────────────────────────
+// Phase 15 — Public share tokens (proof / invoice)
+// ────────────────────────────────────────────────────────────
+//
+// A ShareToken grants *unauthenticated* read access (and, for proofs,
+// the ability to respond) to a single proof or invoice via a public URL
+// like /share/<token>. It sits next to the existing quote `shareToken`
+// column — proofs and invoices didn't have an equivalent and Phase 15
+// calls for "shared links for quotes/proofs/invoices; expiring secure
+// links where appropriate".
+//
+// Design choices:
+//   • One model with two nullable FKs (proofId / invoiceId) rather than
+//     a polymorphic `(kind, targetId)` pair, because we want Prisma's
+//     onDelete: Cascade to free dangling tokens when the underlying
+//     entity is deleted. The `kind` enum is kept as a sanity check and
+//     to make listing "all share links" trivial.
+//   • Not linked to Customer or PortalToken: the point of a share link
+//     is that it can be forwarded to an approver who isn't in our
+//     system. Audit logs record "share" as the actor.
+//   • `viewCount` is an append-only counter; the staff UI surfaces it
+//     so shop owners can see when a shared invoice was actually opened
+//     (useful signal for collections follow-up).
+//   • Tokens are long random cuids; no hashing — capability-based like
+//     PortalToken.
+model ShareToken {
+  id       String @id @default(cuid())
+  tenantId String
+
+  token String         @unique @default(cuid())
+  kind  ShareTokenKind
+
+  // Exactly one of these is set, matching `kind`.
+  proofId   String?
+  invoiceId String?
+
+  label      String? // staff-facing note, e.g. "Sent to Jane 2026-04-18"
+  createdBy  String // staff userId who issued it
+  expiresAt  DateTime?
+  revokedAt  DateTime?
+  revokedBy  String?
+  lastUsedAt DateTime?
+  viewCount  Int       @default(0)
+
+  createdAt DateTime @default(now())
+  updatedAt DateTime @updatedAt
+
+  tenant  Tenant   @relation(fields: [tenantId], references: [id], onDelete: Cascade)
+  proof   Proof?   @relation(fields: [proofId], references: [id], onDelete: Cascade)
+  invoice Invoice? @relation(fields: [invoiceId], references: [id], onDelete: Cascade)
+
+  @@index([tenantId, kind])
+  @@index([tenantId, proofId])
+  @@index([tenantId, invoiceId])
+}
+
+enum ShareTokenKind {
+  PROOF
+  INVOICE
+}
+
+model AuditLog {
+  id         String   @id @default(cuid())
+  tenantId   String?
+  userId     String?
+  action     String
+  entityType String?
+  entityId   String?
+  metadata   Json?
+  ipAddress  String?
+  userAgent  String?
+  createdAt  DateTime @default(now())
+
+  tenant Tenant? @relation(fields: [tenantId], references: [id], onDelete: SetNull)
+
+  @@index([tenantId, createdAt])
+  @@index([userId, createdAt])
+}
+
+// Phase 17 Slice C — feature flags.
+//
+// Two-layer model:
+//   - PLAN_ENTITLEMENTS (in code, see lib/entitlements.ts) controls what
+//     each billing plan gets. Static — shipped with the app, predictable,
+//     no DB round trip.
+//   - FeatureFlag rows (this table) let platform staff override the
+//     entitlement for a single tenant (e.g. "give this customer the beta
+//     proof annotations even though they're on STARTER") or flip a beta
+//     default for every tenant (tenantId = null).
+//
+// Lookup order in `isEntitled`:
+//   1. per-tenant override (tenantId = :id, key = :key) — wins if present
+//   2. global override       (tenantId = null, key = :key)                 — fallback
+//   3. PLAN_ENTITLEMENTS[plan][key]                                         — default
+model FeatureFlag {
+  id        String  @id @default(cuid())
+  key       String
+  tenantId  String? // null = global default / beta-wide override
+  enabled   Boolean @default(false)
+  note      String? // free-form context for platform staff
+  updatedBy String? // platform user id who last touched this row
+
+  createdAt DateTime @default(now())
+  updatedAt DateTime @updatedAt
+
+  @@unique([key, tenantId])
+  @@index([tenantId])
+}
+
+// Phase 17 Slice B — auditable platform-staff impersonation.
+//
+// A row is created when platform staff click "Sign in as" from a tenant's
+// detail page, and stamped with `endedAt` when they stop (either by
+// clicking the banner "Stop" or by manually landing on the stop action).
+// Every row is append-only after `endedAt` is set — this table is the
+// forensic record of who had the keys to which shop and when.
+//
+// A cookie (`ts_imp`) holds the row id for the browser. The banner in
+// /t/[slug]/layout.tsx reads it on every render to show the "you are
+// impersonating" bar. If the cookie references a row that's missing or
+// already ended, the banner stays hidden and no special privileges apply
+// (platform staff still have synthetic ADMIN via requireTenant — the
+// session is additive bookkeeping, not a privilege grant).
+model ImpersonationSession {
+  id             String    @id @default(cuid())
+  platformUserId String
+  tenantId       String
+  reason         String?
+  startedAt      DateTime  @default(now())
+  endedAt        DateTime?
+
+  @@index([platformUserId, endedAt])
+  @@index([tenantId, endedAt])
+}
+
+// Phase 17 Slice D — in-app support ticket thread.
+//
+// Every ticket is owned by a tenant; both sides (tenant staff + platform
+// staff) post messages on it. Keep the model deliberately narrow — no
+// attachments, no tags, no SLAs — because a "good enough" channel inside
+// the product is much better than nothing, and we can grow it when real
+// volume shows up.
+//
+// `assignedTo` references a User.id with a non-null platformRole, but we
+// don't enforce that at the schema level; the action layer validates.
+model SupportTicket {
+  id       String                @id @default(cuid())
+  tenantId String
+  subject  String
+  category SupportTicketCategory @default(QUESTION)
+  priority SupportTicketPriority @default(NORMAL)
+  status   SupportTicketStatus   @default(OPEN)
+
+  // Tenant user who opened it. Left nullable so a ticket survives a
+  // member being removed — the body is still useful to platform staff.
+  openedByUserId String?
+  // Platform user currently on the hook for responding. Null = triage queue.
+  assignedTo     String?
+
+  createdAt  DateTime  @default(now())
+  updatedAt  DateTime  @updatedAt
+  resolvedAt DateTime?
+  closedAt   DateTime?
+
+  // Phase 20 Slice C — SLA tracking. `dueBy` is the deadline for the next
+  // platform response (computed from priority at open time and refreshed
+  // whenever the customer replies). `firstStaffReplyAt` is stamped on the
+  // first non-internal staff message — this is the "time to first response"
+  // metric platform leadership cares about.
+  dueBy              DateTime?
+  firstStaffReplyAt  DateTime?
+
+  // Phase 20 Slice E — post-resolution satisfaction rating. Optional 1–5
+  // star rating supplied by any tenant member after the ticket is
+  // resolved/closed. `ratedByUserId` is stored so we don't double-count if
+  // the same user re-submits, and so platform staff can see who rated.
+  satisfactionRating  Int? // 1..5
+  satisfactionComment String?
+  satisfactionAt      DateTime?
+  ratedByUserId       String?
+
+  tenant   Tenant                 @relation(fields: [tenantId], references: [id], onDelete: Cascade)
+  messages SupportTicketMessage[]
+
+  @@index([tenantId, status])
+  @@index([assignedTo, status])
+  @@index([status, updatedAt])
+  @@index([status, dueBy])
+}
+
+// One post on a support ticket. `isStaff` tells the UI which side of the
+// conversation drew it (platform vs. tenant) — cheaper than joining to
+// User.platformRole on every render.
+model SupportTicketMessage {
+  id        String   @id @default(cuid())
+  ticketId  String
+  authorId  String? // nullable = system-generated / deleted user
+  isStaff   Boolean // true = written by platform staff
+  // Phase 20 — internal staff notes. `internal=true` rows are visible only
+  // to platform staff; tenant pages filter them out. Always isStaff=true
+  // when internal=true — we don't expose a "tenant-only hidden" concept.
+  internal  Boolean  @default(false)
+  body      String
+  createdAt DateTime @default(now())
+
+  ticket SupportTicket @relation(fields: [ticketId], references: [id], onDelete: Cascade)
+
+  @@index([ticketId, createdAt])
+}
+
+enum SupportTicketCategory {
+  BILLING
+  BUG
+  FEATURE_REQUEST
+  QUESTION
+  OTHER
+}
+
+enum SupportTicketPriority {
+  LOW
+  NORMAL
+  HIGH
+  URGENT
+}
+
+enum SupportTicketStatus {
+  OPEN
+  IN_PROGRESS
+  WAITING_CUSTOMER
+  RESOLVED
+  CLOSED
+}
+
+// Phase 20 Slice D — platform-wide library of canned replies for the
+// support team. Not tenant-scoped: these are owned by Tracksign staff and
+// offered as a dropdown on the reply form. Body is a plain string —
+// variable interpolation is handled client-side so tenants never see the
+// raw template.
+model SupportCannedReply {
+  id         String   @id @default(cuid())
+  title      String // shown in the picker — "Request more details", etc.
+  body       String // plain text; supports {{tenantName}} + {{ticketSubject}}
+  category   SupportTicketCategory? // optional filter so BILLING-only canned replies don't clutter BUG tickets
+  createdBy  String // User.id of platform admin who authored it
+  createdAt  DateTime @default(now())
+  updatedAt  DateTime @updatedAt
+  archivedAt DateTime? // soft delete — templates may have been used historically
+
+  @@index([archivedAt, title])
+  @@index([category, archivedAt])
+}
+
+// Phase 17 Slice E — data portability and right-to-be-forgotten.
+//
+// GDPR / CCPA surface area: a tenant owner can request a full export of
+// their data (delivered as a JSON bundle), and can request account
+// deletion with a cooling-off period. Both flows are tenant-initiated but
+// platform-staff visible, with audit trails on every transition.
+
+model DataExportRequest {
+  id           String           @id @default(cuid())
+  tenantId     String
+  requestedBy  String // User.id of the owner who clicked "Export my data"
+  status       DataExportStatus @default(PENDING)
+  // Populated when a platform user runs the export. Kept as JSON text so
+  // we don't need a file-storage backend just to support this flow — the
+  // tenant downloads it directly from a signed route.
+  payload      String? // Stringified JSON bundle of every tenant-scoped row
+  errorMessage String?
+  expiresAt    DateTime? // Download link invalidated after this date
+  createdAt    DateTime         @default(now())
+  completedAt  DateTime?
+
+  tenant Tenant @relation(fields: [tenantId], references: [id], onDelete: Cascade)
+
+  @@index([tenantId, status])
+  @@index([status, createdAt])
+}
+
+enum DataExportStatus {
+  PENDING // Requested; awaiting platform-staff generation
+  PROCESSING // A staff member has picked it up
+  COMPLETED // Payload ready; tenant can download
+  FAILED // Generation errored — errorMessage explains
+  EXPIRED // Past expiresAt; payload blanked to reclaim space
+}
+
+// Tenant-initiated account deletion. Always flows through a cooling-off
+// window (default 30 days) so an accidental click doesn't nuke a real
+// shop. Only one active request per tenant — unique constraint on
+// tenantId when status is SCHEDULED is enforced in app code (Prisma
+// doesn't do partial unique indexes as a native declaration).
+model AccountDeletionRequest {
+  id           String                @id @default(cuid())
+  tenantId     String
+  requestedBy  String // User.id who initiated
+  reason       String? // Optional — "moving to a competitor", "shutting down"
+  scheduledFor DateTime // createdAt + 30d by default
+  status       AccountDeletionStatus @default(SCHEDULED)
+  canceledBy   String? // User.id who canceled (either tenant or platform)
+  canceledAt   DateTime?
+  completedBy  String? // Platform user who executed the deletion
+  completedAt  DateTime?
+  createdAt    DateTime              @default(now())
+  updatedAt    DateTime              @updatedAt
+
+  tenant Tenant @relation(fields: [tenantId], references: [id], onDelete: Cascade)
+
+  @@index([tenantId, status])
+  @@index([status, scheduledFor])
+}
+
+enum AccountDeletionStatus {
+  SCHEDULED // Grace period active; tenant can cancel
+  CANCELED // Request withdrawn
+  COMPLETED // Deletion executed
+}
+
+// In-app notifications — per-user inbox items generated as side effects of
+// mutations (portal responses, task assignment, payments, installs, etc).
+//
+// Created via `notify()`, which is wrapped in try/catch just like `logAudit`
+// so a notification failure can never kill a user-facing request.
+//
+// `type` is a flat string (e.g. "portal.quote_approved") — easy to add new
+// kinds without migrations. `link` is a denormalized relative URL to the
+// target entity, so the inbox page can render links without rejoining.
+model Notification {
+  id       String @id @default(cuid())
+  tenantId String
+  userId   String // staff recipient (never a customer)
+
+  type  String
+  title String
+  body  String?
+
+  entityType String?
+  entityId   String?
+  link       String? // relative path, e.g. "/t/slug/quotes/abc"
+
+  readAt DateTime?
+
+  createdAt DateTime @default(now())
+
+  tenant Tenant @relation(fields: [tenantId], references: [id], onDelete: Cascade)
+
+  @@index([tenantId, userId, readAt])
+  @@index([tenantId, userId, createdAt])
+}
+
+// ────────────────────────────────────────────────────────────
+// Phase 22 — Approval requests
+// ────────────────────────────────────────────────────────────
+//
+// A durable record for "someone needs a manager to OK this before it moves
+// forward". Today only used for quote send gates (discount/large-job
+// thresholds tripped → pending approval); the shape is generic so future
+// rules (big refunds, manual write-offs, high-deposit waivers) can reuse it
+// without another migration.
+//
+// We keep `entityType` / `entityId` as scalars (no discriminated relation)
+// so adding a new approvable kind is pure app-level work. `reason` is a
+// human-readable sentence the requester's gate produced — renders verbatim
+// in the approver's inbox.
+model ApprovalRequest {
+  id         String                @id @default(cuid())
+  tenantId   String
+  entityType String // "Quote" today; future: "Refund", "WriteOff", etc.
+  entityId   String
+  reason     String // rendered directly in the approver inbox
+  status     ApprovalRequestStatus @default(PENDING)
+
+  requestedById String // userId who tripped the gate
+  decidedById   String? // userId who approved/rejected
+  decidedAt     DateTime?
+  decisionNote  String? // optional approver note (shown in audit + notification body)
+
+  createdAt DateTime @default(now())
+  updatedAt DateTime @updatedAt
+
+  tenant Tenant @relation(fields: [tenantId], references: [id], onDelete: Cascade)
+
+  @@index([tenantId, status, createdAt])
+  @@index([tenantId, entityType, entityId])
+}
+
+enum ApprovalRequestStatus {
+  PENDING
+  APPROVED
+  REJECTED
+  CANCELED
+}
+
+// ────────────────────────────────────────────────────────────
+// Phase 12 — Production management: departments, work stations, stages,
+// defects, material usage.
+// ────────────────────────────────────────────────────────────
+//
+// The mental model: an Order is the customer-facing deliverable; a
+// ProductionStage is a unit of work done in a department on a specific
+// machine by a specific person. Orders move through the shop as a chain
+// of stages (print → cut → laminate → finish → package → ready-for-install).
+//
+// Why this shape, and not per-OrderItem production?
+//   1. Stages cross line-item boundaries: a single "Laminate" stage often
+//      finishes five different banners from the same order in one pass.
+//   2. A stage's department is the axis the shop floor filters/groups on —
+//      "what's in the CNC queue?" is the daily question.
+//   3. Keeping stages at the order level keeps the rollup trivial:
+//      order.isReady = all stages DONE (or explicitly SKIPPED).
+//
+// Tenants seed their own department list the first time they hit the
+// production settings page. No global default seed — a screen printer's
+// "Vinyl" is a print shop's "Digital Vinyl" is a sign shop's "Vinyl Cut",
+// and the naming matters for the team reading their shop-floor screen.
+
+model Department {
+  id        String  @id @default(cuid())
+  tenantId  String
+  name      String
+  // slug is derived from name at create-time; we use it in URLs and for
+  // dedup in-tenant. Human name can change freely; slug is stable.
+  slug      String
+  // A hex color the board uses for the swimlane headers + stage chips.
+  color     String  @default("#6b7280")
+  // Optional emoji/icon — keeps the board readable at a glance, especially
+  // on a ceiling-mounted shop-floor screen.
+  icon      String?
+  sortOrder Int     @default(0)
+  active    Boolean @default(true)
+
+  createdAt DateTime @default(now())
+  updatedAt DateTime @updatedAt
+
+  tenant       Tenant            @relation(fields: [tenantId], references: [id], onDelete: Cascade)
+  workStations WorkStation[]
+  stages       ProductionStage[]
+
+  @@unique([tenantId, slug])
+  @@index([tenantId, active, sortOrder])
+}
+
+// Work stations are the physical machines / benches within a department.
+// Optional — tenants can leave every stage unassigned to a specific
+// machine. Useful when a department has multiple concurrent pieces of
+// equipment (two Rolands, a laser, a CNC) and scheduling matters.
+model WorkStation {
+  id           String  @id @default(cuid())
+  tenantId     String
+  departmentId String
+  name         String
+  slug         String
+  notes        String?
+  active       Boolean @default(true)
+
+  createdAt DateTime @default(now())
+  updatedAt DateTime @updatedAt
+
+  tenant     Tenant            @relation(fields: [tenantId], references: [id], onDelete: Cascade)
+  department Department        @relation(fields: [departmentId], references: [id], onDelete: Cascade)
+  stages     ProductionStage[]
+
+  @@unique([tenantId, slug])
+  @@index([departmentId, active])
+}
+
+enum ProductionStageStatus {
+  PENDING // queued, waiting for a technician / upstream work
+  ACTIVE // someone is physically working on it right now
+  BLOCKED // can't run (missing material, proof not locked, machine down)
+  DONE // finished
+  SKIPPED // not applicable for this order (e.g. no laminate needed)
+}
+
+model ProductionStage {
+  id       String @id @default(cuid())
+  tenantId String
+  orderId  String
+
+  // The department handling this stage. Nullable so you can drop an
+  // ad-hoc "rework" stage onto an order without forcing a department.
+  // The board UI groups a stage under "Unassigned" in that case.
+  departmentId  String?
+  // Optional machine/bench. Null = any machine in the dept is fine.
+  workStationId String?
+
+  // Short designer/shop title. Different from the department name —
+  // "Laser-cut acrylic letters" is the stage title; "CNC" is the department.
+  title       String
+  description String?
+
+  status ProductionStageStatus @default(PENDING)
+
+  // Assignee (userId). Null = anyone in the dept can pick it up.
+  assigneeId String?
+
+  // Position within the order's stage sequence. The next-stage button uses
+  // this to advance. Ties are allowed (parallel work).
+  sortOrder        Int       @default(0)
+  estimatedMinutes Int?
+  // Stage-level due date. Falls back to the order's dueDate when null.
+  dueAt            DateTime?
+
+  // Lifecycle stamps.
+  startedAt     DateTime?
+  completedAt   DateTime?
+  blockedAt     DateTime?
+  blockedReason String?
+
+  // Running-clock support: we stamp startedBy/completedBy so the audit
+  // log can attribute work even after the assignee reassigns.
+  startedBy   String?
+  completedBy String?
+
+  createdAt DateTime @default(now())
+  updatedAt DateTime @updatedAt
+
+  tenant      Tenant       @relation(fields: [tenantId], references: [id], onDelete: Cascade)
+  order       Order        @relation(fields: [orderId], references: [id], onDelete: Cascade)
+  department  Department?  @relation(fields: [departmentId], references: [id], onDelete: SetNull)
+  workStation WorkStation? @relation(fields: [workStationId], references: [id], onDelete: SetNull)
+
+  defectReports  DefectReport[]
+  materialUsages MaterialUsage[]
+
+  @@index([tenantId, status])
+  @@index([orderId, sortOrder])
+  @@index([departmentId, status])
+  @@index([tenantId, dueAt])
+  @@index([tenantId, assigneeId, status])
+}
+
+enum DefectSeverity {
+  MINOR // cosmetic, no rework needed
+  MAJOR // rework required
+  CRITICAL // scrap + restart
+}
+
+// Defect reports log quality issues discovered during or after production.
+// A MINOR defect is "we noticed a hairline scratch — called it out".
+// A MAJOR defect triggers rework (the ORDER shouldn't leave the shop).
+// A CRITICAL defect scraps the piece and may need the order to revisit
+// an earlier stage entirely.
+model DefectReport {
+  id       String  @id @default(cuid())
+  tenantId String
+  orderId  String
+  stageId  String?
+
+  severity DefectSeverity @default(MINOR)
+  cause    String? // "wrong ink", "misaligned cut", "peel-off after laminate"
+  notes    String
+
+  reportedBy String
+  resolvedAt DateTime?
+  resolvedBy String?
+  resolution String? // what we did about it
+
+  createdAt DateTime @default(now())
+  updatedAt DateTime @updatedAt
+
+  tenant Tenant           @relation(fields: [tenantId], references: [id], onDelete: Cascade)
+  order  Order            @relation(fields: [orderId], references: [id], onDelete: Cascade)
+  stage  ProductionStage? @relation(fields: [stageId], references: [id], onDelete: SetNull)
+
+  @@index([tenantId, resolvedAt])
+  @@index([orderId])
+  @@index([stageId])
+}
+
+// Light inventory / material usage. We're not building a full inventory
+// system here — tenants can plug their accounting tool in for that. What
+// we DO give them is the ability to record "this order used 12ft of 3M
+// Scotchcal vinyl with 8% waste" so job-costing + material reorder
+// reports have real data to work with.
+model MaterialUsage {
+  id       String  @id @default(cuid())
+  tenantId String
+  orderId  String
+  stageId  String?
+
+  material String // freeform for now — a lookup table lands in the inventory phase
+  quantity Decimal @db.Decimal(12, 3)
+  unit     String // "ft", "sqft", "sheet", "roll", "each"
+  // Waste percentage is an optional self-reported number. Shops with good
+  // material discipline log it; shops that don't can leave it null.
+  wastePct Int?
+  notes    String?
+
+  loggedBy  String
+  createdAt DateTime @default(now())
+
+  tenant Tenant           @relation(fields: [tenantId], references: [id], onDelete: Cascade)
+  order  Order            @relation(fields: [orderId], references: [id], onDelete: Cascade)
+  stage  ProductionStage? @relation(fields: [stageId], references: [id], onDelete: SetNull)
+
+  @@index([tenantId, createdAt])
+  @@index([orderId])
+  @@index([stageId])
+}
+
+// ────────────────────────────────────────────────────────────
+// Phase 13 — Checklist templates (production & install)
+// ────────────────────────────────────────────────────────────
+//
+// Reusable checklists a shop configures once and applies to orders/installs.
+// The template's items are *copied* onto the target (ChecklistItem) at
+// apply-time so later edits to the template don't retroactively mutate jobs
+// already in progress. Same snapshot discipline used for quote/order items.
+
+enum ChecklistKind {
+  ORDER // production checklist applied to an Order
+  INSTALL // install checklist applied to an InstallEvent
+}
+
+model ChecklistTemplate {
+  id       String        @id @default(cuid())
+  tenantId String
+  name     String
+  kind     ChecklistKind
+  active   Boolean       @default(true)
+
+  // Phase 15 Slice D — group-shared template. See Product.shared for semantics.
+  shared Boolean @default(false)
+
+  createdAt DateTime @default(now())
+  updatedAt DateTime @updatedAt
+
+  tenant Tenant                  @relation(fields: [tenantId], references: [id], onDelete: Cascade)
+  items  ChecklistTemplateItem[]
+
+  @@index([tenantId, kind, active])
+}
+
+model ChecklistTemplateItem {
+  id          String  @id @default(cuid())
+  templateId  String
+  title       String
+  description String?
+  sortOrder   Int     @default(0)
+
+  template ChecklistTemplate @relation(fields: [templateId], references: [id], onDelete: Cascade)
+
+  @@index([templateId])
+}
+
+// A single actionable checklist entry attached to either an Order (production)
+// or an InstallEvent (install). Exactly one parent is set — enforced in code.
+// Items can come from a template (templateId set) or be added ad-hoc.
+model ChecklistItem {
+  id             String  @id @default(cuid())
+  tenantId       String
+  orderId        String?
+  installEventId String?
+  templateId     String? // nullable — tracks the template it came from, if any
+
+  title       String
+  description String?
+  sortOrder   Int     @default(0)
+
+  completedAt DateTime?
+  completedBy String?
+
+  createdAt DateTime @default(now())
+
+  tenant       Tenant        @relation(fields: [tenantId], references: [id], onDelete: Cascade)
+  order        Order?        @relation(fields: [orderId], references: [id], onDelete: Cascade)
+  installEvent InstallEvent? @relation(fields: [installEventId], references: [id], onDelete: Cascade)
+
+  @@index([orderId, sortOrder])
+  @@index([installEventId, sortOrder])
+  @@index([tenantId])
+}
+
+// ────────────────────────────────────────────────────────────
+// Phase 14 — Communication Center
+// ────────────────────────────────────────────────────────────
+//
+// Threaded internal comments attached to any of the business-object "parents"
+// staff work against every day. At most ONE parent should be set per comment —
+// we enforce that in the server action, not the DB (mirrors how `File` does it
+// so we don't end up with six mutually-exclusive CHECK constraints).
+//
+// `mentionedUserIds` is populated by the action that parses @mentions out of
+// `body` — keeping it denormalized means we can render "mentions of me" feeds
+// without re-parsing every comment in the system. Comment bodies are markdown-
+// lite (plain text + @user tokens); no rich formatting yet.
+
+model Comment {
+  id       String @id @default(cuid())
+  tenantId String
+  authorId String // userId who wrote it (always a staff member)
+
+  body             String
+  mentionedUserIds String[] @default([]) // denormalized from body parser
+
+  // Parent — at most one should be set. Validated in the action layer.
+  customerId     String?
+  quoteId        String?
+  orderId        String?
+  proofId        String?
+  installEventId String?
+  taskId         String?
+
+  // Soft-delete so threads keep their shape after a staff removal;
+  // author can hard-edit their own comment (we just mutate `body`).
+  editedAt  DateTime?
+  deletedAt DateTime?
+
+  createdAt DateTime @default(now())
+  updatedAt DateTime @updatedAt
+
+  tenant       Tenant        @relation(fields: [tenantId], references: [id], onDelete: Cascade)
+  customer     Customer?     @relation(fields: [customerId], references: [id], onDelete: Cascade)
+  quote        Quote?        @relation(fields: [quoteId], references: [id], onDelete: Cascade)
+  order        Order?        @relation(fields: [orderId], references: [id], onDelete: Cascade)
+  proof        Proof?        @relation(fields: [proofId], references: [id], onDelete: Cascade)
+  installEvent InstallEvent? @relation(fields: [installEventId], references: [id], onDelete: Cascade)
+  task         Task?         @relation(fields: [taskId], references: [id], onDelete: Cascade)
+
+  @@index([tenantId, createdAt])
+  @@index([customerId, createdAt])
+  @@index([quoteId, createdAt])
+  @@index([orderId, createdAt])
+  @@index([proofId, createdAt])
+  @@index([installEventId, createdAt])
+  @@index([taskId, createdAt])
+}
+
+// ────────────────────────────────────────────────────────────
+// Phase 14 — EmailEvent log
+// ────────────────────────────────────────────────────────────
+//
+// Every customer-facing email the system sends (or would have sent) is
+// logged here. Phase 16 will wire a real email provider — until then the
+// app *records intent* so the communication timeline stays accurate:
+// clicking "Send quote" stamps a SENT_AT on the quote AND drops an event
+// here.
+//
+// Deliverability fields (`openedAt`, `clickedAt`, `failedAt`, `provider`,
+// `providerId`) are present now so upgrading to a real provider is a
+// one-line config change, not a migration.
+
+model EmailEvent {
+  id       String @id @default(cuid())
+  tenantId String
+
+  // Optional foreign keys — a single event can belong to a customer and
+  // optionally also reference a specific business object (quote, order,
+  // invoice, proof, portal token). Nullable so generic tenant-wide comms
+  // have somewhere to live too.
+  customerId   String?
+  senderUserId String?
+
+  relatedEntityType String?
+  relatedEntityId   String?
+
+  kind      EmailEventKind
+  direction EmailDirection @default(OUTBOUND)
+
+  toAddress   String
+  fromAddress String?
+  subject     String?
+  bodyPreview String? // first ~500 chars for the timeline render
+
+  // Provider wiring — unused until Phase 16 integrations.
+  provider   String?
+  providerId String?
+
+  sentAt     DateTime  @default(now())
+  openedAt   DateTime?
+  clickedAt  DateTime?
+  failedAt   DateTime?
+  failReason String?
+
+  createdAt DateTime @default(now())
+
+  tenant   Tenant    @relation(fields: [tenantId], references: [id], onDelete: Cascade)
+  customer Customer? @relation(fields: [customerId], references: [id], onDelete: SetNull)
+
+  @@index([tenantId, sentAt])
+  @@index([customerId, sentAt])
+  @@index([relatedEntityType, relatedEntityId])
+}
+
+enum EmailEventKind {
+  QUOTE_SENT
+  PROOF_SENT
+  INVOICE_SENT
+  PAYMENT_RECEIPT
+  PORTAL_INVITE
+  UPDATE_MESSAGE // customer update blast / template send (Slice D)
+  REMINDER // dunning / follow-up
+  GENERIC
+}
+
+enum EmailDirection {
+  OUTBOUND // we sent it (or would have)
+  INBOUND // recorded reply — Phase 14 advanced-later
+}
+
+// ────────────────────────────────────────────────────────────
+// Phase 14 Slice D — MessageTemplate.
+//
+// Reusable email bodies for customer updates. Subject + body both accept
+// `{{path.to.field}}` placeholders resolved at send-time against a bag of
+// entities (customer, quote, order, etc.). We keep templates lightweight on
+// purpose — each shop can craft a handful of canned messages, not a full
+// marketing automation suite.
+// ────────────────────────────────────────────────────────────
+
+model MessageTemplate {
+  id       String @id @default(cuid())
+  tenantId String
+
+  name        String // internal label, e.g. "Ready for pickup"
+  description String? // help text for the sender
+  kind        MessageTemplateKind // which flows this template appears in
+  subject     String
+  body        String // plain text with {{placeholders}}
+  active      Boolean             @default(true)
+
+  // Phase 15 Slice D — group-shared template. See Product.shared for semantics.
+  shared Boolean @default(false)
+
+  createdBy String?
+  updatedBy String?
+  createdAt DateTime @default(now())
+  updatedAt DateTime @updatedAt
+
+  tenant Tenant @relation(fields: [tenantId], references: [id], onDelete: Cascade)
+
+  @@unique([tenantId, name])
+  @@index([tenantId, kind])
+  @@index([tenantId, active])
+}
+
+enum MessageTemplateKind {
+  CUSTOMER_UPDATE // generic customer-level message
+  QUOTE_UPDATE // sendable from a quote detail page
+  ORDER_UPDATE // sendable from an order detail page
+  INSTALL_UPDATE // sendable from an install event
+}
+
+// ────────────────────────────────────────────────────────────
+// Phase 18 Slice H — beta product feedback
+// ────────────────────────────────────────────────────────────
+//
+// Captured directly from the app shell so we get the tenant, the user, and
+// what page they were on when they sent it. Intentionally tenant-scoped
+// (not cross-tenant) so nothing leaks between shops; platform staff can
+// still aggregate at the DB level if needed.
+
+model Feedback {
+  id       String       @id @default(cuid())
+  tenantId String
+  userId   String // submitter — the tenant member, not the customer
+  kind     FeedbackKind @default(IDEA)
+  rating   Int? // 1-5, optional — a quick "how's it going" score
+  summary  String // one-line headline
+  body     String? // optional longer write-up
+  context  String? // path the user was on when they opened the form
+
+  createdAt DateTime @default(now())
+
+  tenant Tenant @relation(fields: [tenantId], references: [id], onDelete: Cascade)
+
+  @@index([tenantId, createdAt])
+}
+
+enum FeedbackKind {
+  IDEA
+  BUG
+  PRAISE
+  OTHER
+}
+
+// ────────────────────────────────────────────────────────────
+// Phase 2 — Authentication / Security
+// ────────────────────────────────────────────────────────────
+//
+// These four tables cover the credentials-provider security surface:
+//
+//   PasswordResetToken     — one-time token emailed for password recovery
+//   EmailVerificationToken — one-time token for initial verify + change-email
+//   UserTwoFactor          — TOTP secret + verified flag + recovery codes
+//   SecurityEvent          — audit-log parallel, user-scoped (not tenant-scoped)
+//
+// Design notes:
+//   • Both token tables store a one-way hash of the token in the row, not
+//     the raw value. The raw value only exists in the URL sent by email —
+//     a DB leak doesn't give an attacker a working reset link.
+//   • UserTwoFactor stores the secret in plaintext for now (behind DB
+//     encryption at rest); a future phase can move it to an envelope-
+//     encrypted column if/when we formalize a KMS.
+//   • SecurityEvent is deliberately separate from AuditLog. Audit logs
+//     are tenant-scoped; security events are user-scoped and survive a
+//     user being removed from a tenant. They're also the signal source
+//     for rate-limiting and lockout in `lib/security.ts`.
+
+model PasswordResetToken {
+  id        String    @id @default(cuid())
+  userId    String
+  tokenHash String    @unique // sha256(token) — raw token only lives in the email link
+  expiresAt DateTime
+  usedAt    DateTime?
+  createdAt DateTime  @default(now())
+
+  requestedIp String?
+  userAgent   String?
+
+  user User @relation(fields: [userId], references: [id], onDelete: Cascade)
+
+  @@index([userId, createdAt])
+  @@index([expiresAt])
+}
+
+// Covers both flows:
+//   • initial email verification after signup (email = the user's email)
+//   • change-email (email = the *new* address the user is switching to)
+// The `purpose` column keeps them distinct so we don't accidentally let
+// a signup-verify token confirm an email change.
+model EmailVerificationToken {
+  id        String                   @id @default(cuid())
+  userId    String
+  email     String // the address being verified (may differ from User.email when changing)
+  purpose   EmailVerificationPurpose @default(INITIAL)
+  tokenHash String                   @unique
+  expiresAt DateTime
+  usedAt    DateTime?
+  createdAt DateTime                 @default(now())
+
+  user User @relation(fields: [userId], references: [id], onDelete: Cascade)
+
+  @@index([userId, purpose, createdAt])
+}
+
+enum EmailVerificationPurpose {
+  INITIAL // verify the signup address
+  CHANGE_EMAIL // verify a new address before swapping User.email
+}
+
+model UserTwoFactor {
+  id                 String    @id @default(cuid())
+  userId             String    @unique
+  // Base32-encoded TOTP secret (RFC 6238). Length 32 random bytes → 52 chars.
+  secret             String
+  // Until the user successfully enters a code once, the setup is
+  // provisional — it won't block login yet. We read User.twoFactorEnabled
+  // for "is enforced at login". `verifiedAt` captures when the user
+  // proved they can generate a valid code.
+  verifiedAt         DateTime?
+  // Hashed single-use recovery codes. Stored as an array of sha256 hex
+  // strings; each consumed code gets filtered out of the array after use.
+  recoveryCodeHashes String[]  @default([])
+  lastUsedAt         DateTime?
+  createdAt          DateTime  @default(now())
+  updatedAt          DateTime  @updatedAt
+
+  user User @relation(fields: [userId], references: [id], onDelete: Cascade)
+}
+
+model SecurityEvent {
+  id        String            @id @default(cuid())
+  userId    String
+  kind      SecurityEventKind
+  // Free-form structured payload — e.g. { from: "old@x.com", to: "new@x.com" }
+  metadata  Json?
+  ipAddress String?
+  userAgent String?
+  createdAt DateTime          @default(now())
+
+  user User @relation(fields: [userId], references: [id], onDelete: Cascade)
+
+  @@index([userId, createdAt])
+  @@index([kind, createdAt])
+}
+
+// Phase 2 — short-lived handoff between "password OK" and "TOTP entered".
+//
+// When a user with 2FA enabled submits correct password, we mint one of
+// these rows, write the raw token to an httpOnly cookie, and redirect
+// them to /two-factor. The challenge action validates the TOTP code
+// against the user pointed at by this row, then passes the raw token
+// back into authorize() which marks it used and returns the session.
+//
+// This means the password is never re-submitted from the challenge
+// page — a leaked challenge-page URL doesn't leak password material.
+model TwoFactorPendingLogin {
+  id        String    @id @default(cuid())
+  userId    String
+  tokenHash String    @unique
+  expiresAt DateTime
+  usedAt    DateTime?
+  createdAt DateTime  @default(now())
+  ipAddress String?
+  userAgent String?
+
+  user User @relation(fields: [userId], references: [id], onDelete: Cascade)
+
+  @@index([userId, createdAt])
+  @@index([expiresAt])
+}
+
+enum SecurityEventKind {
+  LOGIN_SUCCESS
+  LOGIN_FAILED
+  LOGIN_LOCKED
+  LOGOUT
+  PASSWORD_CHANGED
+  PASSWORD_RESET_REQUESTED
+  PASSWORD_RESET_COMPLETED
+  EMAIL_CHANGE_REQUESTED
+  EMAIL_CHANGE_COMPLETED
+  EMAIL_VERIFIED
+  TWO_FACTOR_ENABLED
+  TWO_FACTOR_DISABLED
+  TWO_FACTOR_CHALLENGE_OK
+  TWO_FACTOR_CHALLENGE_FAILED
+  RECOVERY_CODE_USED
+  SESSIONS_REVOKED
+}
+
+// ────────────────────────────────────────────────────────────
+// Phase 3 — PalettePin.
+//
+// A per-user, per-tenant pin on a record (customer / quote / order /
+// invoice / task / product / location). Renders as a dedicated group at
+// the top of the ⌘K palette so frequent records are one keystroke away.
+//
+// We intentionally store `label` + `sub` + `href` alongside the
+// foreign-key-ish `entityKind` + `entityId`. That lets us render the pin
+// without re-querying the source row on every palette open, and keeps
+// the pin alive (with stale copy) even if the underlying record gets
+// renamed/archived — the pin still navigates to the right destination
+// and the user can update it by re-pinning. A background sweep can
+// prune pins whose target has been deleted.
+// ────────────────────────────────────────────────────────────
+
+model PalettePin {
+  id       String @id @default(cuid())
+  userId   String
+  tenantId String
+
+  entityKind String // "customer" | "quote" | "order" | "invoice" | "task" | "product" | "location"
+  entityId   String
+
+  // Snapshot shown in the palette row. Updated on re-pin.
+  label String
+  sub   String?
+  href  String
+
+  // Lower sort = higher in the list. Default is createdAt-descending.
+  sortOrder Int @default(0)
+
+  createdAt DateTime @default(now())
+  updatedAt DateTime @updatedAt
+
+  user   User   @relation(fields: [userId], references: [id], onDelete: Cascade)
+  tenant Tenant @relation(fields: [tenantId], references: [id], onDelete: Cascade)
+
+  // One pin per (user, tenant, entity). Re-pinning the same record just
+  // updates the snapshot.
+  @@unique([userId, tenantId, entityKind, entityId])
+  @@index([userId, tenantId, sortOrder])
+}
+
+// ────────────────────────────────────────────────────────────
+// Phase 16 Slice E — Saved views.
+//
+// A saved view is a named snapshot of the filter/sort state on a list
+// page. We persist only the query-string payload in `filters` (e.g.
+// `status=ACTIVE&tag=VIP&owner=clxyz`) so the picker can round-trip
+// into the same page with one click and the page itself remains the
+// source of truth for which filters exist.
+//
+// `isShared=false` views are owned by a single user. `isShared=true`
+// views show up for every member of the tenant — useful for team-wide
+// conventions like "My open quotes this week" or "Past due invoices".
+// ────────────────────────────────────────────────────────────
+
+model SavedView {
+  id       String @id @default(cuid())
+  userId   String
+  tenantId String
+
+  entityKind String // "customers" | "quotes" | "orders" | "invoices" | "leads" | "tasks" | ...
+  name       String
+  filters    String // raw querystring: "status=ACTIVE&tag=VIP"
+
+  isShared  Boolean @default(false)
+  sortOrder Int     @default(0)
+
+  createdAt DateTime @default(now())
+  updatedAt DateTime @updatedAt
+
+  user   User   @relation(fields: [userId], references: [id], onDelete: Cascade)
+  tenant Tenant @relation(fields: [tenantId], references: [id], onDelete: Cascade)
+
+  @@index([tenantId, entityKind, isShared])
+  @@index([userId, tenantId, entityKind, sortOrder])
+}
+
+// ────────────────────────────────────────────────────────────
+// Phase 5 — Marketing lead capture.
+//
+// Every public form (contact, book-a-demo, newsletter, trial signup
+// abandoner) funnels through a single table. Keeps the pipeline
+// visible in one place for sales, avoids per-form DB migrations when
+// we add a new capture surface, and gives us a clean hand-off for
+// eventual CRM sync (HubSpot / Pipedrive) without re-modeling.
+//
+// Why not push straight to email/Slack/CRM and forget it in our DB?
+// Two reasons:
+//   1. Forms submitted while SendGrid/HubSpot is down would silently
+//      vanish. Persisting first + forwarding async is the durable
+//      pattern.
+//   2. Dedup. Someone submits the contact form, then a demo request
+//      two minutes later — we want to see both, glued to the same
+//      email, not two cold threads.
+//
+// No tenant FK — these are pre-conversion, no tenant yet. After
+// conversion we stamp `convertedTenantId` for attribution reporting.
+// ────────────────────────────────────────────────────────────
+
+model MarketingLead {
+  id   String            @id @default(cuid())
+  kind MarketingLeadKind
+
+  // Core identity — email is the deduplication anchor. Always lowercased.
+  email   String
+  name    String?
+  company String?
+  role    String?
+
+  // Context
+  teamSize      String? // "1-5" | "6-25" | "26-100" | "100+"
+  message       String? // free-form ask / what they want to solve
+  preferredTime String? // for demo requests — "morning", "afternoon", "evening"
+  timezone      String? // IANA, e.g. "America/Los_Angeles"
+  businessType  BusinessType?
+
+  // Attribution
+  source      String? // URL path of the capture point ("/", "/contact", "/book-demo")
+  referrer    String? // document.referrer or direct
+  utmSource   String?
+  utmMedium   String?
+  utmCampaign String?
+  utmTerm     String?
+  utmContent  String?
+
+  // Abuse / audit — we only keep a hash of the IP so we can dedup + rate
+  // limit without storing raw PII.
+  ipHash    String?
+  userAgent String?
+
+  // Pipeline — sales uses these to work the lead
+  status             MarketingLeadStatus @default(NEW)
+  assignedToUserId   String?
+  firstContactedAt   DateTime?
+  lastContactedAt    DateTime?
+  convertedAt        DateTime?
+  convertedTenantId  String?
+  disqualifiedReason String?
+
+  // Internal notes — a running ledger for the sales rep working it.
+  notes String?
+
+  createdAt DateTime @default(now())
+  updatedAt DateTime @updatedAt
+
+  @@index([kind, status, createdAt])
+  @@index([email])
+  @@index([assignedToUserId, status])
+  @@index([createdAt])
+}
+
+enum MarketingLeadKind {
+  INQUIRY // /contact form
+  DEMO // /book-demo form
+  NEWSLETTER // footer subscribe
+  TRIAL_ABANDON // stub — reserved for future exit-intent capture on /signup
+}
+
+enum MarketingLeadStatus {
+  NEW
+  CONTACTED
+  QUALIFIED
+  CONVERTED
+  DISQUALIFIED
+  SPAM
+}
+
+// ────────────────────────────────────────────────────────────
+// Phase 14 — Invoicing, payments, expenses, profit visibility, and
+// financial operations.
+//
+// Design principles for this slice:
+//   * Every model is tenant-scoped with Cascade delete. Finance data
+//     is strictly private — nothing dangles across tenants.
+//   * Money is Decimal(12,2) everywhere. No floats, ever.
+//   * Denormalize aggregate totals (invoice.refundedAmount,
+//     creditMemo.balance) to keep list queries O(1). The canonical
+//     recomputer is recomputeInvoiceTotals() in src/app/actions/invoices.ts.
+//   * Refunds, credits, and write-offs are distinct concepts:
+//       - A refund is money leaving the shop back to the customer.
+//       - A credit memo is a tenant-issued IOU — applied against a
+//         future invoice, or carried on the customer's account.
+//       - A write-off is an accounting concession that an invoice
+//         won't be collected. The money never moves; the AR line
+//         just closes out.
+// ────────────────────────────────────────────────────────────
+
+// Vendors are anyone the shop pays money to — material suppliers,
+// subcontractors, utilities, software. Kept intentionally simple; a
+// full accounts-payable module isn't in scope for Phase 14.
+model Vendor {
+  id       String @id @default(cuid())
+  tenantId String
+
+  name    String
+  contact String? // primary contact name
+  email   String?
+  phone   String?
+  website String?
+
+  addressLine1 String?
+  addressLine2 String?
+  city         String?
+  region       String?
+  postalCode   String?
+  country      String?
+
+  // Free-form category the tenant uses for their own grouping
+  // ("vinyl supplier", "install subcontractor"). Kept as a string
+  // rather than an enum because every shop's taxonomy differs.
+  category String?
+
+  // Default account number / identifier the vendor knows us by (useful
+  // for paying invoices or referencing in POs).
+  accountNumber String?
+
+  notes  String?
+  active Boolean @default(true)
+
+  createdAt DateTime @default(now())
+  updatedAt DateTime @updatedAt
+  createdBy String
+
+  tenant   Tenant    @relation(fields: [tenantId], references: [id], onDelete: Cascade)
+  expenses Expense[]
+
+  @@index([tenantId, name])
+  @@index([tenantId, active])
+  @@index([tenantId, category])
+}
+
+// Expenses are what the business spent. An expense may or may not be
+// linked to a specific order (job-linked expenses feed margin
+// computation). Receipt images are stored inline as data URLs until a
+// proper blob store is wired — same pattern as Phase 13 install photos.
+model Expense {
+  id       String @id @default(cuid())
+  tenantId String
+
+  vendorId String? // nullable — walk-in receipts don't always have a vendor record
+  orderId  String? // job-linked expenses feed margin computation
+
+  // Category is freeform (tenant-defined). We surface a suggested list
+  // in the UI but don't hard-enumerate them — every shop categorizes
+  // differently and forcing an enum creates migration churn.
+  category String?
+
+  date    DateTime // when the expense was incurred (not when we recorded it)
+  amount  Decimal  @db.Decimal(12, 2)
+  // Separately tracked sales tax on the expense. We don't attempt to
+  // compute it from the line — the tenant types it in, and it feeds a
+  // "tax paid" number on the financial report.
+  taxAmount Decimal @default(0) @db.Decimal(12, 2)
+
+  method      ExpensePaymentMethod @default(CARD)
+  reference   String? // check #, last 4, txn id — mirrors Payment.reference
+  memo        String?
+
+  // Whether this expense can be rebilled to the customer. Billable
+  // expenses flow into the margin calc as "recovered cost" when we
+  // later build that reporting.
+  billable Boolean @default(false)
+
+  // Receipt: either a data URL (client-downscaled JPEG, same pattern
+  // as install photos), a hosted URL, or a server-relative path.
+  // Server actions whitelist these three shapes before writing.
+  receiptUrl String?
+
+  createdAt DateTime @default(now())
+  updatedAt DateTime @updatedAt
+  createdBy String
+
+  tenant Tenant  @relation(fields: [tenantId], references: [id], onDelete: Cascade)
+  vendor Vendor? @relation(fields: [vendorId], references: [id], onDelete: SetNull)
+  order  Order?  @relation(fields: [orderId], references: [id], onDelete: SetNull)
+
+  @@index([tenantId, date])
+  @@index([tenantId, vendorId])
+  @@index([tenantId, orderId])
+  @@index([tenantId, category])
+}
+
+enum ExpensePaymentMethod {
+  CASH
+  CHECK
+  CARD
+  ACH
+  OWNER_REIMBURSE // out-of-pocket to be paid back to the owner
+  OTHER
+}
+
+// Refund — money going back to the customer. Usually traces to a
+// specific payment (paymentId set) but can also be issued without a
+// source payment (e.g. shop store credit refunded in cash). Refunds
+// reduce invoice.refundedAmount, which reduces the invoice's effective
+// paidAmount-for-status-purposes.
+model Refund {
+  id        String @id @default(cuid())
+  tenantId  String
+  invoiceId String
+  paymentId String? // optional — refunds may stand alone
+
+  amount    Decimal       @db.Decimal(12, 2)
+  method    PaymentMethod // how the refund was issued back
+  reason    String
+  reference String? // external refund id / check # / etc.
+  refundedAt DateTime @default(now())
+  recordedBy String
+
+  createdAt DateTime @default(now())
+
+  tenant  Tenant   @relation(fields: [tenantId], references: [id], onDelete: Cascade)
+  invoice Invoice  @relation(fields: [invoiceId], references: [id], onDelete: Cascade)
+  payment Payment? @relation(fields: [paymentId], references: [id], onDelete: SetNull)
+
+  @@index([tenantId, invoiceId])
+  @@index([tenantId, refundedAt])
+}
+
+// CreditMemo — a tenant-issued IOU to a customer. Typical origins:
+// overpayment, rejected goods, goodwill adjustment. A credit memo has
+// an `amount` (face value) and a `balance` (remaining after
+// applications). Applications are tracked separately so the history
+// survives and we can show "applied $50 to INV-1003 on 2026-02-14".
+model CreditMemo {
+  id         String @id @default(cuid())
+  tenantId   String
+  customerId String
+
+  // Optional source invoice — the invoice that caused the credit
+  // (overpayment, adjustment). May be null for goodwill/manual credits.
+  sourceInvoiceId String?
+
+  // Tenant-facing memo number — "CM-1001" etc. Reuses the invoice
+  // prefix-and-counter pattern via tenant.creditMemoLastNumber.
+  number String
+
+  amount  Decimal @db.Decimal(12, 2)
+  balance Decimal @db.Decimal(12, 2) // amount - sum(applications)
+
+  reason String
+
+  issuedAt DateTime @default(now())
+  voidedAt DateTime?
+  voidReason String?
+  recordedBy String
+
+  createdAt DateTime @default(now())
+  updatedAt DateTime @updatedAt
+
+  tenant       Tenant              @relation(fields: [tenantId], references: [id], onDelete: Cascade)
+  customer     Customer            @relation(fields: [customerId], references: [id], onDelete: Restrict)
+  applications CreditApplication[]
+
+  @@unique([tenantId, number])
+  @@index([tenantId, customerId])
+  @@index([tenantId, issuedAt])
+}
+
+// A credit memo can be applied against an invoice, partially or
+// fully. Each application is an immutable record — reversing an
+// application creates a new "reversal" entry rather than mutating the
+// original.
+model CreditApplication {
+  id           String @id @default(cuid())
+  tenantId     String
+  creditMemoId String
+  invoiceId    String
+
+  amount    Decimal  @db.Decimal(12, 2)
+  appliedAt DateTime @default(now())
+  recordedBy String
+
+  createdAt DateTime @default(now())
+
+  tenant     Tenant     @relation(fields: [tenantId], references: [id], onDelete: Cascade)
+  creditMemo CreditMemo @relation(fields: [creditMemoId], references: [id], onDelete: Cascade)
+  invoice    Invoice    @relation(fields: [invoiceId], references: [id], onDelete: Cascade)
+
+  @@index([tenantId, creditMemoId])
+  @@index([tenantId, invoiceId])
+}
+
+// ────────────────────────────────────────────────────────────
+// Phase 16 — two-way portal messaging
+// ────────────────────────────────────────────────────────────
+//
+// Customers can send a message from their portal; staff can reply from the
+// customer communication view. Each message has a direction (INBOUND = customer
+// sent it, OUTBOUND = staff sent it) and an optional relatedEntity so the
+// thread can be scoped to a quote / order / invoice / proof.
+//
+// Staff replies are sent via the existing sendCustomerEmail helper so the
+// EmailEvent timeline also picks them up — the PortalMessage row is the
+// source-of-truth for the in-app thread; the EmailEvent row is the delivery
+// record for the external email.
+
+model PortalMessage {
+  id         String @id @default(cuid())
+  tenantId   String
+  customerId String
+
+  direction  PortalMessageDirection @default(INBOUND)
+  subject    String?
+  body       String
+
+  // Optional context — link this message to a specific job entity.
+  relatedEntityType String? // "Quote" | "Order" | "Invoice" | "Proof"
+  relatedEntityId   String?
+
+  // Staff member who replied (null for inbound customer messages).
+  senderUserId String?
+
+  // Soft-delete — staff can archive noisy threads.
+  archivedAt DateTime?
+
+  // Staff has seen / acknowledged this inbound message.
+  readAt DateTime?
+
+  createdAt DateTime @default(now())
+
+  tenant   Tenant   @relation(fields: [tenantId], references: [id], onDelete: Cascade)
+  customer Customer @relation(fields: [customerId], references: [id], onDelete: Cascade)
+  sender   User?    @relation("PortalMessageSender", fields: [senderUserId], references: [id])
+
+  @@index([tenantId, customerId, createdAt])
+  @@index([tenantId, direction, readAt])
+}
+
+enum PortalMessageDirection {
+  INBOUND  // customer → shop
+  OUTBOUND // shop → customer (reply)
+}
+
+// WriteOff — an accounting acknowledgment that the invoice won't be
+// collected. The invoice status flips to WRITTEN_OFF and the
+// writtenOffAmount is denormalized onto the invoice for quick totals.
+// Reversing a write-off re-opens the invoice (no destructive delete).
+model WriteOff {
+  id        String @id @default(cuid())
+  tenantId  String
+  invoiceId String
+
+  amount Decimal @db.Decimal(12, 2)
+  reason String
+
+  writtenOffAt DateTime @default(now())
+  reversedAt   DateTime?
+  reversedBy   String?
+  recordedBy   String
+
+  createdAt DateTime @default(now())
+
+  tenant  Tenant  @relation(fields: [tenantId], references: [id], onDelete: Cascade)
+  invoice Invoice @relation(fields: [invoiceId], references: [id], onDelete: Cascade)
+
+  @@index([tenantId, invoiceId])
+  @@index([tenantId, writtenOffAt])
+}

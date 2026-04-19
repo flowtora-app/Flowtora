@@ -1,0 +1,322 @@
+import Link from "next/link";
+import { requirePermission } from "@/lib/tenant";
+import { db } from "@/lib/db";
+import { Button } from "@/components/Field";
+import { Card } from "@/components/Card";
+import { stageColor, stageLabel, PIPELINE_STAGES } from "@/lib/crm";
+import { formatMoney } from "@/lib/format";
+import { memberLookup } from "@/lib/members";
+import { applyBranchScope, listActiveLocations } from "@/lib/locations";
+import { EmptyState } from "@/components/ui/EmptyState";
+import { loadHealthBundle } from "@/lib/opportunity-health-loader";
+import { computeOpportunityHealth, type HealthTier } from "@/lib/opportunity-health";
+import { loadTenantTags } from "@/lib/customer-tags";
+import { CustomersTable, type CustomersTableRow } from "@/components/crm/CustomersTable";
+import { SavedViewPicker } from "@/components/ui/SavedViewPicker";
+import { listSavedViews } from "@/app/actions/saved-views";
+import type { Prisma } from "@prisma/client";
+
+export default async function CustomersPage({
+  params,
+  searchParams,
+}: {
+  params: Promise<{ slug: string }>;
+  searchParams: Promise<{ q?: string; stage?: string; status?: string; branch?: string; health?: string; tag?: string }>;
+}) {
+  const { slug } = await params;
+  const sp = await searchParams;
+  const ctx = await requirePermission(slug, "customers:view");
+  const { tenant } = ctx;
+
+  let where: Prisma.CustomerWhereInput = { tenantId: tenant.id };
+  if (sp.stage) where.stage = sp.stage as never;
+  if (sp.status) where.status = sp.status as never;
+  if (sp.q) {
+    where.OR = [
+      { name: { contains: sp.q, mode: "insensitive" } },
+      { email: { contains: sp.q, mode: "insensitive" } },
+      { phone: { contains: sp.q } },
+    ];
+  }
+  // Phase 15 — first apply the member's permanent branch scope, then layer
+  // the optional ?branch=... narrowing filter on top (only if the chosen
+  // branch is inside what the member is already allowed to see).
+  where = applyBranchScope(where, ctx.branchScope);
+  const branches = await listActiveLocations(tenant.id);
+  const branchChoices =
+    ctx.branchScope === null ? branches : branches.filter((b) => ctx.branchScope!.includes(b.id));
+  if (sp.branch && branchChoices.some((b) => b.id === sp.branch)) {
+    where.locationId = sp.branch;
+  }
+
+  // Phase 7 — tag filter. We store tags lowercased; the query uses
+  // `has` against the normalised value so links from the chip row
+  // below always hit. Empty tag filter is ignored.
+  const tagFilter = (sp.tag ?? "").trim().toLowerCase();
+  if (tagFilter) {
+    where.tags = { has: tagFilter };
+  }
+
+  const [customersRaw, members, tagCatalogue, savedViews] = await Promise.all([
+    db.customer.findMany({ where, orderBy: { updatedAt: "desc" }, take: 200 }),
+    memberLookup(tenant.id),
+    loadTenantTags(tenant.id),
+    listSavedViews(slug, "customers"),
+  ]);
+  // Top 6 most-used tags shown as quick filter chips.
+  const topTags = tagCatalogue.slice(0, 6);
+
+  // Phase 7 — attach opportunity health to each row so the list can
+  // show a badge and filter by tier/at-risk without extra round trips.
+  const healthBundle = await loadHealthBundle(tenant.id, customersRaw);
+  const healthReports = new Map<string, ReturnType<typeof computeOpportunityHealth>>();
+  for (const c of customersRaw) {
+    const input = healthBundle.get(c.id);
+    if (input) healthReports.set(c.id, computeOpportunityHealth(input));
+  }
+
+  // Health is a computed field — not indexable — so filtering runs in
+  // memory after the DB query. Acceptable at the page cap of 200 rows.
+  const HEALTH_FILTERS: Record<string, (tier: HealthTier, atRisk: boolean) => boolean> = {
+    "at-risk": (_t, atRisk) => atRisk,
+    hot:       (t) => t === "hot",
+    warm:      (t) => t === "warm",
+    cool:      (t) => t === "cool",
+    stale:     (t) => t === "stale",
+  };
+  const healthFilter = sp.health && HEALTH_FILTERS[sp.health];
+  const customers = healthFilter
+    ? customersRaw.filter((c) => {
+        const r = healthReports.get(c.id);
+        if (!r) return false;
+        return healthFilter(r.tier, r.atRisk);
+      })
+    : customersRaw;
+
+  // Phase 4 Slice E — distinguish "empty because filtered" from "empty
+  // because brand new". A filter-empty result needs a Clear button; a
+  // truly-empty account needs teaching copy + a nudge toward sample data.
+  const hasFilters = !!(sp.q || sp.stage || sp.status || sp.branch || sp.health || sp.tag);
+  const isFirstRun = customers.length === 0 && !hasFilters;
+  const canManage = ctx.can("customers:create");
+  const atRiskCount = Array.from(healthReports.values()).filter((r) => r.atRisk).length;
+
+  return (
+    <div>
+      <div className="flex items-center justify-between">
+        <div>
+          <h1 className="text-2xl font-semibold">Customers</h1>
+          <p className="mt-1 text-sm" style={{ color: "var(--muted)" }}>
+            {customers.length} {customers.length === 1 ? "record" : "records"}
+            {atRiskCount > 0 && !sp.health && (
+              <>
+                {" · "}
+                <Link
+                  href={`/t/${slug}/customers?health=at-risk`}
+                  className="underline"
+                  style={{ color: "var(--danger-fg)" }}
+                >
+                  {atRiskCount} at risk
+                </Link>
+              </>
+            )}
+          </p>
+        </div>
+        <div className="flex items-center gap-2">
+          <SavedViewPicker
+            slug={slug}
+            entityKind="customers"
+            views={savedViews}
+            canShare={ctx.role === "OWNER" || ctx.role === "ADMIN"}
+          />
+          <Link href={`/t/${slug}/customers/new`}>
+            <Button type="button">New customer</Button>
+          </Link>
+        </div>
+      </div>
+
+      <form className="mt-6 flex gap-2 text-sm" method="get">
+        {/* Keep the active tag filter (if any) across a form submit. */}
+        {sp.tag && <input type="hidden" name="tag" value={sp.tag} />}
+        <input
+          name="q"
+          defaultValue={sp.q ?? ""}
+          placeholder="Search name, email, phone…"
+          className="flex-1 rounded-md px-3 py-2 outline-none"
+          style={{ background: "var(--panel)", border: "1px solid var(--border)", color: "var(--text)" }}
+        />
+        <select name="stage" defaultValue={sp.stage ?? ""} className="rounded-md px-3 py-2"
+          style={{ background: "var(--panel)", border: "1px solid var(--border)", color: "var(--text)" }}>
+          <option value="">All stages</option>
+          {PIPELINE_STAGES.map((s) => <option key={s.value} value={s.value}>{s.label}</option>)}
+        </select>
+        <select name="status" defaultValue={sp.status ?? ""} className="rounded-md px-3 py-2"
+          style={{ background: "var(--panel)", border: "1px solid var(--border)", color: "var(--text)" }}>
+          <option value="">All statuses</option>
+          <option value="ACTIVE">Active</option>
+          <option value="INACTIVE">Inactive</option>
+          <option value="ARCHIVED">Archived</option>
+        </select>
+        <select name="health" defaultValue={sp.health ?? ""} className="rounded-md px-3 py-2"
+          style={{ background: "var(--panel)", border: "1px solid var(--border)", color: "var(--text)" }}>
+          <option value="">All health</option>
+          <option value="at-risk">At risk</option>
+          <option value="hot">Hot</option>
+          <option value="warm">Warm</option>
+          <option value="cool">Cool</option>
+          <option value="stale">Stale</option>
+        </select>
+        {branchChoices.length > 1 && (
+          <select name="branch" defaultValue={sp.branch ?? ""} className="rounded-md px-3 py-2"
+            style={{ background: "var(--panel)", border: "1px solid var(--border)", color: "var(--text)" }}>
+            <option value="">All branches</option>
+            {branchChoices.map((b) => <option key={b.id} value={b.id}>{b.name}</option>)}
+          </select>
+        )}
+        <Button type="submit" variant="secondary">Filter</Button>
+      </form>
+
+      {/* Phase 7 — tag quick-filter row. */}
+      {(topTags.length > 0 || sp.tag) && (
+        <div className="mt-3 flex flex-wrap items-center gap-2 text-xs">
+          <span style={{ color: "var(--text-faint)" }}>Tags:</span>
+          {sp.tag ? (
+            <span
+              className="inline-flex items-center gap-1 rounded-full px-2.5 py-0.5"
+              style={{
+                background: "var(--accent-primary)",
+                color: "var(--accent-fg)",
+              }}
+            >
+              {sp.tag}
+              <Link
+                href={buildListHref(slug, sp, { tag: undefined })}
+                aria-label="Clear tag filter"
+                className="-mr-0.5 inline-flex h-4 w-4 items-center justify-center rounded-full"
+                style={{ color: "var(--accent-fg)", opacity: 0.85 }}
+              >
+                ×
+              </Link>
+            </span>
+          ) : (
+            topTags.map((t) => (
+              <Link
+                key={t.tag}
+                href={buildListHref(slug, sp, { tag: t.tag })}
+                className="inline-flex items-center gap-1 rounded-full px-2.5 py-0.5 hover:brightness-110"
+                style={{
+                  background: "var(--accent-surface)",
+                  color: "var(--accent-primary)",
+                }}
+              >
+                {t.tag}
+                <span style={{ color: "var(--text-faint)" }}>×{t.count}</span>
+              </Link>
+            ))
+          )}
+        </div>
+      )}
+
+      {isFirstRun ? (
+        <Card className="mt-4">
+          <EmptyState
+            icon={<span aria-hidden>👥</span>}
+            title="Your customer book is empty"
+            description={
+              <>
+                Customers are the center of Tracksign — every quote, order, and
+                invoice hangs off one. Add a walk-in, a lead from your CRM, or
+                a referral and watch the pipeline start to fill out.
+              </>
+            }
+            action={
+              canManage && (
+                <Link
+                  href={`/t/${slug}/customers/new`}
+                  className="inline-flex items-center rounded-md px-3 py-1.5 text-sm font-semibold transition-colors hover:brightness-110"
+                  style={{
+                    background: "var(--accent-primary)",
+                    color: "var(--accent-fg)",
+                  }}
+                >
+                  Add your first customer
+                </Link>
+              )
+            }
+            secondary={
+              canManage && !tenant.sampleDataLoadedAt ? (
+                <Link
+                  href={`/t/${slug}/settings/sample-data`}
+                  className="text-xs underline"
+                  style={{ color: "var(--text-muted)" }}
+                >
+                  Or load a demo shop to explore
+                </Link>
+              ) : undefined
+            }
+          />
+        </Card>
+      ) : (
+        <div className="mt-4">
+          <CustomersTable
+            slug={slug}
+            canEdit={canManage}
+            rows={customers.map<CustomersTableRow>((c) => {
+              const report = healthReports.get(c.id);
+              return {
+                id: c.id,
+                name: c.name,
+                kind: c.kind,
+                status: c.status,
+                stage: c.stage,
+                stageLabel: stageLabel(c.stage),
+                stageColor: stageColor(c.stage),
+                ownerId: c.ownerId,
+                ownerName: c.ownerId ? members.get(c.ownerId)?.name ?? null : null,
+                value: formatMoney(c.estimatedValue?.toString() ?? null, tenant.currency),
+                email: c.email ?? null,
+                phone: c.phone ?? null,
+                tags: c.tags,
+                health: report
+                  ? {
+                      tier: report.tier as HealthTier,
+                      score: report.score,
+                      atRisk: report.atRisk,
+                    }
+                  : null,
+              };
+            })}
+            empty={
+              <div
+                className="px-4 py-8 text-center text-sm"
+                style={{ color: "var(--text-muted)" }}
+              >
+                No customers match these filters.{" "}
+                <Link href={`/t/${slug}/customers`} className="underline">
+                  Clear filters
+                </Link>
+              </div>
+            }
+          />
+        </div>
+      )}
+    </div>
+  );
+}
+
+// Build a list-page href that preserves the active filter state but
+// swaps/clears specific params. Used by the tag chip row.
+function buildListHref(
+  slug: string,
+  sp: { q?: string; stage?: string; status?: string; branch?: string; health?: string; tag?: string },
+  overrides: Partial<{ q: string; stage: string; status: string; branch: string; health: string; tag: string | undefined }>,
+): string {
+  const merged: Record<string, string | undefined> = { ...sp, ...overrides };
+  const qs = new URLSearchParams();
+  for (const [key, value] of Object.entries(merged)) {
+    if (value === undefined || value === null || value === "") continue;
+    qs.set(key, String(value));
+  }
+  const query = qs.toString();
+  return `/t/${slug}/customers${query ? `?${query}` : ""}`;
+}

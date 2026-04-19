@@ -1,0 +1,319 @@
+import { cookies, headers } from "next/headers";
+import { redirect } from "next/navigation";
+import { auth } from "@/auth";
+import { db } from "@/lib/db";
+import { requireTenant } from "@/lib/tenant";
+import { unreadCount } from "@/lib/notifications";
+import { loadAttention, totalAttentionCount } from "@/lib/attention";
+import { getActiveImpersonation } from "@/lib/impersonation";
+import { stopImpersonation } from "@/app/actions/platform";
+import { AppShell } from "@/components/shell/AppShell";
+import type { SidebarSection } from "@/components/shell/Sidebar";
+import type { QuickAction, PalettePin } from "@/components/shell/CommandPalette";
+import { TenantBanners } from "@/components/TenantBanners";
+import { tenantBanners } from "@/lib/tenant-banners";
+import { UnverifiedEmailBanner } from "@/components/UnverifiedEmailBanner";
+import { loadPalettePins } from "@/lib/palette";
+import { loadActivationReport, shouldShowActivationBanner } from "@/lib/activation";
+import { FinishSetupBanner } from "@/components/FinishSetupBanner";
+import { MemberWelcomeCard } from "@/components/onboarding/MemberWelcomeCard";
+
+// Phase 18 Slice B — tenant layout.
+//
+// Responsibilities split:
+//   • This server component: auth, tenant resolution, data fetching
+//     (badges, memberships, unread, impersonation state), onboarding
+//     gate, and computing the sidebar structure.
+//   • <AppShell/> (client): layout glue + interactive popovers +
+//     command palette.
+//
+// The sidebar groups 13 nav items into three sections so the visual
+// density eases up as the account grows. Badge counts stay as props —
+// the Sidebar stays dumb about how "attention" is computed.
+
+export default async function TenantLayout({
+  children,
+  params,
+}: {
+  children: React.ReactNode;
+  params: Promise<{ slug: string }>;
+}) {
+  const { slug } = await params;
+  const ctx = await requireTenant(slug);
+  const { tenant, role, userId } = ctx;
+
+  // Onboarding gate — owners/admins must finish setup first. Others
+  // see a banner explaining the workspace isn't ready yet.
+  const path = (await headers()).get("x-pathname") ?? "";
+  const inOnboarding = path.includes(`/t/${slug}/onboarding`);
+  if (!tenant.onboardingCompletedAt && !inOnboarding && (role === "OWNER" || role === "ADMIN")) {
+    redirect(`/t/${slug}/onboarding`);
+  }
+
+  // Phase 17 Slice B — impersonation banner. Only shown when the active
+  // impersonation points at *this* tenant (cross-tenant stale cookies
+  // shouldn't imply an audit trail in the wrong place).
+  const impersonation = await getActiveImpersonation(userId);
+  const impersonatingHere = impersonation && impersonation.tenantId === tenant.id;
+
+  const canSeeAllAttention = role === "OWNER" || role === "ADMIN" || role === "PRODUCTION_MANAGER";
+
+  // Parallel fetch: badges, memberships (for the switcher), user record
+  // (for the profile menu), sidebar-collapse pref, pinned palette items,
+  // current membership row (for the welcome-seen flag), and — for owners
+  // or admins who might see the activation banner — the activation
+  // report.
+  const session = await auth();
+  const shouldLoadActivation = role === "OWNER" || role === "ADMIN";
+  // Phase 22 Slice A — approval inbox badge. Only approvers see the count;
+  // everyone else sees the page without a pending-count chip. Count runs
+  // unconditionally but cheaply — a single indexed aggregate.
+  const canApprove = ctx.can("quotes:approve_exceptions");
+  const [
+    unread,
+    recentNotifications,
+    attentionGroups,
+    memberships,
+    userRecord,
+    jar,
+    pins,
+    currentMembership,
+    activation,
+    approvalsPending,
+  ] = await Promise.all([
+    unreadCount(tenant.id, userId),
+    // Top 8 most-recent notifications for the header bell popover.
+    // Read/unread state is styled in the row (colored dot + bg tint),
+    // so users still see their latest history when there's zero unread.
+    db.notification.findMany({
+      where:   { tenantId: tenant.id, userId },
+      orderBy: { createdAt: "desc" },
+      take:    8,
+      select:  { id: true, type: true, title: true, link: true, readAt: true, createdAt: true },
+    }).catch(() => [] as { id: string; type: string; title: string; link: string | null; readAt: Date | null; createdAt: Date }[]),
+    loadAttention(tenant.id, { userId: canSeeAllAttention ? undefined : userId }).catch(() => null),
+    db.membership.findMany({
+      where: { userId, status: "ACTIVE" },
+      select: {
+        tenant: {
+          select: {
+            id: true,
+            name: true,
+            slug: true,
+            status: true,
+            trialEndsAt: true,
+          },
+        },
+      },
+    }),
+    db.user.findUnique({ where: { id: userId }, select: { email: true, name: true, emailVerified: true } }),
+    cookies(),
+    loadPalettePins(userId, tenant.id, 10),
+    db.membership.findUnique({
+      where: { userId_tenantId: { userId, tenantId: tenant.id } },
+      select: { welcomeSeenAt: true },
+    }),
+    shouldLoadActivation ? loadActivationReport(tenant, role) : Promise.resolve(null),
+    canApprove
+      ? db.approvalRequest.count({ where: { tenantId: tenant.id, status: "PENDING" } }).catch(() => 0)
+      : Promise.resolve(0),
+  ]);
+  const attentionCount = attentionGroups ? totalAttentionCount(attentionGroups) : 0;
+
+  // Banner visibility — owner/admin + score < 50 + 7-day snooze honored.
+  // `onDashboard` flag suppresses the banner on the dashboard itself,
+  // where the full ActivationWidget renders and the banner would be
+  // redundant.
+  const onDashboard = path === `/t/${slug}/dashboard`;
+  const showActivationBanner =
+    !!activation &&
+    !onDashboard &&
+    shouldShowActivationBanner(tenant, role, activation.score);
+  const topAction = activation?.actions[0] ?? null;
+
+  // First-run welcome card for non-admin members. Renders ONCE per
+  // membership on the dashboard. Owners & admins get the full wizard
+  // instead.
+  const showMemberWelcome =
+    role !== "OWNER" &&
+    role !== "ADMIN" &&
+    onDashboard &&
+    currentMembership?.welcomeSeenAt == null;
+
+  const collapsedInitial = jar.get("ts_shell_collapsed")?.value === "1";
+
+  // Build sidebar sections. Three clusters; Slice B's grouping:
+  //   Work      — the day-to-day shop cadence
+  //   Revenue   — customers, leads, and money surfaces
+  //   Back office — reports / support / settings
+  const base = `/t/${slug}`;
+  const sections: SidebarSection[] = [
+    {
+      label: "Work",
+      items: [
+        { href: `${base}/dashboard`, label: "Dashboard", icon: "Dashboard" },
+        { href: `${base}/attention`, label: "Needs attention", icon: "Attention", badge: attentionCount },
+        { href: `${base}/tasks`, label: "Tasks", icon: "Tasks" },
+        // Phase 22 Slice A — approvers get a badge; non-approvers still see
+        // the link so they can check on their own pending requests.
+        { href: `${base}/approvals`, label: "Approvals", icon: "Approvals", badge: approvalsPending },
+        { href: `${base}/orders`, label: "Orders", icon: "Orders" },
+        { href: `${base}/production`, label: "Production", icon: "Production" },
+        { href: `${base}/installs`, label: "Installs", icon: "Installs" },
+      ],
+    },
+    {
+      label: "Revenue",
+      items: [
+        { href: `${base}/leads`, label: "Pipeline", icon: "Pipeline" },
+        { href: `${base}/customers`, label: "Customers", icon: "Customers" },
+        { href: `${base}/quotes`, label: "Quotes", icon: "Quotes" },
+        { href: `${base}/invoices`, label: "Invoices", icon: "Invoices" },
+        { href: `${base}/products`, label: "Products", icon: "Products" },
+      ],
+    },
+    {
+      label: "Office",
+      items: [
+        { href: `${base}/expenses`, label: "Expenses", icon: "Expenses" },
+        { href: `${base}/vendors`,  label: "Vendors",  icon: "Vendors"  },
+        { href: `${base}/reports`,  label: "Reports",  icon: "Reports"  },
+        { href: `${base}/support`,  label: "Support",  icon: "Support"  },
+        { href: `${base}/settings`, label: "Settings", icon: "Settings" },
+      ],
+    },
+  ];
+
+  // Quick actions for the ⌘K palette. Mirrors the TopBar's + Create
+  // menu but richer — we can add non-create destinations too (e.g.
+  // "Go to settings").
+  const quickActions: QuickAction[] = [
+    { id: "c-customer", label: "Create customer", sub: "New record", href: `${base}/customers/new`, icon: "Customers", keywords: ["new", "add"] },
+    { id: "c-quote",    label: "Create quote",    sub: "New record", href: `${base}/quotes/new`,    icon: "Quotes",    keywords: ["new", "add", "estimate"] },
+    { id: "c-order",    label: "Create order",    sub: "New record", href: `${base}/orders/new`,    icon: "Orders",    keywords: ["new", "add", "job"] },
+    { id: "c-invoice",  label: "Create invoice",  sub: "New record", href: `${base}/invoices/new`,  icon: "Invoices",  keywords: ["new", "add", "bill"] },
+    { id: "c-expense",  label: "Log expense",     sub: "New record", href: `${base}/expenses/new`,  icon: "Expenses",  keywords: ["new", "add", "receipt", "bill"] },
+    { id: "c-vendor",   label: "Add vendor",      sub: "New record", href: `${base}/vendors/new`,   icon: "Vendors",   keywords: ["new", "add", "supplier"] },
+    { id: "c-product",  label: "Create product",  sub: "New record", href: `${base}/products/new`,  icon: "Products",  keywords: ["new", "add", "catalog"] },
+    { id: "g-dashboard",label: "Go to dashboard", href: `${base}/dashboard`,  icon: "Dashboard" },
+    { id: "g-attention",label: "Go to needs attention", href: `${base}/attention`, icon: "Attention" },
+    { id: "g-tasks",    label: "Go to tasks",     href: `${base}/tasks`,      icon: "Tasks"    },
+    { id: "g-production", label: "Go to production board", href: `${base}/production`, icon: "Production" },
+    { id: "g-reports",  label: "Go to reports",   href: `${base}/reports`,    icon: "Reports"  },
+    { id: "g-settings", label: "Go to settings",  href: `${base}/settings`,   icon: "Settings" },
+    { id: "g-support",  label: "Go to support",   href: `${base}/support`,    icon: "Support"  },
+  ];
+
+  // Only offer the tenant switcher when the user actually has >1
+  // workspace. Filter out suspended/cancelled ones — they'd redirect
+  // anyway. TRIAL and PAST_DUE are kept and surfaced via a status chip
+  // in the switcher popover.
+  const membershipSummaries = memberships
+    .filter((m) => ["ACTIVE", "TRIAL", "PAST_DUE"].includes(m.tenant.status))
+    .map((m) => ({
+      id: m.tenant.id,
+      name: m.tenant.name,
+      slug: m.tenant.slug,
+      active: m.tenant.id === tenant.id,
+      status: m.tenant.status,
+      trialEndsAt: m.tenant.trialEndsAt,
+    }));
+
+  // Snapshot of pins to hydrate the ⌘K palette. The shell is client
+  // but we pre-compute on the server so the palette is usable on first
+  // open without a round-trip.
+  const pinSnapshots: PalettePin[] = pins.map((p) => ({
+    id: p.id,
+    kind: p.entityKind,
+    label: p.label,
+    sub: p.sub ?? undefined,
+    href: p.href,
+  }));
+
+  return (
+    <AppShell
+      slug={slug}
+      tenantName={tenant.name}
+      roleLabel={role.replace(/_/g, " ")}
+      planLabel={tenant.plan}
+      sections={sections}
+      collapsedInitial={collapsedInitial}
+      user={{
+        email: userRecord?.email ?? session?.user?.email ?? "",
+        name: userRecord?.name ?? session?.user?.name ?? null,
+      }}
+      unread={unread}
+      recentNotifications={recentNotifications}
+      memberships={membershipSummaries}
+      quickActions={quickActions}
+      pins={pinSnapshots}
+    >
+      {impersonatingHere && (
+        <div
+          className="mb-6 flex items-center justify-between gap-4 rounded-md px-4 py-3 text-sm"
+          style={{ background: "#3a2a15", color: "#ffc98b", border: "1px solid #5b4b20" }}
+        >
+          <div>
+            <span className="font-medium">Platform impersonation active.</span>{" "}
+            Every action you take is logged against your platform account.
+            {impersonation?.reason && (
+              <span className="block text-xs" style={{ color: "var(--text-muted)" }}>
+                Reason: {impersonation.reason}
+              </span>
+            )}
+          </div>
+          <form action={stopImpersonation}>
+            <button
+              type="submit"
+              className="rounded-md px-3 py-1.5 text-xs font-medium"
+              style={{ background: "#5b4b20", color: "#ffc98b", border: "1px solid #7a6828" }}
+            >
+              Stop impersonating
+            </button>
+          </form>
+        </div>
+      )}
+      {!tenant.onboardingCompletedAt && !inOnboarding && (
+        <div
+          className="mb-6 rounded-md px-4 py-3 text-sm"
+          style={{ background: "var(--surface-1)", border: "1px solid var(--border-subtle)", color: "var(--text-muted)" }}
+        >
+          Workspace setup isn&apos;t finished yet. An owner or admin needs to complete onboarding.
+        </div>
+      )}
+      {/* Phase 1 — environment ribbon + trial/billing/archive banners.
+          These are derived from the tenant row, not user role, so every
+          member sees the same state. */}
+      <TenantBanners banners={tenantBanners(tenant)} />
+      {/* Phase 4 — persistent "finish setup" nudge. Shown only on
+          non-dashboard pages (the dashboard itself already has the
+          ActivationWidget), when score < 50, and not snoozed within 7d. */}
+      {showActivationBanner && activation && (
+        <FinishSetupBanner
+          slug={slug}
+          score={activation.score}
+          topAction={
+            topAction
+              ? { title: topAction.title, href: `/t/${slug}${topAction.href}` }
+              : null
+          }
+        />
+      )}
+      {/* Phase 4 Slice F — non-admin member first-run welcome. */}
+      {showMemberWelcome && (
+        <MemberWelcomeCard
+          slug={slug}
+          tenantName={tenant.name}
+          roleLabel={role.replace(/_/g, " ").toLowerCase()}
+        />
+      )}
+      {/* Phase 2 — nudge any user who hasn't confirmed their email yet.
+          We don't block the workspace on it (too disruptive mid-trial)
+          but we keep a dismissible banner on top of every tenant page. */}
+      {!userRecord?.emailVerified && userRecord?.email && (
+        <UnverifiedEmailBanner email={userRecord.email} />
+      )}
+      {children}
+    </AppShell>
+  );
+}

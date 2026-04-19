@@ -1,0 +1,489 @@
+@import "tailwindcss";
+
+/* ── Design tokens ──────────────────────────────────────────────────────
+ *
+ * Dual-theme token system. Dark is the default; `[data-theme="light"]`
+ * on <html> flips the scale. Both themes share the same semantic names
+ * so every component reads from the same variables regardless of mode.
+ *
+ * Legacy vars (--bg, --panel, --border, --text, --muted, --accent) are
+ * preserved verbatim as aliases so every pre-token page keeps rendering
+ * unchanged. New code should prefer the expanded tokens below.
+ *
+ * The `color-scheme` declaration tells the browser how to render native
+ * form controls (scrollbars, date pickers, select dropdowns) so they
+ * match the surface treatment instead of blasting the user with a
+ * glaring white scrollbar on a dark page.
+ * ────────────────────────────────────────────────────────────────────── */
+
+:root {
+  color-scheme: dark;
+
+  /* Surface layers — stacked from deepest to shallowest. Dark mode uses
+     a cool, slightly blue-shifted neutral that sits nicely with the
+     accent blue without feeling sterile. */
+  --surface-0: #0b0d10;          /* page background */
+  --surface-1: #11151a;          /* default panel */
+  --surface-2: #161b22;          /* elevated panel (modals, popovers) */
+  --surface-3: #1c2129;          /* hover state */
+  --surface-inverse: #e6e8eb;    /* inverse surface (for light chips on dark) */
+
+  /* Borders */
+  --border-subtle: #1f262e;
+  --border-default: #2a333d;
+  --border-strong: #3a4452;
+
+  /* Text */
+  --text-default: #e6e8eb;
+  --text-muted: #8a94a3;
+  --text-faint: #555e6b;
+  --text-inverse: #0b0d10;
+
+  /* Accent (primary brand) */
+  --accent-primary: #4f8cff;
+  --accent-hover: #6a9fff;
+  --accent-active: #3b7ae5;
+  --accent-fg: #ffffff;          /* text on accent bg */
+  --accent-surface: rgba(79, 140, 255, 0.14);
+  --accent-surface-strong: rgba(79, 140, 255, 0.22);
+
+  /* Semantic — success */
+  --success: #22c55e;
+  --success-fg: #6ee7a8;
+  --success-surface: rgba(34, 197, 94, 0.14);
+
+  /* Semantic — warning */
+  --warning: #f59e0b;
+  --warning-fg: #fcd34d;
+  --warning-surface: rgba(245, 158, 11, 0.14);
+
+  /* Semantic — danger */
+  --danger: #ef4444;
+  --danger-fg: #ff8b8b;
+  --danger-surface: #3a1517;
+  --danger-border: #5b2024;
+
+  /* Semantic — info */
+  --info: #38bdf8;
+  --info-fg: #7dd3fc;
+  --info-surface: rgba(56, 189, 248, 0.14);
+
+  /* Radii */
+  --radius-xs: 3px;
+  --radius-sm: 4px;
+  --radius-md: 6px;
+  --radius-lg: 8px;
+  --radius-xl: 12px;
+  --radius-2xl: 16px;
+  --radius-pill: 9999px;
+
+  /* Shadows (dark-mode-appropriate; mostly ring-style) */
+  --shadow-sm: 0 1px 2px rgba(0, 0, 0, 0.4);
+  --shadow-md: 0 4px 12px rgba(0, 0, 0, 0.5);
+  --shadow-lg: 0 12px 32px rgba(0, 0, 0, 0.55);
+  --shadow-ring: 0 0 0 1px var(--border-default);
+  --shadow-focus: 0 0 0 2px var(--surface-0), 0 0 0 4px var(--accent-primary);
+
+  /* Motion */
+  --ease-out: cubic-bezier(0.22, 1, 0.36, 1);
+  --ease-in: cubic-bezier(0.4, 0, 1, 1);
+  --duration-fast: 120ms;
+  --duration-base: 180ms;
+  --duration-slow: 260ms;
+
+  /* Z-index scale */
+  --z-dropdown: 100;
+  --z-sticky: 200;
+  --z-overlay: 800;
+  --z-modal: 900;
+  --z-toast: 1000;
+  --z-tooltip: 1100;
+
+  /* ── Legacy aliases (do not remove) ── */
+  --bg: var(--surface-0);
+  --panel: var(--surface-1);
+  --border: var(--border-subtle);
+  --text: var(--text-default);
+  --muted: var(--text-muted);
+  --accent: var(--accent-primary);
+}
+
+/* ── Light theme ────────────────────────────────────────────────────────
+ * Activated by data-theme="light" on <html>. Every surface/border/text
+ * token flips; semantic tokens (success/warning/danger/info) are
+ * retuned so badge surfaces stay legible on light panels.
+ * ──────────────────────────────────────────────────────────────────── */
+[data-theme="light"] {
+  color-scheme: light;
+
+  --surface-0: #f7f8fa;          /* page background — very soft gray */
+  --surface-1: #ffffff;          /* default panel — pure white */
+  --surface-2: #ffffff;          /* elevated — same white, rely on shadow */
+  --surface-3: #f1f3f6;          /* hover state */
+  --surface-inverse: #0b0d10;
+
+  --border-subtle: #e6e8ec;
+  --border-default: #d5d9df;
+  --border-strong: #b1b7c0;
+
+  --text-default: #0f172a;
+  --text-muted: #56627a;
+  --text-faint: #8b94a4;
+  --text-inverse: #ffffff;
+
+  --accent-primary: #2f6bf5;
+  --accent-hover: #4a7fff;
+  --accent-active: #1f55d4;
+  --accent-fg: #ffffff;
+  --accent-surface: rgba(47, 107, 245, 0.10);
+  --accent-surface-strong: rgba(47, 107, 245, 0.18);
+
+  --success: #16a34a;
+  --success-fg: #15803d;
+  --success-surface: rgba(22, 163, 74, 0.10);
+
+  --warning: #d97706;
+  --warning-fg: #b45309;
+  --warning-surface: rgba(217, 119, 6, 0.12);
+
+  --danger: #dc2626;
+  --danger-fg: #b91c1c;
+  --danger-surface: #fef2f2;
+  --danger-border: #fecaca;
+
+  --info: #0284c7;
+  --info-fg: #0369a1;
+  --info-surface: rgba(2, 132, 199, 0.10);
+
+  /* Shadows are stronger/clearer in light mode to preserve elevation
+     cues without the dark-mode trick of luminance contrast. */
+  --shadow-sm: 0 1px 2px rgba(15, 23, 42, 0.06);
+  --shadow-md: 0 4px 12px rgba(15, 23, 42, 0.08);
+  --shadow-lg: 0 18px 40px rgba(15, 23, 42, 0.14);
+  --shadow-focus: 0 0 0 2px var(--surface-0), 0 0 0 4px var(--accent-primary);
+}
+
+html, body {
+  background: var(--surface-0);
+  color: var(--text-default);
+  font-family: ui-sans-serif, system-ui, -apple-system, "Segoe UI", Roboto, Helvetica, Arial, sans-serif;
+  font-feature-settings: "cv11", "ss01";
+  /* Smooth theme flip. Scoped to the props that change so we don't
+     animate every color transition in the app (which would look laggy
+     on hover). Applied only after hydration via .ts-theme-ready to
+     avoid animating the initial paint. */
+  -webkit-font-smoothing: antialiased;
+  -moz-osx-font-smoothing: grayscale;
+}
+
+/* Theme transition — only after the ThemeGate has attached this class,
+   so the initial page load is instant and later user-initiated theme
+   swaps glide. */
+.ts-theme-ready,
+.ts-theme-ready * {
+  transition: background-color var(--duration-base) var(--ease-out),
+              border-color     var(--duration-base) var(--ease-out),
+              color            var(--duration-base) var(--ease-out);
+}
+
+a { color: inherit; }
+
+/* Default focus ring for interactive elements that opt in via .ts-focus */
+.ts-focus:focus-visible {
+  outline: none;
+  box-shadow: var(--shadow-focus);
+  border-radius: var(--radius-sm);
+}
+
+/* Phase 23 — skip-to-content link. Hidden offscreen until focused, then
+   slides into the top-left so a keyboard user can jump past the sidebar. */
+.ts-skip-link {
+  position: absolute;
+  top: 0;
+  left: 0;
+  padding: 8px 12px;
+  background: var(--accent-primary);
+  color: var(--accent-fg, #fff);
+  font-size: 13px;
+  font-weight: 500;
+  border-radius: var(--radius-sm);
+  z-index: var(--z-toast, 1000);
+  transform: translateY(-200%);
+  transition: transform 120ms ease-out;
+}
+.ts-skip-link:focus-visible {
+  transform: translateY(8px);
+  outline: none;
+  box-shadow: var(--shadow-focus);
+}
+
+/* ── Button variants ────────────────────────────────────────────────────
+ * Moved here from inline styles so :hover can use real CSS instead of a
+ * brightness filter (which is a no-op on pure-white light-mode surfaces).
+ * Each variant sets its base + hover tokens; Button.tsx just applies the
+ * class. :disabled takes precedence via :not() guards on hover.
+ * ──────────────────────────────────────────────────────────────────── */
+
+.ts-btn { border: 1px solid transparent; }
+
+.ts-btn-primary {
+  background: var(--accent-primary);
+  color: var(--accent-fg);
+  border-color: var(--accent-primary);
+}
+.ts-btn-primary:not(:disabled):hover {
+  background: var(--accent-hover);
+  border-color: var(--accent-hover);
+}
+.ts-btn-primary:not(:disabled):active {
+  background: var(--accent-active);
+  border-color: var(--accent-active);
+}
+
+.ts-btn-secondary {
+  background: var(--surface-1);
+  color: var(--text-default);
+  border-color: var(--border-default);
+}
+.ts-btn-secondary:not(:disabled):hover {
+  background: var(--surface-3);
+  border-color: var(--border-strong);
+}
+
+.ts-btn-ghost {
+  background: transparent;
+  color: var(--text-default);
+}
+.ts-btn-ghost:not(:disabled):hover {
+  background: var(--surface-3);
+}
+
+.ts-btn-danger {
+  background: var(--danger-surface);
+  color: var(--danger-fg);
+  border-color: var(--danger-border);
+}
+.ts-btn-danger:not(:disabled):hover {
+  background: var(--danger);
+  color: var(--accent-fg);
+  border-color: var(--danger);
+}
+
+.ts-btn-success {
+  background: var(--success-surface);
+  color: var(--success-fg);
+}
+.ts-btn-success:not(:disabled):hover {
+  background: var(--success);
+  color: var(--accent-fg);
+}
+
+.ts-btn-link {
+  background: transparent;
+  color: var(--accent-primary);
+  padding: 0;
+}
+.ts-btn-link:not(:disabled):hover {
+  color: var(--accent-hover);
+}
+
+/* Interactive Card hover — theme-aware. Cards opting in via the
+   `interactive` prop get .ts-card-interactive and this selector
+   upgrades their surface on hover. */
+.ts-card-interactive {
+  cursor: pointer;
+  transition: background-color var(--duration-fast) var(--ease-out),
+              border-color     var(--duration-fast) var(--ease-out);
+}
+.ts-card-interactive:hover {
+  background: var(--surface-3) !important;
+  border-color: var(--border-default) !important;
+}
+
+/* ── Sidebar / nav primitives ───────────────────────────────────────────
+ * Shared row styles for both the tenant app sidebar and the platform
+ * admin nav. Everything below drives one visual language across both
+ * surfaces: same active state, same hover, same focus ring, same
+ * height, same spacing. Adding a new nav somewhere? Use these.
+ *
+ * Structure of a nav row:
+ *   <a class="ts-nav-item" aria-current="page?">
+ *     <Icon class="ts-nav-icon" />
+ *     <span class="ts-nav-label">Label</span>
+ *     <span class="ts-nav-badge">5</span>
+ *   </a>
+ *
+ * The active indicator is a 2.5px left bar (via ::before) plus a
+ * subtle filled surface. This reads as "this is where you are" at a
+ * glance without overpowering the rest of the list.
+ * ──────────────────────────────────────────────────────────────────── */
+
+.ts-nav-item {
+  position: relative;
+  display: flex;
+  align-items: center;
+  gap: 10px;
+  height: 32px;
+  padding: 0 10px;
+  border-radius: var(--radius-md);
+  color: var(--text-muted);
+  font-size: 13px;
+  font-weight: 500;
+  line-height: 1;
+  letter-spacing: -0.005em;
+  transition:
+    background-color var(--duration-fast) var(--ease-out),
+    color            var(--duration-fast) var(--ease-out);
+  outline: none;
+}
+.ts-nav-item:hover {
+  background: var(--surface-3);
+  color: var(--text-default);
+}
+.ts-nav-item:hover .ts-nav-icon {
+  color: var(--text-default);
+  opacity: 1;
+}
+
+/* Active state — aria-current is the contract. A 2.5px left bar +
+   tinted surface. The bar sits *inside* the rounded row (hence the
+   -1px left offset + its own small radius) so the whole thing still
+   reads as one capsule. */
+.ts-nav-item[aria-current="page"] {
+  background: var(--accent-surface);
+  color: var(--text-default);
+  font-weight: 600;
+}
+.ts-nav-item[aria-current="page"]::before {
+  content: "";
+  position: absolute;
+  left: -1px;
+  top: 6px;
+  bottom: 6px;
+  width: 2.5px;
+  border-radius: 2px;
+  background: var(--accent-primary);
+}
+.ts-nav-item[aria-current="page"] .ts-nav-icon {
+  color: var(--accent-primary);
+  opacity: 1;
+}
+
+.ts-nav-item:focus-visible {
+  box-shadow: var(--shadow-focus);
+}
+
+/* Collapsed rail variant — icon-only, centered. */
+.ts-nav-item.ts-nav-item--collapsed {
+  justify-content: center;
+  padding: 0;
+  width: 36px;
+  margin-inline: auto;
+}
+.ts-nav-item.ts-nav-item--collapsed::before {
+  top: 6px;
+  bottom: 6px;
+}
+
+.ts-nav-icon {
+  flex-shrink: 0;
+  color: var(--text-muted);
+  opacity: 0.85;
+  transition: color var(--duration-fast) var(--ease-out),
+              opacity var(--duration-fast) var(--ease-out);
+}
+
+.ts-nav-label {
+  flex: 1;
+  min-width: 0;
+  white-space: nowrap;
+  overflow: hidden;
+  text-overflow: ellipsis;
+}
+
+.ts-nav-badge {
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  min-width: 18px;
+  height: 18px;
+  padding: 0 5px;
+  border-radius: 9px;
+  background: var(--surface-3);
+  color: var(--text-muted);
+  font-size: 10.5px;
+  font-weight: 600;
+  letter-spacing: 0;
+}
+.ts-nav-item[aria-current="page"] .ts-nav-badge {
+  background: var(--accent-surface-strong);
+  color: var(--accent-primary);
+}
+.ts-nav-badge--urgent {
+  background: var(--danger-surface);
+  color: var(--danger-fg);
+}
+
+/* Section label above each group. Tracking-widest + tiny to read as a
+   whisper — never competes with the items themselves. */
+.ts-nav-group {
+  display: flex;
+  flex-direction: column;
+  gap: 1px;
+}
+.ts-nav-group + .ts-nav-group {
+  margin-top: 18px;
+}
+.ts-nav-group-label {
+  padding: 0 10px 6px;
+  color: var(--text-faint);
+  font-size: 10px;
+  font-weight: 600;
+  text-transform: uppercase;
+  letter-spacing: 0.08em;
+}
+
+/* Brand / workspace block at the top of each sidebar. Hover reveals
+   that it's interactive (workspace switcher, back to app, etc). */
+.ts-nav-brand {
+  display: flex;
+  align-items: center;
+  gap: 10px;
+  padding: 10px 12px;
+  border-radius: var(--radius-md);
+  transition: background-color var(--duration-fast) var(--ease-out);
+}
+.ts-nav-brand:hover {
+  background: var(--surface-3);
+}
+
+/* Bottom cluster — feedback, collapse, back-to-app. Shares the same
+   row height as nav items so the vertical rhythm stays consistent. */
+.ts-nav-foot {
+  display: flex;
+  align-items: center;
+  gap: 10px;
+  height: 32px;
+  padding: 0 10px;
+  border-radius: var(--radius-md);
+  color: var(--text-muted);
+  font-size: 12px;
+  transition:
+    background-color var(--duration-fast) var(--ease-out),
+    color            var(--duration-fast) var(--ease-out);
+}
+.ts-nav-foot:hover {
+  background: var(--surface-3);
+  color: var(--text-default);
+}
+
+/* Subtle scrollbar — theme-aware via the neutral border tokens, so
+   the light theme gets a lighter thumb automatically. */
+::-webkit-scrollbar { width: 10px; height: 10px; }
+::-webkit-scrollbar-track { background: transparent; }
+::-webkit-scrollbar-thumb {
+  background: var(--border-default);
+  border-radius: var(--radius-md);
+  border: 2px solid var(--surface-0);
+}
+::-webkit-scrollbar-thumb:hover { background: var(--border-strong); }
