@@ -1,16 +1,16 @@
 import * as React from "react";
 
-// ComparisonMatrix — "Tracksign vs. the usual alternatives".
+// ComparisonMatrix — "Flowtora vs. the usual alternatives".
 //
 // The hardest objection in this category isn't price — it's "I already
 // have QuickBooks + a Google Sheet + my sales rep's phone, why switch?"
 // This matrix makes that alternative look as chaotic as it actually is
-// and positions Tracksign as the single-record truth.
+// and positions Flowtora as the single-record truth.
 //
 // Intentional design choices:
 //   • Three alternatives, not ten. More columns → visual noise and a
 //     reader who bounces.
-//   • "Tracksign" column is highlighted with the accent border so the
+//   • "Flowtora" column is highlighted with the accent border so the
 //     eye lands there first.
 //   • Uses short symbols (✓ / ~ / ✗) + a one-line note per cell —
 //     "yes/no" alone reads as hand-wavy. A note earns trust.
@@ -18,7 +18,7 @@ import * as React from "react";
 export interface ComparisonRow {
   capability: string;
   subcopy?: string;
-  cells: [CellValue, CellValue, CellValue, CellValue]; // Tracksign, ColA, ColB, ColC
+  cells: [CellValue, CellValue, CellValue, CellValue]; // Flowtora, ColA, ColB, ColC
 }
 
 export type CellValue =
@@ -62,7 +62,7 @@ export function ComparisonMatrix({ competitors, rows }: ComparisonMatrixProps) {
                   className="text-xs font-semibold uppercase tracking-wider"
                   style={{ color: "var(--accent-primary)" }}
                 >
-                  Tracksign
+                  Flowtora
                 </div>
                 <div
                   className="mt-1 text-sm font-semibold"

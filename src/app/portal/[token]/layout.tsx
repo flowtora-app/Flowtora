@@ -129,7 +129,7 @@ export default async function PortalLayout({
             className="font-semibold tracking-tight"
             style={{ color: "var(--text-muted)" }}
           >
-            Tracksign
+            Flowtora
           </span>
         </div>
       </aside>

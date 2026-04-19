@@ -104,7 +104,7 @@ export default async function TenantSupportDetailPage({
       <div className="space-y-3">
         {ticket.messages.map((m) => {
           const author = m.authorId ? authorById.get(m.authorId) : null;
-          const label = m.isStaff ? "Tracksign Support" : author?.name ?? author?.email ?? "you";
+          const label = m.isStaff ? "Flowtora Support" : author?.name ?? author?.email ?? "you";
           return (
             <div
               key={m.id}

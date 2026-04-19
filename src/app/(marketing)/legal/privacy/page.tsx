@@ -14,9 +14,9 @@ import { Container } from "@/components/marketing/Container";
 // buyer due diligence and get a footer link to stop 404ing.
 
 export const metadata: Metadata = {
-  title: "Privacy policy — Tracksign",
+  title: "Privacy policy — Flowtora",
   description:
-    "What data Tracksign collects, why we collect it, who sees it, and how you stay in control.",
+    "What data Flowtora collects, why we collect it, who sees it, and how you stay in control.",
   alternates: { canonical: "/legal/privacy" },
   robots: { index: true, follow: true },
 };
@@ -49,9 +49,9 @@ export default function PrivacyPage() {
           style={{ color: "var(--text-muted)" }}
         >
           <p>
-            This policy explains what personal data Tracksign, Inc.
-            (&ldquo;Tracksign,&rdquo; &ldquo;we,&rdquo; &ldquo;us&rdquo;)
-            collects when you use the Tracksign platform, website, and
+            This policy explains what personal data Flowtora, Inc.
+            (&ldquo;Flowtora,&rdquo; &ldquo;we,&rdquo; &ldquo;us&rdquo;)
+            collects when you use the Flowtora platform, website, and
             related services, and how we use it. Plain-English version:
             we collect the minimum we need to run the product, we never
             sell it, and you can take it with you when you leave.
@@ -66,7 +66,7 @@ export default function PrivacyPage() {
           <p>
             <strong>Workspace data.</strong> The customers, quotes,
             orders, invoices, files, and other business records you
-            create inside Tracksign. This data is yours — we process it
+            create inside Flowtora. This data is yours — we process it
             to operate the service.
           </p>
           <p>
@@ -102,7 +102,7 @@ export default function PrivacyPage() {
 
           <LegalHeading>Who sees it</LegalHeading>
           <p>
-            Tracksign staff may access your data in the course of
+            Flowtora staff may access your data in the course of
             providing support — always with an audited impersonation
             session and a banner displayed in your workspace while the
             session is active.
@@ -127,7 +127,7 @@ export default function PrivacyPage() {
           </p>
           <p>
             Marketing-form submissions are retained until you ask us to
-            delete them (email support@tracksign.com) or until 24 months
+            delete them (email support@flowtora.com) or until 24 months
             have passed without further contact, whichever is sooner.
           </p>
 
@@ -135,10 +135,10 @@ export default function PrivacyPage() {
           <p>
             You can access, export, correct, or delete your personal
             data at any time from within the app or by emailing
-            support@tracksign.com. If you&apos;re in a jurisdiction that
+            support@flowtora.com. If you&apos;re in a jurisdiction that
             provides specific privacy rights (EU, UK, California), those
             rights apply to your data with us regardless of where
-            Tracksign is incorporated.
+            Flowtora is incorporated.
           </p>
 
           <LegalHeading>Security</LegalHeading>
@@ -164,10 +164,10 @@ export default function PrivacyPage() {
           <p>
             Questions? Email{" "}
             <a
-              href="mailto:privacy@tracksign.com"
+              href="mailto:privacy@flowtora.com"
               style={{ color: "var(--accent-primary)" }}
             >
-              privacy@tracksign.com
+              privacy@flowtora.com
             </a>
             {" "}or reach out through the{" "}
             <a href="/contact" style={{ color: "var(--accent-primary)" }}>

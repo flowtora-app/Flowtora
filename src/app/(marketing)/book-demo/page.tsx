@@ -16,12 +16,12 @@ import { DemoForm } from "@/components/marketing/DemoForm";
 // needs to be reminded why they started filling it out.
 
 export const metadata: Metadata = {
-  title: "Book a demo — Tracksign",
+  title: "Book a demo — Flowtora",
   description:
-    "See Tracksign in action with a live walkthrough tailored to your shop. 30 minutes, no obligation.",
+    "See Flowtora in action with a live walkthrough tailored to your shop. 30 minutes, no obligation.",
   alternates: { canonical: "/book-demo" },
   openGraph: {
-    title: "Book a Tracksign demo",
+    title: "Book a Flowtora demo",
     description:
       "A 30-minute live walkthrough tailored to your shop. No slides — just the real product with your workflow.",
     type: "website",

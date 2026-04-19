@@ -92,9 +92,9 @@ export function TopBar({
     >
       <Link
         href="/select-tenant"
-        aria-label="Tracksign home"
+        aria-label="Flowtora home"
         className="ts-focus flex shrink-0 items-center gap-2 rounded-md"
-        title="Tracksign"
+        title="Flowtora"
       >
         <Logomark size={22} />
         <Wordmark style={{ fontSize: 13 }} />

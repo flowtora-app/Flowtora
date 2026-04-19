@@ -26,7 +26,7 @@ export const ONBOARDING_STEPS: OnboardingStepperStep[] = [
   {
     slug: "team",
     label: "Team",
-    description: "Invite the people who'll use Tracksign with you.",
+    description: "Invite the people who'll use Flowtora with you.",
   },
   {
     slug: "sample",

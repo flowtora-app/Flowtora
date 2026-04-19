@@ -67,7 +67,16 @@
       "Bash(netstat -ano)",
       "Bash(curl -s -w \"\\\\n---STATUS:%{http_code}\\\\n\" http://localhost:3000/t/acm-prints/onboarding)",
       "Bash(gh auth *)",
-      "Bash(git --version)"
+      "Bash(git --version)",
+      "Bash(node -e \"console.log\\(require\\('crypto'\\).randomBytes\\(32\\).toString\\('base64'\\)\\)\")",
+      "Bash(cmdkey /list:git:https://github.com)",
+      "Bash(cmdkey /delete:git:https://github.com)",
+      "Bash(nslookup -type=MX send.flowtora.com 8.8.8.8)",
+      "Bash(nslookup -type=TXT send.flowtora.com 8.8.8.8)",
+      "Bash(nslookup -type=TXT _dmarc.flowtora.com 8.8.8.8)",
+      "Bash(nslookup -type=TXT resend._domainkey.flowtora.com 8.8.8.8)",
+      "Bash(node rename.mjs)",
+      "Bash(node -e \"const fs=require\\('fs'\\); const f='package-lock.json'; const c=fs.readFileSync\\(f,'utf8'\\); const n=c.replace\\(/\\\\\"name\\\\\": \\\\\"tracksign\\\\\"/g,'\\\\\"name\\\\\": \\\\\"flowtora\\\\\"'\\); fs.writeFileSync\\(f,n\\); console.log\\('updated package-lock.json'\\);\")"
     ]
   }
 }

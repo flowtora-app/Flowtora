@@ -24,7 +24,7 @@ function getResend(): Resend | null {
 }
 
 const fromAddress =
-  process.env.RESEND_FROM_EMAIL ?? "Tracksign <noreply@tracksign.app>";
+  process.env.RESEND_FROM_EMAIL ?? "Flowtora <noreply@flowtora.app>";
 
 // Strip the display-name portion from a "Name <addr@domain>" line, keeping
 // only the angle-bracketed address. We reuse the domain for custom fromName
@@ -79,8 +79,8 @@ export function inviteEmail(opts: {
   inviterName: string;
   acceptUrl: string;
 }) {
-  const text = `${opts.inviterName} invited you to join ${opts.shopName} on Tracksign.\n\nAccept the invitation: ${opts.acceptUrl}\n\nThis link expires in 7 days.`;
-  const html = `<p>${escape(opts.inviterName)} invited you to join <strong>${escape(opts.shopName)}</strong> on Tracksign.</p>
+  const text = `${opts.inviterName} invited you to join ${opts.shopName} on Flowtora.\n\nAccept the invitation: ${opts.acceptUrl}\n\nThis link expires in 7 days.`;
+  const html = `<p>${escape(opts.inviterName)} invited you to join <strong>${escape(opts.shopName)}</strong> on Flowtora.</p>
 <p><a href="${opts.acceptUrl}">Accept the invitation</a></p>
 <p style="color:#888;font-size:12px">This link expires in 7 days.</p>`;
   return { subject: `You're invited to ${opts.shopName}`, html, text };
@@ -89,17 +89,17 @@ export function inviteEmail(opts: {
 // ── Phase 2 — security emails ──
 
 export function passwordResetEmail(opts: { resetUrl: string; expiresInMinutes: number }) {
-  const text = `Someone (hopefully you) asked to reset your Tracksign password.\n\nReset your password: ${opts.resetUrl}\n\nThis link expires in ${opts.expiresInMinutes} minutes. If you didn't request this, you can ignore this email — your account stays secure.`;
-  const html = `<p>Someone (hopefully you) asked to reset your Tracksign password.</p>
+  const text = `Someone (hopefully you) asked to reset your Flowtora password.\n\nReset your password: ${opts.resetUrl}\n\nThis link expires in ${opts.expiresInMinutes} minutes. If you didn't request this, you can ignore this email — your account stays secure.`;
+  const html = `<p>Someone (hopefully you) asked to reset your Flowtora password.</p>
 <p><a href="${opts.resetUrl}">Reset your password</a></p>
 <p style="color:#888;font-size:12px">This link expires in ${opts.expiresInMinutes} minutes. If you didn't request this, ignore this email.</p>`;
-  return { subject: "Reset your Tracksign password", html, text };
+  return { subject: "Reset your Flowtora password", html, text };
 }
 
 export function emailVerificationEmail(opts: { verifyUrl: string; isChange: boolean }) {
   const verb = opts.isChange ? "Confirm your new email address" : "Confirm your email address";
-  const text = `${verb} to finish setting up Tracksign.\n\nConfirm: ${opts.verifyUrl}\n\nThis link expires in 24 hours.`;
-  const html = `<p>${verb} to finish setting up Tracksign.</p>
+  const text = `${verb} to finish setting up Flowtora.\n\nConfirm: ${opts.verifyUrl}\n\nThis link expires in 24 hours.`;
+  const html = `<p>${verb} to finish setting up Flowtora.</p>
 <p><a href="${opts.verifyUrl}">Confirm email</a></p>
 <p style="color:#888;font-size:12px">This link expires in 24 hours.</p>`;
   return { subject: verb, html, text };
@@ -118,7 +118,7 @@ export function securityAlertEmail(opts: {
 <p>${escape(opts.eventLabel)}</p>
 <p style="color:#555">When: ${opts.when.toISOString()}<br />${opts.ip ? "IP: " + escape(opts.ip) + "<br />" : ""}${opts.userAgent ? "Device: " + escape(opts.userAgent) + "<br />" : ""}</p>
 <p style="color:#888;font-size:12px">If this wasn't you, reset your password and contact support.</p>`;
-  return { subject: `Tracksign security notice: ${opts.eventLabel}`, html, text };
+  return { subject: `Flowtora security notice: ${opts.eventLabel}`, html, text };
 }
 
 // ── Phase 22 Slice B — reminder digest-row emails ──
@@ -136,10 +136,10 @@ export function reminderEmail(opts: {
   tenantName: string;
 }) {
   const body = [opts.title, opts.detail ?? ""].filter(Boolean).join("\n\n");
-  const text = `${body}\n\nOpen in Tracksign: ${opts.url}\n\n— ${opts.tenantName} (via Tracksign reminders)`;
+  const text = `${body}\n\nOpen in Flowtora: ${opts.url}\n\n— ${opts.tenantName} (via Flowtora reminders)`;
   const html = `<p><strong>${escape(opts.title)}</strong></p>
 ${opts.detail ? `<p style="color:#444">${escape(opts.detail)}</p>` : ""}
-<p><a href="${opts.url}">Open in Tracksign</a></p>
+<p><a href="${opts.url}">Open in Flowtora</a></p>
 <p style="color:#888;font-size:12px">${escape(opts.kindLabel)} reminder · ${escape(opts.tenantName)}</p>`;
   return { subject: opts.title, html, text };
 }

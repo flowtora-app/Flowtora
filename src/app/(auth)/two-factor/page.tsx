@@ -8,7 +8,7 @@ import {
 } from "@/app/actions/auth";
 
 export const metadata: Metadata = {
-  title: "Two-factor verification — Tracksign",
+  title: "Two-factor verification — Flowtora",
   robots: { index: false, follow: false },
 };
 

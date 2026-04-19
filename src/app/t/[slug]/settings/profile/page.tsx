@@ -99,7 +99,7 @@ export default async function ProfileSettings({
           className="rounded-md px-4 py-3 text-xs"
           style={{ background: "var(--panel-alt, var(--panel))", border: "1px solid var(--border)", color: "var(--muted)" }}
         >
-          Customer-facing emails are sent from <code>noreply@tracksign.app</code> (verified sender) with the display name and reply address below.
+          Customer-facing emails are sent from <code>noreply@flowtora.app</code> (verified sender) with the display name and reply address below.
         </div>
         <div className="grid grid-cols-2 gap-3">
           <Field

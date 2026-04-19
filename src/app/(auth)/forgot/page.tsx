@@ -3,8 +3,8 @@ import type { Metadata } from "next";
 import { requestPasswordReset } from "@/app/actions/account-security";
 
 export const metadata: Metadata = {
-  title: "Reset your password — Tracksign",
-  description: "Send a reset link to your Tracksign email address.",
+  title: "Reset your password — Flowtora",
+  description: "Send a reset link to your Flowtora email address.",
 };
 
 // Phase 2 — password reset request.

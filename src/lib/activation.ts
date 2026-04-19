@@ -97,7 +97,7 @@ const WEIGHTS: Record<ActivationDimensionKey, number> = {
 // Targets that count as "fully saturated" for each dimension.
 //
 // These are tuned to reflect what a healthy shop looks like in the first
-// 2-4 weeks of using Tracksign — NOT their steady state. A shop running
+// 2-4 weeks of using Flowtora — NOT their steady state. A shop running
 // 15 customers and 8 products through the system has crossed the chasm
 // from "evaluating" to "committed".
 const TARGETS: Record<ActivationDimensionKey, number> = {
@@ -238,7 +238,7 @@ function buildAction(
             : `Grow your customer list (${d.count} of ~${d.target})`,
         body:
           d.count === 0
-            ? "Everything else in Tracksign hangs off a customer. Enter a walk-in or import your first lead."
+            ? "Everything else in Flowtora hangs off a customer. Enter a walk-in or import your first lead."
             : "Most shops have a dozen or more active customers in their first month — keep building out your CRM.",
         href: `/customers/new`,
         emphasis,
@@ -277,7 +277,7 @@ function buildAction(
         id: "win-quote",
         title: "Close a quote",
         body:
-          "Once a customer accepts, convert the quote into an order in one click. That's where Tracksign pays for itself.",
+          "Once a customer accepts, convert the quote into an order in one click. That's where Flowtora pays for itself.",
         href: `/quotes?status=SENT`,
         emphasis,
         dimension: "quotes_won",
@@ -292,7 +292,7 @@ function buildAction(
             : `Add another seat (${d.count} active)`,
         body:
           d.count <= 1
-            ? "Bring in one more user — designer, CSR, or production lead. Tracksign gets more valuable with every collaborator."
+            ? "Bring in one more user — designer, CSR, or production lead. Flowtora gets more valuable with every collaborator."
             : "Each additional role (sales, design, install) unlocks workflows the solo user can't see.",
         href: `/settings/team`,
         emphasis,

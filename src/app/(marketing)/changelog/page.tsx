@@ -15,12 +15,12 @@ import { Container } from "@/components/marketing/Container";
 // MDX or a CMS; not before.
 
 export const metadata: Metadata = {
-  title: "Changelog — Tracksign",
+  title: "Changelog — Flowtora",
   description:
-    "What's new in Tracksign. Release notes, shipped each week.",
+    "What's new in Flowtora. Release notes, shipped each week.",
   alternates: { canonical: "/changelog" },
   openGraph: {
-    title: "Tracksign changelog",
+    title: "Flowtora changelog",
     description: "What's new, what's changing, what's coming.",
     type: "website",
   },
@@ -152,7 +152,7 @@ export default function ChangelogPage() {
           className="text-3xl font-semibold tracking-tight md:text-4xl"
           style={{ color: "var(--text-default)" }}
         >
-          What&apos;s new in Tracksign.
+          What&apos;s new in Flowtora.
         </h1>
         <p
           className="mt-3 max-w-2xl text-base leading-relaxed"

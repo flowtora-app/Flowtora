@@ -113,7 +113,7 @@ export function PlatformNav({ roleLabel, signOutAction }: PlatformNavProps) {
               className="truncate text-[13px] font-semibold leading-tight"
               style={{ color: "var(--text-default)" }}
             >
-              Tracksign Platform
+              Flowtora Platform
             </div>
             <div
               className="truncate text-[11px] leading-tight"

@@ -2,7 +2,7 @@
 //
 // Guards and helpers used by /platform/** pages and actions. The tenant app
 // uses `requireTenant` / `requirePermission` from lib/tenant; this file is
-// the equivalent for SaaS-platform-staff routes (Tracksign employees, not
+// the equivalent for SaaS-platform-staff routes (Flowtora employees, not
 // shop employees).
 //
 // Platform role hierarchy (see PlatformRole enum):

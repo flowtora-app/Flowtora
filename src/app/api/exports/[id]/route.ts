@@ -63,7 +63,7 @@ export async function GET(
     return NextResponse.json({ error: "forbidden" }, { status: 403 });
   }
 
-  const filename = `tracksign-export-${req.tenant.slug}-${req.completedAt?.toISOString().slice(0, 10) ?? "bundle"}.json`;
+  const filename = `flowtora-export-${req.tenant.slug}-${req.completedAt?.toISOString().slice(0, 10) ?? "bundle"}.json`;
   return new NextResponse(req.payload, {
     status: 200,
     headers: {

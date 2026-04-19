@@ -34,12 +34,12 @@ import { LANDING_TIERS } from "@/lib/marketing/pricing";
 // crosses the hero (see StickyDemoCTA).
 
 export const metadata: Metadata = {
-  title: "Tracksign — The operating system for sign and print shops",
+  title: "Flowtora — The operating system for sign and print shops",
   description:
     "Run quoting, proofing, production, installs, and invoicing in one shop-floor-grade platform. Trusted by teams who make real things.",
   alternates: { canonical: "/" },
   openGraph: {
-    title: "Tracksign — Sign and print shop OS",
+    title: "Flowtora — Sign and print shop OS",
     description:
       "One platform for CRM, quoting, proofing, production, installs, and invoicing.",
     type: "website",
@@ -118,7 +118,7 @@ const HOW_IT_WORKS = [
   },
 ];
 
-// "Tracksign vs. the three common alternatives." We name named-alternatives
+// "Flowtora vs. the three common alternatives." We name named-alternatives
 // generically — a lawyer-safe, honest framing that still lands the point.
 const COMPARISON_ROWS: ComparisonRow[] = [
   {
@@ -203,7 +203,7 @@ const LANDING_FAQ = [
         <p>
           Three systems have three versions of the truth. When a
           customer calls, your rep has to open all three to answer a
-          question. Tracksign puts the customer, quote, proof, order,
+          question. Flowtora puts the customer, quote, proof, order,
           install, and invoice on one record — so anyone in the shop
           can answer &ldquo;what&apos;s happening with this job?&rdquo;
           in ten seconds.
@@ -319,7 +319,7 @@ export default function LandingPage() {
         title={<>Run your shop end-to-end, from lead to last coat.</>}
         description={
           <>
-            Tracksign unifies quoting, proofing, production, installs, and
+            Flowtora unifies quoting, proofing, production, installs, and
             invoicing in one system built for sign shops, print shops, and
             custom-fab studios.
           </>
@@ -418,7 +418,7 @@ export default function LandingPage() {
       <Section align="center">
         <div className="mx-auto max-w-3xl">
           <Testimonial
-            quote="We replaced three tools with Tracksign and finally have a single place to look. Our install crews know what's coming up next and our AR dropped by 22 days."
+            quote="We replaced three tools with Flowtora and finally have a single place to look. Our install crews know what's coming up next and our AR dropped by 22 days."
             author="Placeholder Name"
             role="Owner"
             company="Placeholder Signs Co."

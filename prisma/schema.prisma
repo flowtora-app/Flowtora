@@ -1,4 +1,4 @@
-// Tracksign — multi-tenant SaaS for sign/print shops.
+// Flowtora — multi-tenant SaaS for sign/print shops.
 // Tenancy model: shared Postgres, every tenant-scoped row carries `tenantId`.
 // Tenant access is enforced in app code via getTenantContext() + RBAC checks.
 
@@ -41,9 +41,9 @@ model Tenant {
 
   // Phase 21 Slice A — email sender customization. Customer-facing emails
   // use the tenant's display name and route replies to their inbox, but
-  // the actual envelope sender stays on Tracksign's verified Resend domain
+  // the actual envelope sender stays on Flowtora's verified Resend domain
   // (otherwise DKIM / SPF fails and deliverability tanks). Shape:
-  //   From: "{emailFromName} <noreply@tracksign.app>"
+  //   From: "{emailFromName} <noreply@flowtora.app>"
   //   Reply-To: {emailReplyTo}
   emailFromName String?
   emailReplyTo  String?
@@ -2363,7 +2363,7 @@ enum SupportTicketStatus {
 }
 
 // Phase 20 Slice D — platform-wide library of canned replies for the
-// support team. Not tenant-scoped: these are owned by Tracksign staff and
+// support team. Not tenant-scoped: these are owned by Flowtora staff and
 // offered as a dropdown on the reply form. Body is a plain string —
 // variable interpolation is handled client-side so tenants never see the
 // raw template.

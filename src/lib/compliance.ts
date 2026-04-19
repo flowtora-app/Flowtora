@@ -84,7 +84,7 @@ export async function generateTenantExport(tenantId: string): Promise<string> {
     _meta: {
       tenantId,
       generatedAt: new Date().toISOString(),
-      generator: "tracksign-export-v1",
+      generator: "flowtora-export-v1",
       note: "Rows included verbatim; tenant-scoped only. See docs/exports.md.",
     },
     tenant,

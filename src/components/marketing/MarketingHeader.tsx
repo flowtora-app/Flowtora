@@ -44,7 +44,7 @@ export function MarketingHeader({ authed = false }: { authed?: boolean }) {
         <Link href="/" className="flex items-center gap-2">
           <Logomark />
           <span className="text-base font-semibold tracking-tight" style={{ color: "var(--text-default)" }}>
-            Tracksign
+            Flowtora
           </span>
         </Link>
 

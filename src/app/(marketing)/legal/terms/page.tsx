@@ -10,9 +10,9 @@ import { Container } from "@/components/marketing/Container";
 // law placeholder) in a tone that matches the rest of the site.
 
 export const metadata: Metadata = {
-  title: "Terms of service — Tracksign",
+  title: "Terms of service — Flowtora",
   description:
-    "The legal terms under which you use Tracksign's platform and services.",
+    "The legal terms under which you use Flowtora's platform and services.",
   alternates: { canonical: "/legal/terms" },
   robots: { index: true, follow: true },
 };
@@ -43,7 +43,7 @@ export default function TermsPage() {
         >
           <p>
             These Terms of Service (&ldquo;Terms&rdquo;) govern your
-            access to and use of Tracksign, Inc.&apos;s (&ldquo;Tracksign,&rdquo; &ldquo;we,&rdquo; &ldquo;us&rdquo;)
+            access to and use of Flowtora, Inc.&apos;s (&ldquo;Flowtora,&rdquo; &ldquo;we,&rdquo; &ldquo;us&rdquo;)
             website, platform, and related services
             (the &ldquo;Service&rdquo;). By creating an account or using
             the Service, you agree to these Terms.
@@ -69,7 +69,7 @@ export default function TermsPage() {
 
           <LegalHeading>3. Your data</LegalHeading>
           <p>
-            You own the data you store in Tracksign. We store and
+            You own the data you store in Flowtora. We store and
             process it to provide the Service on your behalf. You grant
             us a limited license to do so. We do not claim ownership,
             and you can export your data at any time.
@@ -115,7 +115,7 @@ export default function TermsPage() {
 
           <LegalHeading>8. Limitation of liability</LegalHeading>
           <p>
-            To the maximum extent permitted by law, Tracksign&apos;s
+            To the maximum extent permitted by law, Flowtora&apos;s
             total liability for any claim arising out of or related to
             the Service is limited to the amounts you paid us in the
             twelve (12) months preceding the claim. We are not liable
@@ -142,10 +142,10 @@ export default function TermsPage() {
           <p>
             Questions about these Terms? Email{" "}
             <a
-              href="mailto:legal@tracksign.com"
+              href="mailto:legal@flowtora.com"
               style={{ color: "var(--accent-primary)" }}
             >
-              legal@tracksign.com
+              legal@flowtora.com
             </a>
             {" "}or use our{" "}
             <a href="/contact" style={{ color: "var(--accent-primary)" }}>

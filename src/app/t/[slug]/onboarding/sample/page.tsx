@@ -42,7 +42,7 @@ export default async function SampleStep({
       <Card>
         <CardHeader
           title="Explore with a demo shop?"
-          description="Skip to a fully populated workspace to see how Tracksign feels when it's running live."
+          description="Skip to a fully populated workspace to see how Flowtora feels when it's running live."
         />
         <div className="space-y-4 px-5 py-5">
           {justLoaded && (

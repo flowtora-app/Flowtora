@@ -41,7 +41,7 @@ export default async function TenantSupportListPage({
         <div>
           <h1 className="text-2xl font-semibold">Support</h1>
           <p className="mt-1 text-sm" style={{ color: "var(--muted)" }}>
-            Open a ticket — the Tracksign team replies here and you'll get a notification.
+            Open a ticket — the Flowtora team replies here and you'll get a notification.
           </p>
         </div>
         <Link

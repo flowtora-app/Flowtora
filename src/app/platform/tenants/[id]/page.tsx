@@ -446,7 +446,7 @@ export default async function PlatformTenantDetailPage({
               label="Suspension reason (shown to owner when status is SUSPENDED)"
               name="suspensionReason"
               defaultValue={tenant.suspensionReason ?? ""}
-              placeholder="e.g. Payment failed 3x — contact billing@tracksign.com"
+              placeholder="e.g. Payment failed 3x — contact billing@flowtora.com"
             />
             <Button type="submit" disabled={!ctx.canWrite}>
               {ctx.canWrite ? "Save status" : "Requires admin role"}

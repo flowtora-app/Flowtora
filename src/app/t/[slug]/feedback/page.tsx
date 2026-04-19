@@ -76,7 +76,7 @@ export default async function FeedbackPage({
           </span>
         </div>
         <p className="mt-1 text-sm" style={{ color: "var(--text-muted)" }}>
-          Tell us what&apos;s working, what&apos;s broken, or what you wish Tracksign did differently.
+          Tell us what&apos;s working, what&apos;s broken, or what you wish Flowtora did differently.
           Every note goes to the team building the product.
         </p>
       </div>

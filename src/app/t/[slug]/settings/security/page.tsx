@@ -77,7 +77,7 @@ export default async function SecuritySettingsPage({
     user.twoFactor && !user.twoFactor.verifiedAt
       ? totpUri({
           accountName: user.email,
-          issuer: `Tracksign (${tenant.name})`,
+          issuer: `Flowtora (${tenant.name})`,
           secret: user.twoFactor.secret,
         })
       : null;

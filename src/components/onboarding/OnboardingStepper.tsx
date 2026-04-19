@@ -55,7 +55,7 @@ export function OnboardingStepper({ tenantSlug, tenantName, steps }: OnboardingS
         {isDone
           ? "You're ready to go."
           : isWelcome
-            ? "Welcome to Tracksign."
+            ? "Welcome to Flowtora."
             : steps[currentIndex]?.label ?? "Setup"}
       </h1>
       <p className="mt-1 text-sm" style={{ color: "var(--text-muted)" }}>

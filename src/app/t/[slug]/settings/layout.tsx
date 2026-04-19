@@ -102,7 +102,7 @@ export default async function SettingsLayout({
           className="mt-1 text-sm"
           style={{ color: "var(--text-muted)" }}
         >
-          Configure how {ctx.tenant.name} runs in Tracksign.
+          Configure how {ctx.tenant.name} runs in Flowtora.
         </p>
       </header>
 

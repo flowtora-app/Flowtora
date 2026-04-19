@@ -14,12 +14,12 @@ import { FULL_TIERS } from "@/lib/marketing/pricing";
 // swiping their card.
 
 export const metadata: Metadata = {
-  title: "Pricing — Tracksign",
+  title: "Pricing — Flowtora",
   description:
     "Simple plans that scale with your shop. Starter for single-location teams, Pro for growing operations, Enterprise for multi-location franchise networks.",
   alternates: { canonical: "/pricing" },
   openGraph: {
-    title: "Tracksign pricing",
+    title: "Flowtora pricing",
     description:
       "Starter, Pro, and Enterprise plans. 14-day free trial, no credit card required.",
     type: "website",
@@ -138,7 +138,7 @@ export default function PricingPage() {
       <Section
         muted
         eyebrow="What's included"
-        title="Every plan ships with the full Tracksign foundation."
+        title="Every plan ships with the full Flowtora foundation."
         description="We don't gate the basics. Every customer gets quoting, proofing, payments, and the customer portal — because a half-working shop is no shop at all."
         align="center"
       >

@@ -59,7 +59,7 @@ export function StickyDemoCTA({ hideOnPaths = ["/book-demo", "/contact"] }: { hi
         }}
       >
         <span className="text-sm" style={{ color: "var(--text-muted)" }}>
-          See Tracksign in action?
+          See Flowtora in action?
         </span>
         <Link
           href="/book-demo"

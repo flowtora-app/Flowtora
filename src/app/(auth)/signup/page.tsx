@@ -3,7 +3,7 @@ import type { Metadata } from "next";
 import { signupAction } from "@/app/actions/auth";
 
 export const metadata: Metadata = {
-  title: "Start your trial — Tracksign",
+  title: "Start your trial — Flowtora",
   description:
     "Spin up your shop in 15 minutes. 14-day free trial, no credit card required.",
 };

@@ -23,12 +23,12 @@ import { CTA } from "@/components/marketing/CTA";
 // for something we plan to earn.
 
 export const metadata: Metadata = {
-  title: "Security & trust — Tracksign",
+  title: "Security & trust — Flowtora",
   description:
-    "How Tracksign protects your shop data: encryption in transit and at rest, per-tenant isolation, backed-up Postgres, role-based access, and a concrete compliance roadmap.",
+    "How Flowtora protects your shop data: encryption in transit and at rest, per-tenant isolation, backed-up Postgres, role-based access, and a concrete compliance roadmap.",
   alternates: { canonical: "/security" },
   openGraph: {
-    title: "Tracksign security",
+    title: "Flowtora security",
     description:
       "Encryption, tenant isolation, backups, RBAC, and an honest compliance roadmap.",
     type: "website",
@@ -100,7 +100,7 @@ const FAQ: { q: string; a: string }[] = [
   },
   {
     q: "How do I report a security issue?",
-    a: "Email security@tracksign.com with details. We respond within 24 business hours and track through resolution. Good-faith researchers get credit in our advisories; no legal action against ethical disclosure.",
+    a: "Email security@flowtora.com with details. We respond within 24 business hours and track through resolution. Good-faith researchers get credit in our advisories; no legal action against ethical disclosure.",
   },
   {
     q: "Is there a status page?",
@@ -280,7 +280,7 @@ export default function SecurityPage() {
         <p className="mt-6 text-center text-xs" style={{ color: "var(--text-faint)" }}>
           Report a vulnerability →{" "}
           <Link href="/contact" className="underline" style={{ color: "var(--accent-primary)" }}>
-            security@tracksign.com
+            security@flowtora.com
           </Link>
         </p>
       </Section>

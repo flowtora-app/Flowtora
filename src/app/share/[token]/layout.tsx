@@ -5,8 +5,8 @@ import { portalBrandVars } from "@/lib/portal-theme";
 //
 // A stripped-down layout vs the portal: no sidebar, no navigation, just
 // a centered page that reads like a one-off document. This is intentional
-// — the URL might land in someone's inbox who's never heard of Tracksign,
-// and we want the page to feel like "the invoice" rather than "Tracksign
+// — the URL might land in someone's inbox who's never heard of Flowtora,
+// and we want the page to feel like "the invoice" rather than "Flowtora
 // showing you an invoice".
 //
 // Phase 15 Slice D: we opportunistically resolve the tenant from the
@@ -33,7 +33,7 @@ export default async function ShareLayout({
         className="mx-auto max-w-3xl px-4 pb-8 pt-2 text-center text-[11px]"
         style={{ color: "var(--text-faint)" }}
       >
-        Secured by Tracksign
+        Secured by Flowtora
       </footer>
     </div>
   );

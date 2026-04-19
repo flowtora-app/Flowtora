@@ -42,7 +42,7 @@ export default function AuthLayout({ children }: { children: React.ReactNode }) 
               className="text-base font-semibold tracking-tight"
               style={{ color: "var(--text-default)" }}
             >
-              Tracksign
+              Flowtora
             </span>
           </Link>
 
@@ -51,7 +51,7 @@ export default function AuthLayout({ children }: { children: React.ReactNode }) 
               className="text-xl font-medium leading-snug"
               style={{ color: "var(--text-default)" }}
             >
-              &ldquo;We replaced three tools with Tracksign and finally have a
+              &ldquo;We replaced three tools with Flowtora and finally have a
               single place to look. Our install crews know what&apos;s coming
               up next and our AR dropped by 22 days.&rdquo;
             </blockquote>
@@ -83,7 +83,7 @@ export default function AuthLayout({ children }: { children: React.ReactNode }) 
             className="text-xs"
             style={{ color: "var(--text-faint)" }}
           >
-            © {new Date().getFullYear()} Tracksign, Inc.
+            © {new Date().getFullYear()} Flowtora, Inc.
           </div>
         </div>
       </aside>
@@ -109,7 +109,7 @@ export default function AuthLayout({ children }: { children: React.ReactNode }) 
               className="text-base font-semibold tracking-tight"
               style={{ color: "var(--text-default)" }}
             >
-              Tracksign
+              Flowtora
             </span>
           </Link>
           {children}

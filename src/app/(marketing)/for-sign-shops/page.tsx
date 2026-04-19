@@ -13,11 +13,11 @@ import { CTA } from "@/components/marketing/CTA";
 // tracking, install routing, substrate pricing, etc.
 
 export const metadata: Metadata = {
-  title: "Tracksign for sign shops — Quote, build, and install in one system",
+  title: "Flowtora for sign shops — Quote, build, and install in one system",
   description:
     "Purpose-built for sign shops. Sq-ft pricing, illumination and mounting options, permit tracking, install routing, and shop-floor boards for routers, printers, and finishers.",
   openGraph: {
-    title: "Tracksign for sign shops",
+    title: "Flowtora for sign shops",
     description:
       "Quote, build, and install signage in one platform. Built for sign shops.",
     type: "website",
@@ -29,7 +29,7 @@ const PAIN_POINTS = [
     icon: "📏",
     title: "Quoting illuminated signs without a calculator crawl",
     description:
-      "Sq-ft base + illumination up-charge + mounting hardware + install labor. Tracksign handles the stack in one line item with explicit cost visibility.",
+      "Sq-ft base + illumination up-charge + mounting hardware + install labor. Flowtora handles the stack in one line item with explicit cost visibility.",
   },
   {
     icon: "📄",
@@ -86,7 +86,7 @@ export default function ForSignShopsPage() {
         title={<>Run the shop the way you actually make signs.</>}
         description={
           <>
-            Tracksign is built for sign shops that do channel letters, monument
+            Flowtora is built for sign shops that do channel letters, monument
             signs, storefront graphics, and wayfinding. Quote by sq-ft, route
             through CNC and finishing, install in the field — one system, one
             record per job.
@@ -109,7 +109,7 @@ export default function ForSignShopsPage() {
       </Section>
 
       <Section
-        eyebrow="Why sign shops pick Tracksign"
+        eyebrow="Why sign shops pick Flowtora"
         title="The shape of a sign shop's day, baked in."
         description="Every sign-shop owner we've talked to spends half their week stitching email, spreadsheets, QuickBooks, and a whiteboard. We replaced all four."
         align="center"
@@ -159,7 +159,7 @@ export default function ForSignShopsPage() {
       <Section align="center">
         <div className="mx-auto max-w-3xl">
           <Testimonial
-            quote="We do a lot of channel-letter work. Tracksign's illumination options and mounting templates cut quote time from an hour to fifteen minutes. The install crew never loses a job photo anymore — it's all in the app."
+            quote="We do a lot of channel-letter work. Flowtora's illumination options and mounting templates cut quote time from an hour to fifteen minutes. The install crew never loses a job photo anymore — it's all in the app."
             author="Placeholder Name"
             role="Owner"
             company="Placeholder Sign & Fabrication"

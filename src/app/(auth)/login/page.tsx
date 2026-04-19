@@ -3,8 +3,8 @@ import type { Metadata } from "next";
 import { loginAction } from "@/app/actions/auth";
 
 export const metadata: Metadata = {
-  title: "Sign in — Tracksign",
-  description: "Sign in to your Tracksign account.",
+  title: "Sign in — Flowtora",
+  description: "Sign in to your Flowtora account.",
 };
 
 // Phase 2 — expanded search-param surface.

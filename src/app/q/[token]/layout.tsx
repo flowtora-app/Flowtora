@@ -6,7 +6,7 @@ import type { Metadata } from "next";
 // email, and we don't want it to look like a login-walled app.
 
 export const metadata: Metadata = {
-  title: "Your quote · Tracksign",
+  title: "Your quote · Flowtora",
   robots: { index: false, follow: false },
 };
 

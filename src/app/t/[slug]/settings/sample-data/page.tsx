@@ -50,7 +50,7 @@ export default async function SampleDataSettings({
       <Card>
         <CardHeader
           title="Sample data"
-          description="A small demo shop you can load to explore Tracksign with pre-populated customers, products, quotes, and invoices."
+          description="A small demo shop you can load to explore Flowtora with pre-populated customers, products, quotes, and invoices."
         />
         <div className="space-y-4 px-5 py-5">
           {justCleared && (

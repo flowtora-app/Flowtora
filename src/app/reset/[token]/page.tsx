@@ -6,7 +6,7 @@ import { hashToken } from "@/lib/security";
 import { confirmPasswordReset } from "@/app/actions/account-security";
 
 export const metadata: Metadata = {
-  title: "Pick a new password — Tracksign",
+  title: "Pick a new password — Flowtora",
   robots: { index: false, follow: false },
 };
 

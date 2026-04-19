@@ -33,11 +33,11 @@ const DEDUP_WINDOW_MS = 24 * 60 * 60 * 1000;       // 24h
 export function hashIp(ip: string | null | undefined): string | null {
   if (!ip) return null;
   // Salt is NOT a secret — the point is just to make rainbow lookups
-  // harder and to key the hash to the tracksign install. If leaked,
+  // harder and to key the hash to the flowtora install. If leaked,
   // the worst case is that an attacker could confirm whether a given
   // IP submitted a lead, which is already visible in their own server
   // logs. A rotating salt in env would be better; punt to ops.
-  return createHash("sha256").update("tracksign-lead:" + ip).digest("hex").slice(0, 32);
+  return createHash("sha256").update("flowtora-lead:" + ip).digest("hex").slice(0, 32);
 }
 
 export interface RecordLeadInput {
@@ -168,7 +168,7 @@ async function forwardToSink(lead: { id: string; kind: string; email: string; st
     });
   }
   // TODO(ops): wire one of —
-  //   - Postmark/SendGrid to sales@tracksign.com
+  //   - Postmark/SendGrid to sales@flowtora.com
   //   - Slack webhook → #sales
   //   - HubSpot/Pipedrive API create
 }

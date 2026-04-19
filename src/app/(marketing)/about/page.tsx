@@ -19,12 +19,12 @@ import { CTA } from "@/components/marketing/CTA";
 //   5. CTA
 
 export const metadata: Metadata = {
-  title: "About Tracksign",
+  title: "About Flowtora",
   description:
     "Built by a small team who grew up around vinyl cutters and UV printers. We make shop software that respects how real shops actually work.",
   alternates: { canonical: "/about" },
   openGraph: {
-    title: "About Tracksign",
+    title: "About Flowtora",
     description:
       "A shop-floor-first SaaS for sign and print shops, built by people who've been in one.",
     type: "website",
@@ -65,11 +65,11 @@ export default function AboutPage() {
   return (
     <>
       <Hero
-        eyebrow="About Tracksign"
+        eyebrow="About Flowtora"
         title={<>Built by people who grew up around print heads and plotters.</>}
         description={
           <>
-            We started Tracksign because the shops we&apos;d worked at were
+            We started Flowtora because the shops we&apos;d worked at were
             running on a tangle of spreadsheets, shared inboxes, and a
             QuickBooks file nobody wanted to open. It was making good
             people&apos;s jobs harder than they needed to be. We decided
@@ -134,7 +134,7 @@ export default function AboutPage() {
           style={{ color: "var(--text-muted)" }}
         >
           <p>
-            The first version of Tracksign lived on a napkin in a
+            The first version of Flowtora lived on a napkin in a
             breakroom. A shop owner had just spent forty minutes looking
             for a proof approval that three different customers swore
             they had sent. The approval was in an email thread that had
@@ -152,7 +152,7 @@ export default function AboutPage() {
             Shopify checkout hacked to kind-of look like an invoice.
           </p>
           <p>
-            Tracksign exists to end the workaround tax. One place for
+            Flowtora exists to end the workaround tax. One place for
             the customer, the quote, the proof, the order, the install,
             and the invoice — each linked to the next, every state
             visible to everyone who needs it, nothing to re-enter.

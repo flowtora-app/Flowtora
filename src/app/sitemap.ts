@@ -32,7 +32,7 @@ export default function sitemap(): MetadataRoute.Sitemap {
     { path: "/contact",         changeFrequency: "yearly",  priority: 0.6 },
     { path: "/legal/privacy",   changeFrequency: "yearly",  priority: 0.3 },
     { path: "/legal/terms",     changeFrequency: "yearly",  priority: 0.3 },
-    // Auth entry — low-priority but crawlable so "tracksign login"
+    // Auth entry — low-priority but crawlable so "flowtora login"
     // queries land somewhere legitimate.
     { path: "/login",  changeFrequency: "yearly", priority: 0.3 },
     { path: "/signup", changeFrequency: "yearly", priority: 0.5 },

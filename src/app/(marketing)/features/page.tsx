@@ -13,11 +13,11 @@ import { CTA } from "@/components/marketing/CTA";
 // lists, and "how it fits your day" framing.
 
 export const metadata: Metadata = {
-  title: "Features — Tracksign",
+  title: "Features — Flowtora",
   description:
-    "Every capability in Tracksign, explained. CRM, quoting, proofing, production boards, install routing, invoicing, and reporting — purpose-built for sign and print shops.",
+    "Every capability in Flowtora, explained. CRM, quoting, proofing, production boards, install routing, invoicing, and reporting — purpose-built for sign and print shops.",
   openGraph: {
-    title: "Tracksign features",
+    title: "Flowtora features",
     description:
       "One platform for quoting, proofing, production, installs, invoicing, and reports.",
     type: "website",
@@ -143,7 +143,7 @@ const CROSS_CUTTING = [
     icon: "🔗",
     title: "Open API + webhooks",
     description:
-      "REST API for every entity, webhook events for every lifecycle change. Pipe Tracksign into QuickBooks, Slack, or your BI stack.",
+      "REST API for every entity, webhook events for every lifecycle change. Pipe Flowtora into QuickBooks, Slack, or your BI stack.",
   },
   {
     icon: "📥",
@@ -175,7 +175,7 @@ export default function FeaturesPage() {
           <>
             Seven integrated pillars — CRM, quoting, proofing, production,
             installs, invoicing, and reports — plus the cross-cutting pieces
-            (RBAC, multi-location, API) that make Tracksign work at scale.
+            (RBAC, multi-location, API) that make Flowtora work at scale.
           </>
         }
         primary={{ label: "Start free trial", href: "/signup" }}

@@ -1,4 +1,4 @@
-# Tracksign — 23-Phase Restructuring Plan
+# Flowtora — 23-Phase Restructuring Plan
 
 **Status:** Active. This is the source of truth for platform direction.
 
@@ -744,7 +744,7 @@ Do not stay at MVP level. Build this like a serious SaaS company product.
   (Slice A: email sender customization — `emailFromName` + `emailReplyTo` on
   Tenant wired through `sendCustomerEmail` to the Resend transport with the
   display name sanitized against header injection while the envelope sender
-  stays on the verified `noreply@tracksign.app` domain (DKIM/SPF safe) —
+  stays on the verified `noreply@flowtora.app` domain (DKIM/SPF safe) —
   Reply-To goes back to the shop's inbox. Slice B: document output
   customization — `quoteFooterText`, `invoiceFooterText`, and
   `paymentInstructions` on Tenant; new /settings/documents form; rendered

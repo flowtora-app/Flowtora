@@ -6,7 +6,7 @@ export const dynamic = "force-dynamic";
 
 // Phase D — System / platform health.
 //
-// Tracksign doesn't self-instrument external services (that's Vercel's
+// Flowtora doesn't self-instrument external services (that's Vercel's
 // job), so this page surfaces the health signals we can observe from
 // our own database:
 //

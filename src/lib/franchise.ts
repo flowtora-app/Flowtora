@@ -1,6 +1,6 @@
 // Phase 15 Slice D — franchise / parent-tenant grouping.
 //
-// Tracksign already has two layers (Tenant ⊃ Location). Slice D adds an
+// Flowtora already has two layers (Tenant ⊃ Location). Slice D adds an
 // optional third layer: a "group root" tenant that shares pricing /
 // checklist / message templates with N child tenants. The grouping is one
 // level deep on purpose — flat queries, no recursive walks, predictable

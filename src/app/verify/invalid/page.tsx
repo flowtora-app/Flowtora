@@ -3,7 +3,7 @@ import type { Metadata } from "next";
 import { auth } from "@/auth";
 
 export const metadata: Metadata = {
-  title: "Verification link no longer valid — Tracksign",
+  title: "Verification link no longer valid — Flowtora",
   robots: { index: false, follow: false },
 };
 

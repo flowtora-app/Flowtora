@@ -13,11 +13,11 @@ import { CTA } from "@/components/marketing/CTA";
 // bleed-aware proofing, flatbed / wide-format queues, finishing.
 
 export const metadata: Metadata = {
-  title: "Tracksign for print shops — From file to finished in one platform",
+  title: "Flowtora for print shops — From file to finished in one platform",
   description:
     "Purpose-built for print shops. Linear-ft, sheet, and job-based pricing; bleed-aware proofs; production queues for flatbed, wide-format, and finishing.",
   openGraph: {
-    title: "Tracksign for print shops",
+    title: "Flowtora for print shops",
     description:
       "Estimate, proof, print, and finish in one platform. Built for print shops.",
     type: "website",
@@ -86,7 +86,7 @@ export default function ForPrintShopsPage() {
         title={<>From file to finished — the print shop OS.</>}
         description={
           <>
-            Tracksign is built for print shops running flatbed UV, wide-format,
+            Flowtora is built for print shops running flatbed UV, wide-format,
             digital sheet, and finishing. Quote mixed pricing models, proof
             with bleed awareness, route jobs across every press, bill on
             pickup — all on one record.
@@ -109,7 +109,7 @@ export default function ForPrintShopsPage() {
       </Section>
 
       <Section
-        eyebrow="Why print shops pick Tracksign"
+        eyebrow="Why print shops pick Flowtora"
         title="Built for the way a print shop actually runs."
         description="Proofing, pressing, finishing, and billing don't live in four apps anymore. They live in one order record."
         align="center"
@@ -159,7 +159,7 @@ export default function ForPrintShopsPage() {
       <Section align="center">
         <div className="mx-auto max-w-3xl">
           <Testimonial
-            quote="Our flatbed was always three jobs behind because the estimator and the press operator lived in different worlds. Tracksign put them on the same queue. Revenue per flatbed hour is up 28% and we stopped losing proofs in email."
+            quote="Our flatbed was always three jobs behind because the estimator and the press operator lived in different worlds. Flowtora put them on the same queue. Revenue per flatbed hour is up 28% and we stopped losing proofs in email."
             author="Placeholder Name"
             role="Operations Manager"
             company="Placeholder Print Works"
@@ -227,7 +227,7 @@ export default function ForPrintShopsPage() {
 
       <CTA
         eyebrow="Ready to try it?"
-        title="Run your print shop's next week in Tracksign."
+        title="Run your print shop's next week in Flowtora."
         description="Import customers, seed your price book, send your first quote — today."
         primary={{ label: "Start free trial", href: "/signup" }}
         secondary={{ label: "Book a demo", href: "/contact" }}

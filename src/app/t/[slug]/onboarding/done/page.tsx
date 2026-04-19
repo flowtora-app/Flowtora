@@ -7,7 +7,7 @@ import { ONBOARDING_STEPS } from "../steps";
 // Showing a "done" screen (rather than a silent redirect to the
 // dashboard) does two things:
 //   1. Acknowledges the effort the owner just put in — small thing,
-//      but it's the first moment Tracksign feels polished to them.
+//      but it's the first moment Flowtora feels polished to them.
 //   2. Gives them a clear jumping-off point. The dashboard shows the
 //      onboarding checklist for any remaining tasks (branding logo,
 //      inviting teammates, etc.), so this page sets that up.

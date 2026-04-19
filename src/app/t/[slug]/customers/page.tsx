@@ -224,7 +224,7 @@ export default async function CustomersPage({
             title="Your customer book is empty"
             description={
               <>
-                Customers are the center of Tracksign — every quote, order, and
+                Customers are the center of Flowtora — every quote, order, and
                 invoice hangs off one. Add a walk-in, a lead from your CRM, or
                 a referral and watch the pipeline start to fill out.
               </>

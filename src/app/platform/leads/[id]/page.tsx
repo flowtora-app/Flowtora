@@ -204,7 +204,7 @@ export default async function PlatformLeadDetailPage({
             <CardHeader title="Quick actions" />
             <div className="space-y-2 px-5 py-4 text-xs">
               <a
-                href={`mailto:${lead.email}?subject=${encodeURIComponent("Re: your Tracksign inquiry")}`}
+                href={`mailto:${lead.email}?subject=${encodeURIComponent("Re: your Flowtora inquiry")}`}
                 className="block underline"
               >
                 Email {lead.email}

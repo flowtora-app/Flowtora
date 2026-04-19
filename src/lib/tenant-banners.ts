@@ -97,7 +97,7 @@ export function tenantBanners(t: Input, now = new Date()): TenantBanner[] {
         id: "trial-expired",
         tone: "danger",
         title: "Your trial has ended",
-        body: "Pick a plan to keep using Tracksign. Your data is safe while you decide.",
+        body: "Pick a plan to keep using Flowtora. Your data is safe while you decide.",
         href: `/t/${t.slug}/settings/billing`,
         ctaLabel: "Choose a plan",
       });

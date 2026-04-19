@@ -14,13 +14,13 @@ const siteUrl =
 export const metadata: Metadata = {
   metadataBase: new URL(siteUrl),
   title: {
-    default: "Tracksign — The operating system for sign and print shops",
-    template: "%s · Tracksign",
+    default: "Flowtora — The operating system for sign and print shops",
+    template: "%s · Flowtora",
   },
   description:
     "Run quoting, proofing, production, installs, and invoicing in one shop-floor-grade platform. Built for teams who make real things.",
-  applicationName: "Tracksign",
-  authors: [{ name: "Tracksign, Inc." }],
+  applicationName: "Flowtora",
+  authors: [{ name: "Flowtora, Inc." }],
   keywords: [
     "sign shop software",
     "print shop software",
@@ -33,13 +33,13 @@ export const metadata: Metadata = {
   ],
   openGraph: {
     type: "website",
-    siteName: "Tracksign",
+    siteName: "Flowtora",
     locale: "en_US",
     url: siteUrl,
   },
   twitter: {
     card: "summary_large_image",
-    title: "Tracksign",
+    title: "Flowtora",
     description:
       "One platform for CRM, quoting, proofing, production, installs, and invoicing.",
   },

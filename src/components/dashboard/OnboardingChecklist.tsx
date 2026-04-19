@@ -37,7 +37,7 @@ export function OnboardingChecklist({ slug, progress }: OnboardingChecklistProps
             className="text-base font-semibold"
             style={{ color: "var(--text-default)" }}
           >
-            Get Tracksign running in your shop
+            Get Flowtora running in your shop
           </h2>
           <p
             className="mt-1 text-sm"

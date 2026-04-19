@@ -27,7 +27,7 @@ export default function ResetLayout({ children }: { children: React.ReactNode })
           className="text-base font-semibold tracking-tight"
           style={{ color: "var(--text-default)" }}
         >
-          Tracksign
+          Flowtora
         </span>
       </Link>
       <div

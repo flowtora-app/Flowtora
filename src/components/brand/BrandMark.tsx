@@ -27,7 +27,7 @@ export function Wordmark({ style }: { style?: CSSProperties }) {
       className="font-semibold tracking-tight"
       style={{ color: "var(--text-default)", ...style }}
     >
-      Tracksign
+      Flowtora
     </span>
   );
 }

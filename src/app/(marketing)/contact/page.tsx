@@ -10,11 +10,11 @@ import { ContactForm } from "@/components/marketing/ContactForm";
 // so people with the wrong request still land somewhere reasonable.
 
 export const metadata: Metadata = {
-  title: "Contact — Tracksign",
+  title: "Contact — Flowtora",
   description:
-    "Questions about Tracksign? Book a demo, talk to sales, or get support. We respond within one business day.",
+    "Questions about Flowtora? Book a demo, talk to sales, or get support. We respond within one business day.",
   openGraph: {
-    title: "Contact Tracksign",
+    title: "Contact Flowtora",
     description: "Book a demo, talk to sales, or get support.",
     type: "website",
   },
@@ -26,14 +26,14 @@ const CONTACT_PATHS = [
     title: "Book a demo",
     description:
       "A 30-minute walkthrough tailored to your shop. We'll use your pricing and your workflow, not a scripted demo.",
-    action: { label: "sales@tracksign.com", href: "mailto:sales@tracksign.com" },
+    action: { label: "sales@flowtora.com", href: "mailto:sales@flowtora.com" },
   },
   {
     eyebrow: "Support",
     title: "Need a hand with your account?",
     description:
       "Existing customer? Send questions to support — we respond within one business day, or same-hour for Enterprise SLAs.",
-    action: { label: "support@tracksign.com", href: "mailto:support@tracksign.com" },
+    action: { label: "support@flowtora.com", href: "mailto:support@flowtora.com" },
   },
   {
     eyebrow: "Careers",
@@ -167,7 +167,7 @@ export default function ContactPage() {
                 className="mt-2 text-sm"
                 style={{ color: "var(--text-default)" }}
               >
-                Tracksign, Inc.
+                Flowtora, Inc.
               </div>
               <div
                 className="mt-1 text-sm leading-relaxed"

@@ -68,7 +68,7 @@ export function MarketingFooter() {
                 T
               </span>
               <span className="text-sm font-semibold" style={{ color: "var(--text-default)" }}>
-                Tracksign
+                Flowtora
               </span>
             </div>
             <p className="mt-3 max-w-sm text-xs leading-relaxed" style={{ color: "var(--text-muted)" }}>
@@ -116,7 +116,7 @@ export function MarketingFooter() {
           className="mt-12 flex flex-col items-start justify-between gap-3 pt-6 text-xs md:flex-row md:items-center"
           style={{ borderTop: "1px solid var(--border-subtle)", color: "var(--text-faint)" }}
         >
-          <span>© {year} Tracksign, Inc. All rights reserved.</span>
+          <span>© {year} Flowtora, Inc. All rights reserved.</span>
           <span>Built for shops that make real things.</span>
         </div>
       </div>

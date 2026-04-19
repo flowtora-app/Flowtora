@@ -4,8 +4,8 @@ import bcrypt from "bcryptjs";
 const db = new PrismaClient();
 
 async function main() {
-  const adminEmail = "admin@tracksign.local";
-  const adminPassword = "tracksign-dev";
+  const adminEmail = "admin@flowtora.local";
+  const adminPassword = "flowtora-dev";
   const adminHash = await bcrypt.hash(adminPassword, 12);
 
   await db.user.upsert({
@@ -21,7 +21,7 @@ async function main() {
   });
 
   // Fully-onboarded demo tenant.
-  const ownerHash = await bcrypt.hash("tracksign-dev", 12);
+  const ownerHash = await bcrypt.hash("flowtora-dev", 12);
   const owner = await db.user.upsert({
     where: { email: "owner@demoshop.local" },
     update: {},
@@ -213,8 +213,8 @@ async function main() {
   console.log("Seed complete.");
   console.log("─────────────────────────────────────────────");
   console.log(`Platform admin: ${adminEmail} / ${adminPassword}`);
-  console.log("Demo (onboarded): owner@demoshop.local / tracksign-dev → /t/demo-shop");
-  console.log("Fresh (run wizard): owner@freshshop.local / tracksign-dev → /t/fresh-shop");
+  console.log("Demo (onboarded): owner@demoshop.local / flowtora-dev → /t/demo-shop");
+  console.log("Fresh (run wizard): owner@freshshop.local / flowtora-dev → /t/fresh-shop");
 }
 
 main()

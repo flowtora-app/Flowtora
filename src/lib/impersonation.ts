@@ -4,7 +4,7 @@
 // where the cookie <-> DB row plumbing lives so pages / actions / layouts
 // don't have to repeat it.
 //
-// Cookie: `ts_imp` (ts = tracksign, imp = impersonation). HTTP-only so a
+// Cookie: `ts_imp` (ts = flowtora, imp = impersonation). HTTP-only so a
 // page script can't lift it, `sameSite: "lax"` so it survives a redirect
 // from /platform into /t, Secure in production.
 

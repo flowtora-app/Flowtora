@@ -1,11 +1,11 @@
 import * as React from "react";
 
-// ProductMock — a hand-drawn SVG/HTML mock of a Tracksign screen.
+// ProductMock — a hand-drawn SVG/HTML mock of a Flowtora screen.
 //
 // We don't have a real production screenshot pipeline yet, and stock
 // SaaS dashboard stock imagery reads as generic. So this is a
 // deliberately-stylized but *accurate* mock of a quote detail view —
-// the same layout a real Tracksign user actually sees — built with
+// the same layout a real Flowtora user actually sees — built with
 // div + text rather than an image so it scales crisp at every
 // breakpoint and stays in our dark token palette.
 //
@@ -36,7 +36,7 @@ export function ProductMock({ className }: { className?: string }) {
           className="ml-3 flex h-6 flex-1 items-center rounded-md px-3 text-xs"
           style={{ background: "var(--surface-0)", color: "var(--text-faint)" }}
         >
-          tracksign.app/t/signshop/quotes/Q-1087
+          flowtora.app/t/signshop/quotes/Q-1087
         </div>
       </div>
 
