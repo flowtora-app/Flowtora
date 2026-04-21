@@ -45,16 +45,23 @@ export default async function TenantLayout({
   const path = (await headers()).get("x-pathname") ?? "";
   const inOnboarding = path.includes(`/t/${slug}/onboarding`);
   const inCheckoutDirect = path.includes(`/t/${slug}/checkout-direct`);
+  const inWelcome = path.includes(`/t/${slug}/welcome`);
 
   // checkout-direct is a pure server-side Stripe handoff — the page
   // creates a Checkout Session and 302s to Stripe. Rendering the full
   // AppShell (sidebar/topbar/banners) + the /t/[slug]/loading skeleton
   // while we round-trip to Stripe's API causes a visible flash of the
-  // app chrome before the redirect. Skip the shell entirely and let
-  // the page own its own response. Auth is still enforced — this runs
-  // AFTER requireTenant above, and the page itself calls
-  // requirePermission("tenant:billing") before touching Stripe.
-  if (inCheckoutDirect) {
+  // app chrome before the redirect.
+  //
+  // /welcome is the post-payment confirmation moment — a focused, full
+  // page transition into onboarding. Rendering the sidebar with links
+  // to empty dashboards/attention pages (nothing's set up yet) would
+  // undercut the "you're in, let's set up" framing.
+  //
+  // Both skip the shell entirely and own their own response. Auth is
+  // still enforced: this runs AFTER requireTenant, and each page
+  // asserts its own permissions before rendering.
+  if (inCheckoutDirect || inWelcome) {
     return <>{children}</>;
   }
 

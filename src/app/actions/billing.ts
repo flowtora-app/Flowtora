@@ -34,6 +34,12 @@ export async function startCheckout(slug: string, formData: FormData) {
 // after reading plan+cycle from the URL. Keeps the form-less flow out
 // of `startCheckout` so the in-app billing page can evolve
 // independently.
+//
+// Unlike `startCheckout` (existing user upgrading), this flow lands
+// the user on `/welcome?checkout=success&plan=…&cycle=…` afterward —
+// a celebratory handoff into the onboarding wizard. Brand-new tenants
+// haven't set up anything yet, so dumping them on /settings/billing
+// would feel cold and miss the chance to funnel them into setup.
 export async function startCheckoutDirect(
   slug: string,
   plan: Exclude<Plan, "ENTERPRISE">,
@@ -41,12 +47,16 @@ export async function startCheckoutDirect(
 ) {
   const ctx = await requirePermission(slug, "tenant:billing");
   const session = await auth();
+  const base = process.env.APP_URL ?? "http://localhost:3000";
+  const returnUrl = new URL(`/t/${slug}/welcome`, base);
+  returnUrl.searchParams.set("plan", plan);
+  returnUrl.searchParams.set("cycle", cycle);
   const url = await createCheckoutSession({
     tenant: ctx.tenant,
     ownerEmail: session?.user?.email ?? "",
     plan,
     cycle,
-    returnUrl: `${process.env.APP_URL ?? "http://localhost:3000"}/t/${slug}/settings/billing`,
+    returnUrl: returnUrl.toString(),
   });
   if (!url) {
     redirect(`/t/${slug}/settings/billing?error=stripe_unconfigured`);

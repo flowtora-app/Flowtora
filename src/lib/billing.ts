@@ -61,12 +61,21 @@ export async function createCheckoutSession(opts: {
   const customerId = await ensureStripeCustomer(opts.tenant, opts.ownerEmail);
   if (!customerId) return null;
 
+  // Build success/cancel URLs that preserve any query params callers
+  // may have baked into returnUrl (e.g. /welcome?plan=PRO&cycle=annual).
+  // A naive `${returnUrl}?checkout=success` would blow those away or
+  // produce an invalid `?a=b?checkout=success`.
+  const successUrl = new URL(opts.returnUrl);
+  successUrl.searchParams.set("checkout", "success");
+  const cancelUrl = new URL(opts.returnUrl);
+  cancelUrl.searchParams.set("checkout", "canceled");
+
   const session = await stripe.checkout.sessions.create({
     mode: "subscription",
     customer: customerId,
     line_items: [{ price: priceId, quantity: 1 }],
-    success_url: `${opts.returnUrl}?checkout=success`,
-    cancel_url: `${opts.returnUrl}?checkout=canceled`,
+    success_url: successUrl.toString(),
+    cancel_url: cancelUrl.toString(),
     subscription_data: {
       metadata: { tenantId: opts.tenant.id, plan: opts.plan, cycle },
     },
