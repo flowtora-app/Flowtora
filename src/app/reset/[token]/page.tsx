@@ -4,6 +4,7 @@ import type { Metadata } from "next";
 import { db } from "@/lib/db";
 import { hashToken } from "@/lib/security";
 import { confirmPasswordReset } from "@/app/actions/account-security";
+import { PasswordField } from "@/components/auth/PasswordField";
 
 export const metadata: Metadata = {
   title: "Pick a new password — Flowtora",
@@ -16,6 +17,10 @@ export const metadata: Metadata = {
 // redirects straight to /reset/invalid instead of showing a form that
 // will fail. Token hashing happens server-side; the raw token never
 // hits the DB.
+//
+// Both password inputs use the shared PasswordField so the meter +
+// checklist mirror the signup flow. The confirm field opts out of the
+// meter (`showStrength={false}`) — duplicating it would just be noise.
 
 export default async function ResetWithTokenPage({
   params,
@@ -59,20 +64,11 @@ export default async function ResetWithTokenPage({
 
       <form action={confirmPasswordReset} className="space-y-4">
         <input type="hidden" name="token" value={token} />
-        <PasswordField
-          label="New password"
-          name="password"
-          autoComplete="new-password"
-          minLength={8}
-          required
-          hint="At least 8 characters. Mix a word you'd remember with a number."
-        />
+        <PasswordField label="New password" name="password" />
         <PasswordField
           label="Confirm new password"
           name="confirmPassword"
-          autoComplete="new-password"
-          minLength={8}
-          required
+          showStrength={false}
         />
 
         {sp.error && (
@@ -111,47 +107,5 @@ export default async function ResetWithTokenPage({
         </Link>
       </p>
     </div>
-  );
-}
-
-function PasswordField(
-  props: React.InputHTMLAttributes<HTMLInputElement> & {
-    label: string;
-    hint?: string;
-  },
-) {
-  const { label, hint, ...rest } = props;
-  return (
-    <label className="block">
-      <span
-        className="mb-1 block text-sm font-medium"
-        style={{ color: "var(--text-default)" }}
-      >
-        {label}
-        {rest.required && (
-          <span aria-hidden className="ml-1" style={{ color: "var(--accent-primary)" }}>
-            *
-          </span>
-        )}
-      </span>
-      <input
-        {...rest}
-        type="password"
-        className="ts-focus w-full rounded-md px-3 py-2.5 text-sm outline-none transition-colors"
-        style={{
-          background: "var(--surface-0)",
-          border: "1px solid var(--border-default)",
-          color: "var(--text-default)",
-        }}
-      />
-      {hint && (
-        <span
-          className="mt-1 block text-xs"
-          style={{ color: "var(--text-faint)" }}
-        >
-          {hint}
-        </span>
-      )}
-    </label>
   );
 }

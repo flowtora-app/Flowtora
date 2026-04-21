@@ -49,6 +49,7 @@ const PUBLIC_PATHS = new Set<string>([
 const PUBLIC_PREFIXES = [
   "/api/auth",
   "/api/webhooks",
+  "/api/signup",
   "/accept-invite",
   "/_next",
   "/favicon",

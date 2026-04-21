@@ -7,6 +7,7 @@ import bcrypt from "bcryptjs";
 import { signIn, signOut } from "@/auth";
 import { db } from "@/lib/db";
 import { isReservedSlug, slugify } from "@/lib/slug";
+import { passwordSchema } from "@/lib/password";
 import { logAudit } from "@/lib/audit";
 import {
   generateToken,
@@ -29,7 +30,7 @@ export async function signOutAction() {
 const signupSchema = z.object({
   name: z.string().min(1).max(120),
   email: z.string().email(),
-  password: z.string().min(8).max(200),
+  password: passwordSchema,
   shopName: z.string().min(1).max(120),
   slug: z.string().min(2).max(40),
   // Optional purchase-intent fields. When present, the new tenant is

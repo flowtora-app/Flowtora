@@ -4,6 +4,7 @@ import { db } from "@/lib/db";
 import { requireTenant } from "@/lib/tenant";
 import { totpUri } from "@/lib/security";
 import { Card, CardHeader } from "@/components/Card";
+import { PasswordField } from "@/components/auth/PasswordField";
 import {
   changePassword,
   requestEmailChange,
@@ -154,34 +155,30 @@ export default async function SecuritySettingsPage({
           title="Password"
           description="You'll be signed out of every device after you change it."
         />
+        {/* Vertical stack — the 3-col grid was cramped once the
+            new-password field grew a strength meter + checklist.
+            `PasswordField` renders with its own internal label. */}
         <form
           action={changePassword.bind(null, backTo)}
-          className="grid grid-cols-1 gap-3 px-5 py-5 sm:grid-cols-3"
+          className="flex flex-col gap-5 px-5 py-5"
         >
-          <Input
+          <PasswordField
             label="Current password"
             name="currentPassword"
-            type="password"
             autoComplete="current-password"
-            required
+            showStrength={false}
+            enforceMinLength={false}
           />
-          <Input
+          <PasswordField
             label="New password"
             name="newPassword"
-            type="password"
-            autoComplete="new-password"
-            required
-            minLength={8}
           />
-          <Input
+          <PasswordField
             label="Confirm new password"
             name="confirmPassword"
-            type="password"
-            autoComplete="new-password"
-            required
-            minLength={8}
+            showStrength={false}
           />
-          <div className="sm:col-span-3 flex justify-end">
+          <div className="flex justify-end">
             <PrimaryButton>Change password</PrimaryButton>
           </div>
         </form>

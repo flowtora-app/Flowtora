@@ -6,6 +6,7 @@ import bcrypt from "bcryptjs";
 import { db } from "@/lib/db";
 import { signIn, auth } from "@/auth";
 import { logAudit } from "@/lib/audit";
+import { passwordSchema } from "@/lib/password";
 
 async function consumeInvite(token: string, userId: string) {
   const invite = await db.invite.findUnique({ where: { token } });
@@ -58,12 +59,15 @@ export async function acceptInviteAsExistingUser(token: string) {
 
 const signupAndAcceptSchema = z.object({
   name: z.string().min(1).max(120),
-  password: z.string().min(8).max(200),
+  password: passwordSchema,
 });
 
 export async function acceptInviteAsNewUser(token: string, formData: FormData) {
   const parsed = signupAndAcceptSchema.safeParse(Object.fromEntries(formData.entries()));
-  if (!parsed.success) redirect(`/accept-invite/${token}?error=invalid_input`);
+  if (!parsed.success) {
+    const msg = parsed.error.issues[0]?.message ?? "invalid_input";
+    redirect(`/accept-invite/${token}?error=${encodeURIComponent(msg)}`);
+  }
 
   const invite = await db.invite.findUnique({ where: { token } });
   if (!invite) redirect(`/accept-invite/${token}?error=invite_not_found`);

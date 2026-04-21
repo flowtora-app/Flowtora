@@ -1,6 +1,8 @@
 import Link from "next/link";
 import type { Metadata } from "next";
 import { signupAction } from "@/app/actions/auth";
+import { SignupShopFields } from "@/components/auth/SignupShopFields";
+import { PasswordField } from "@/components/auth/PasswordField";
 
 export const metadata: Metadata = {
   title: "Start your trial — Flowtora",
@@ -118,31 +120,16 @@ export default async function SignupPage({
             required
           />
         </div>
-        <Field
-          label="Password"
-          name="password"
-          type="password"
-          autoComplete="new-password"
-          required
-          minLength={8}
-          hint="At least 8 characters."
-        />
-        <div className="grid grid-cols-1 gap-5 sm:grid-cols-2">
-          <Field
-            label="Shop name"
-            name="shopName"
-            placeholder="Acme Sign Co."
-            required
-          />
-          <Field
-            label="Shop URL"
-            name="slug"
-            placeholder="acme-sign"
-            required
-            pattern="[a-z0-9-]+"
-            hint="Lowercase letters, numbers, and hyphens."
-          />
-        </div>
+        {/* Password rules + live strength meter + checklist are
+            enforced and surfaced by the shared PasswordField. The
+            same rules apply server-side via `passwordSchema` in
+            src/lib/password.ts. */}
+        <PasswordField />
+        {/* Shop name auto-fills the slug; slug field does a live
+            availability check against /api/signup/slug-check. Both
+            states are client-owned, so the pair is lifted into its
+            own client component. */}
+        <SignupShopFields />
 
         {sp.error && (
           <div

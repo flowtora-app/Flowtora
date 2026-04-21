@@ -36,6 +36,7 @@ import {
   emailVerificationEmail,
   securityAlertEmail,
 } from "@/lib/email";
+import { passwordSchema } from "@/lib/password";
 import { revalidatePath } from "next/cache";
 
 const PASSWORD_RESET_TTL_MIN = 30;
@@ -104,15 +105,27 @@ export async function requestPasswordReset(formData: FormData) {
 
 const resetConfirmSchema = z.object({
   token: z.string().min(10),
-  password: z.string().min(8).max(200),
+  password: passwordSchema,
+  // Bug-fix: the form has always rendered a "Confirm new password"
+  // field, but the server never checked it matched. A typo silently
+  // sailed through. Now validated below.
+  confirmPassword: z.string().min(1),
 });
 
 export async function confirmPasswordReset(formData: FormData) {
   const parsed = resetConfirmSchema.safeParse(Object.fromEntries(formData.entries()));
   if (!parsed.success) {
-    redirect(`/reset/invalid?error=${encodeURIComponent("Password must be at least 8 characters.")}`);
+    // Bubble the specific password rule that failed so the user
+    // knows whether it was too short, missing a digit, etc.
+    const msg = parsed.error.issues[0]?.message ?? "Invalid password.";
+    redirect(`/reset/invalid?error=${encodeURIComponent(msg)}`);
   }
-  const { token, password } = parsed.data;
+  const { token, password, confirmPassword } = parsed.data;
+  if (password !== confirmPassword) {
+    // Bounce back to the same form (not /reset/invalid — the token
+    // is still usable) with an error banner.
+    redirect(`/reset/${token}?error=${encodeURIComponent("Passwords do not match.")}`);
+  }
   const row = await db.passwordResetToken.findUnique({
     where: { tokenHash: hashToken(token) },
     include: { user: true },
@@ -248,8 +261,10 @@ async function requireUser() {
 
 const changePasswordSchema = z.object({
   currentPassword: z.string().min(1),
-  newPassword: z.string().min(8).max(200),
-  confirmPassword: z.string().min(8).max(200),
+  newPassword: passwordSchema,
+  // Just "is this non-empty" — the match check below compares to
+  // newPassword directly, no point running the strength rules twice.
+  confirmPassword: z.string().min(1),
 });
 
 /**
@@ -260,7 +275,8 @@ export async function changePassword(backTo: string, formData: FormData) {
   const user = await requireUser();
   const parsed = changePasswordSchema.safeParse(Object.fromEntries(formData.entries()));
   if (!parsed.success) {
-    redirect(`${backTo}?error=${encodeURIComponent("Fill all three password fields (new password 8+ chars).")}`);
+    const msg = parsed.error.issues[0]?.message ?? "Fill all three password fields.";
+    redirect(`${backTo}?error=${encodeURIComponent(msg)}`);
   }
   const { currentPassword, newPassword, confirmPassword } = parsed.data;
   if (newPassword !== confirmPassword) {
