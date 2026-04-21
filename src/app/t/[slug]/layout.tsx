@@ -42,22 +42,27 @@ export default async function TenantLayout({
   const ctx = await requireTenant(slug);
   const { tenant, role, userId } = ctx;
 
-  // Onboarding gate — owners/admins must finish setup first. Others
-  // see a banner explaining the workspace isn't ready yet.
-  //
-  // `checkout-direct` is explicitly whitelisted: marketing purchase
-  // signups (`/signup?plan=pro`) create a tenant and immediately
-  // redirect into `/t/{slug}/checkout-direct` to hand off to Stripe.
-  // Without this bypass the layout would short-circuit that hop and
-  // land the user on onboarding before they've actually paid,
-  // breaking the entire marketing → checkout funnel.
   const path = (await headers()).get("x-pathname") ?? "";
   const inOnboarding = path.includes(`/t/${slug}/onboarding`);
   const inCheckoutDirect = path.includes(`/t/${slug}/checkout-direct`);
+
+  // checkout-direct is a pure server-side Stripe handoff — the page
+  // creates a Checkout Session and 302s to Stripe. Rendering the full
+  // AppShell (sidebar/topbar/banners) + the /t/[slug]/loading skeleton
+  // while we round-trip to Stripe's API causes a visible flash of the
+  // app chrome before the redirect. Skip the shell entirely and let
+  // the page own its own response. Auth is still enforced — this runs
+  // AFTER requireTenant above, and the page itself calls
+  // requirePermission("tenant:billing") before touching Stripe.
+  if (inCheckoutDirect) {
+    return <>{children}</>;
+  }
+
+  // Onboarding gate — owners/admins must finish setup first. Others
+  // see a banner explaining the workspace isn't ready yet.
   if (
     !tenant.onboardingCompletedAt &&
     !inOnboarding &&
-    !inCheckoutDirect &&
     (role === "OWNER" || role === "ADMIN")
   ) {
     redirect(`/t/${slug}/onboarding`);
