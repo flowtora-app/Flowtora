@@ -44,9 +44,22 @@ export default async function TenantLayout({
 
   // Onboarding gate — owners/admins must finish setup first. Others
   // see a banner explaining the workspace isn't ready yet.
+  //
+  // `checkout-direct` is explicitly whitelisted: marketing purchase
+  // signups (`/signup?plan=pro`) create a tenant and immediately
+  // redirect into `/t/{slug}/checkout-direct` to hand off to Stripe.
+  // Without this bypass the layout would short-circuit that hop and
+  // land the user on onboarding before they've actually paid,
+  // breaking the entire marketing → checkout funnel.
   const path = (await headers()).get("x-pathname") ?? "";
   const inOnboarding = path.includes(`/t/${slug}/onboarding`);
-  if (!tenant.onboardingCompletedAt && !inOnboarding && (role === "OWNER" || role === "ADMIN")) {
+  const inCheckoutDirect = path.includes(`/t/${slug}/checkout-direct`);
+  if (
+    !tenant.onboardingCompletedAt &&
+    !inOnboarding &&
+    !inCheckoutDirect &&
+    (role === "OWNER" || role === "ADMIN")
+  ) {
     redirect(`/t/${slug}/onboarding`);
   }
 
