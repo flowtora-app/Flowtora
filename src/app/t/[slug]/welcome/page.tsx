@@ -1,10 +1,23 @@
-import Link from "next/link";
 import { redirect } from "next/navigation";
 import { auth } from "@/auth";
 import { db } from "@/lib/db";
 import { requireTenant } from "@/lib/tenant";
 import { PLAN_LABELS } from "@/lib/billing";
 import type { Plan } from "@prisma/client";
+
+// Links on this page intentionally use plain `<a>` instead of next/link.
+//
+// Welcome shares `/t/[slug]/layout.tsx` with /dashboard and /onboarding,
+// but that layout conditionally returns bare `<>{children}</>` for
+// /welcome and the full `<AppShell>` for every other route. With
+// next/link's soft navigation the App Router preserves the cached
+// layout segment between siblings, and React can't reconcile swapping
+// a Fragment wrapper for an AppShell wrapper — the destination page
+// renders inside the welcome's shell-less layout (no sidebar) until
+// the user refreshes. Hard-loading via `<a>` forces the server to
+// re-render the layout fresh for the new path. Welcome is a one-time
+// transitional moment; a single full navigation is fine and is
+// strictly better than landing on a broken dashboard.
 
 // Post-payment confirmation / "receipt moment".
 //
@@ -169,7 +182,7 @@ export default async function WelcomePage({
         )}
 
         <div className="pt-2">
-          <Link
+          <a
             href={primaryHref}
             className="ts-focus inline-flex h-12 w-full items-center justify-center gap-2 rounded-md text-sm font-semibold transition-colors hover:brightness-110"
             style={{
@@ -179,7 +192,7 @@ export default async function WelcomePage({
           >
             {primaryLabel}
             <span aria-hidden>→</span>
-          </Link>
+          </a>
           {!onboarded && (
             <p
               className="mt-3 text-center text-xs"
@@ -194,13 +207,13 @@ export default async function WelcomePage({
             Not prominent; the primary CTA is onboarding. */}
         {!onboarded && (
           <p className="text-center text-xs">
-            <Link
+            <a
               href={`/t/${slug}/dashboard`}
               className="underline"
               style={{ color: "var(--text-muted)" }}
             >
               Skip for now — go to dashboard
-            </Link>
+            </a>
           </p>
         )}
       </div>
