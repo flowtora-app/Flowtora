@@ -16,7 +16,7 @@ export function Logomark({ size = 32 }: { size?: number }) {
         fontSize: Math.round(size * 0.4),
       }}
     >
-      T
+      F
     </span>
   );
 }
