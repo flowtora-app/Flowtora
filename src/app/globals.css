@@ -477,6 +477,44 @@ a { color: inherit; }
   color: var(--text-default);
 }
 
+/* ── Marketing-surface polish ────────────────────────────────────────────
+ * Visual craft details shared across marketing routes. These live here
+ * (not inline) so a designer can retune the aura / grid / arrow-link
+ * recipe across every hero in one place.
+ * ──────────────────────────────────────────────────────────────────── */
+
+/* Dotted background grid behind the hero — signals "precision tool."
+   Dot size, spacing, and opacity are all tuned to stay in the
+   peripheral-vision register: visible enough to add texture, faint
+   enough never to compete with the H1. The mask fades the pattern
+   out at the bottom so it joins cleanly with the next section. */
+.mkt-hero-grid {
+  background-image:
+    radial-gradient(circle, var(--border-default) 1px, transparent 1px);
+  background-size: 28px 28px;
+  background-position: center top;
+  opacity: 0.25;
+  -webkit-mask-image: linear-gradient(180deg, #000 0%, #000 40%, transparent 100%);
+          mask-image: linear-gradient(180deg, #000 0%, #000 40%, transparent 100%);
+}
+[data-theme="light"] .mkt-hero-grid {
+  /* Light mode: softer dots + less opacity. A white-ish surface shows
+     pattern faster than a dark one does. */
+  background-image:
+    radial-gradient(circle, var(--border-strong) 1px, transparent 1px);
+  opacity: 0.18;
+}
+
+/* Arrow-slide link. Child `.ts-link-arrow__glyph` slides 3px right
+   on parent hover. Used on secondary hero CTAs, "See more →" links,
+   and any inline "learn more" pairs. */
+.ts-link-arrow .ts-link-arrow__glyph {
+  transition: transform var(--duration-fast) var(--ease-out);
+}
+.ts-link-arrow:hover .ts-link-arrow__glyph {
+  transform: translateX(3px);
+}
+
 /* Subtle scrollbar — theme-aware via the neutral border tokens, so
    the light theme gets a lighter thumb automatically. */
 ::-webkit-scrollbar { width: 10px; height: 10px; }

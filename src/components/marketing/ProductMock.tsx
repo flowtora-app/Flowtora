@@ -18,9 +18,12 @@ export function ProductMock({ className }: { className?: string }) {
       className={className}
       style={{
         background: "var(--surface-1)",
-        border: "1px solid var(--border-subtle)",
-        borderRadius: "14px",
-        boxShadow: "0 24px 60px rgba(0, 0, 0, 0.35)",
+        // Inset ring + layered shadow reads as "floating window" in
+        // both themes. The inner 1px highlight fakes a top-edge
+        // window-light without needing theme-specific overrides.
+        borderRadius: "var(--radius-2xl)",
+        boxShadow:
+          "0 0 0 1px var(--border-subtle), var(--shadow-lg), inset 0 1px 0 0 color-mix(in oklab, var(--text-default) 8%, transparent)",
         overflow: "hidden",
       }}
     >

@@ -11,6 +11,7 @@ import { PricingTable } from "@/components/marketing/PricingTable";
 import { ComparisonMatrix, type ComparisonRow } from "@/components/marketing/ComparisonMatrix";
 import { FAQ } from "@/components/marketing/FAQ";
 import { ProductMock } from "@/components/marketing/ProductMock";
+import { ScreenshotFrame } from "@/components/marketing/ScreenshotFrame";
 import { StickyDemoCTA } from "@/components/marketing/StickyDemoCTA";
 import { LANDING_TIERS } from "@/lib/marketing/pricing";
 
@@ -315,19 +316,31 @@ export default function LandingPage() {
   return (
     <>
       <Hero
-        eyebrow={<>✨ Built for teams who make real things</>}
-        title={<>Run your shop end-to-end, from lead to last coat.</>}
+        layout="split"
+        eyebrow={<>Built for sign &amp; print shops</>}
+        title={
+          <>
+            Run your shop like a modern software team.
+          </>
+        }
         description={
           <>
-            Flowtora unifies quoting, proofing, production, installs, and
-            invoicing in one system built for sign shops, print shops, and
-            custom-fab studios.
+            Quotes, proofs, production, installs, and invoicing — one platform
+            your whole crew actually uses. No more chasing emails, spreadsheets,
+            or whiteboards.
           </>
         }
         primary={{ label: "Start free 14-day trial", href: "/signup" }}
         secondary={{ label: "Book a demo", href: "/book-demo" }}
-        footnote="No credit card required · Full platform access · Cancel anytime"
-        visual={<ProductMock className="mx-auto mt-4 max-w-4xl" />}
+        footnote="No credit card required · Set up in under 5 minutes"
+        visual={
+          // ProductMock ships its own window chrome, so we use the
+          // ScreenshotFrame's chromeless mode here — it contributes
+          // the accent aura without doubling up the frame.
+          <ScreenshotFrame chromeless>
+            <ProductMock className="w-full" />
+          </ScreenshotFrame>
+        }
       />
 
       <LogoCloud

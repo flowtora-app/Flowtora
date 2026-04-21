@@ -5,13 +5,14 @@ import Link from "next/link";
 import { usePathname } from "next/navigation";
 import { cn } from "@/lib/cn";
 import { Logomark } from "@/components/brand/BrandMark";
+import { MarketingThemeToggle } from "./MarketingThemeToggle";
 
 // MarketingHeader — sticky top bar for public-facing pages.
 //
 // Client component because we (a) highlight the active nav link via
-// usePathname and (b) toggle a mobile menu. The nav is small enough
-// that we render every link at every breakpoint; on mobile the row
-// just wraps vertically behind a disclosure button.
+// usePathname, (b) toggle a mobile menu, (c) watch scroll position
+// so the header border appears only after the hero scrolls under it
+// (letting the hero feel airy), and (d) host the theme toggle.
 
 const LINKS = [
   { href: "/features", label: "Features" },
@@ -31,19 +32,37 @@ const DASHBOARD_HREF = "/select-tenant";
 export function MarketingHeader({ authed = false }: { authed?: boolean }) {
   const pathname = usePathname();
   const [mobileOpen, setMobileOpen] = React.useState(false);
+  const [scrolled, setScrolled] = React.useState(false);
+
+  // Show the header's underline border only after the user has
+  // scrolled into the page. At rest over the hero, the header reads
+  // as a floating strip; once the hero clips under, it settles
+  // against a visible divider. Trigger at 40px — enough to avoid
+  // flickering on small scroll jitter, small enough to feel prompt.
+  React.useEffect(() => {
+    const onScroll = () => setScrolled(window.scrollY > 40);
+    onScroll();
+    window.addEventListener("scroll", onScroll, { passive: true });
+    return () => window.removeEventListener("scroll", onScroll);
+  }, []);
 
   return (
     <header
-      className="sticky top-0 z-30 backdrop-blur"
+      className="sticky top-0 z-30 backdrop-blur transition-[border-color,background-color] duration-200"
       style={{
-        background: "color-mix(in oklab, var(--surface-0) 85%, transparent)",
-        borderBottom: "1px solid var(--border-subtle)",
+        background: scrolled
+          ? "color-mix(in oklab, var(--surface-0) 82%, transparent)"
+          : "color-mix(in oklab, var(--surface-0) 65%, transparent)",
+        borderBottom: `1px solid ${scrolled ? "var(--border-subtle)" : "transparent"}`,
       }}
     >
       <div className="mx-auto flex h-16 w-full max-w-6xl items-center justify-between gap-6 px-6">
         <Link href="/" className="flex items-center gap-2">
           <Logomark />
-          <span className="text-base font-semibold tracking-tight" style={{ color: "var(--text-default)" }}>
+          <span
+            className="text-base font-semibold tracking-tight"
+            style={{ color: "var(--text-default)" }}
+          >
             Flowtora
           </span>
         </Link>
@@ -57,7 +76,7 @@ export function MarketingHeader({ authed = false }: { authed?: boolean }) {
                 key={link.href}
                 href={link.href}
                 className={cn(
-                  "rounded-md px-3 py-1.5 text-sm transition-colors",
+                  "relative rounded-md px-3 py-1.5 text-sm transition-colors",
                 )}
                 style={{
                   color: active ? "var(--text-default)" : "var(--text-muted)",
@@ -65,33 +84,46 @@ export function MarketingHeader({ authed = false }: { authed?: boolean }) {
                 }}
               >
                 {link.label}
+                {/* Active-state underline — 2px accent bar centered
+                    under the link. Replaces the previous font-weight-only
+                    signal with something legible at a glance. */}
+                {active && (
+                  <span
+                    aria-hidden
+                    className="absolute inset-x-3 -bottom-[1px] h-[2px] rounded-full"
+                    style={{ background: "var(--accent-primary)" }}
+                  />
+                )}
               </Link>
             );
           })}
         </nav>
 
-        {/* Auth cluster */}
+        {/* Auth cluster + theme toggle */}
         <div className="hidden items-center gap-2 md:flex">
           {authed ? (
-            <Link
-              href={DASHBOARD_HREF}
-              className="inline-flex h-9 items-center rounded-md px-4 text-sm font-medium transition-colors hover:brightness-110"
-              style={{ background: "var(--accent-primary)", color: "var(--accent-fg)" }}
-            >
-              Go to dashboard
-            </Link>
+            <>
+              <Link
+                href={DASHBOARD_HREF}
+                className="inline-flex h-9 items-center rounded-md px-4 text-sm font-medium transition-colors hover:brightness-110"
+                style={{ background: "var(--accent-primary)", color: "var(--accent-fg)" }}
+              >
+                Go to dashboard
+              </Link>
+              <MarketingThemeToggle />
+            </>
           ) : (
             <>
               <Link
                 href="/book-demo"
-                className="rounded-md px-3 py-1.5 text-sm font-medium"
+                className="rounded-md px-3 py-1.5 text-sm font-medium transition-colors"
                 style={{ color: "var(--text-muted)" }}
               >
                 Book a demo
               </Link>
               <Link
                 href="/login"
-                className="rounded-md px-3 py-1.5 text-sm font-medium"
+                className="rounded-md px-3 py-1.5 text-sm font-medium transition-colors"
                 style={{ color: "var(--text-muted)" }}
               >
                 Sign in
@@ -103,40 +135,60 @@ export function MarketingHeader({ authed = false }: { authed?: boolean }) {
               >
                 Start free trial
               </Link>
+              <MarketingThemeToggle />
             </>
           )}
         </div>
 
-        {/* Mobile disclosure */}
-        <button
-          type="button"
-          className="inline-flex h-9 w-9 items-center justify-center rounded-md md:hidden"
-          style={{ color: "var(--text-muted)", border: "1px solid var(--border-subtle)" }}
-          onClick={() => setMobileOpen((o) => !o)}
-          aria-label="Toggle menu"
-          aria-expanded={mobileOpen}
-        >
-          <svg width="16" height="16" viewBox="0 0 16 16" fill="none" stroke="currentColor" strokeWidth="1.75" strokeLinecap="round">
-            {mobileOpen ? (
-              <>
-                <path d="M3 3l10 10" />
-                <path d="M3 13L13 3" />
-              </>
-            ) : (
-              <>
-                <path d="M2.5 4.5h11" />
-                <path d="M2.5 8h11" />
-                <path d="M2.5 11.5h11" />
-              </>
-            )}
-          </svg>
-        </button>
+        {/* Mobile: theme toggle + disclosure. Keep the toggle visible
+            on mobile so the feature is discoverable before the user
+            opens the menu. */}
+        <div className="flex items-center gap-2 md:hidden">
+          <MarketingThemeToggle />
+          <button
+            type="button"
+            className="inline-flex h-9 w-9 items-center justify-center rounded-md"
+            style={{
+              color: "var(--text-muted)",
+              border: "1px solid var(--border-subtle)",
+            }}
+            onClick={() => setMobileOpen((o) => !o)}
+            aria-label="Toggle menu"
+            aria-expanded={mobileOpen}
+          >
+            <svg
+              width="16"
+              height="16"
+              viewBox="0 0 16 16"
+              fill="none"
+              stroke="currentColor"
+              strokeWidth="1.75"
+              strokeLinecap="round"
+            >
+              {mobileOpen ? (
+                <>
+                  <path d="M3 3l10 10" />
+                  <path d="M3 13L13 3" />
+                </>
+              ) : (
+                <>
+                  <path d="M2.5 4.5h11" />
+                  <path d="M2.5 8h11" />
+                  <path d="M2.5 11.5h11" />
+                </>
+              )}
+            </svg>
+          </button>
+        </div>
       </div>
 
       {mobileOpen && (
         <div
           className="md:hidden"
-          style={{ background: "var(--surface-1)", borderTop: "1px solid var(--border-subtle)" }}
+          style={{
+            background: "var(--surface-1)",
+            borderTop: "1px solid var(--border-subtle)",
+          }}
         >
           <div className="mx-auto flex max-w-6xl flex-col gap-1 px-6 py-4">
             {LINKS.map((link) => (
@@ -145,7 +197,12 @@ export function MarketingHeader({ authed = false }: { authed?: boolean }) {
                 href={link.href}
                 onClick={() => setMobileOpen(false)}
                 className="rounded-md px-3 py-2 text-sm"
-                style={{ color: pathname === link.href ? "var(--text-default)" : "var(--text-muted)" }}
+                style={{
+                  color:
+                    pathname === link.href
+                      ? "var(--text-default)"
+                      : "var(--text-muted)",
+                }}
               >
                 {link.label}
               </Link>
@@ -198,4 +255,3 @@ export function MarketingHeader({ authed = false }: { authed?: boolean }) {
     </header>
   );
 }
-
