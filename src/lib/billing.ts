@@ -1,4 +1,4 @@
-import { stripe, PRICE_IDS } from "@/lib/stripe";
+import { stripe, PRICE_IDS, type BillingCycle } from "@/lib/stripe";
 import { db } from "@/lib/db";
 import type { Plan, Tenant } from "@prisma/client";
 
@@ -29,14 +29,33 @@ export async function ensureStripeCustomer(tenant: Tenant, ownerEmail: string): 
   return customer.id;
 }
 
+// Resolve the right Stripe price ID for a plan + cycle. Falls back to
+// monthly when annual isn't configured so deploys missing the annual
+// env vars don't hard-fail the checkout flow — they just bill monthly
+// instead of annually until the ops env is updated.
+function resolvePriceId(
+  plan: Exclude<Plan, "ENTERPRISE">,
+  cycle: BillingCycle,
+): string | null {
+  const table = PRICE_IDS[plan];
+  if (!table) return null;
+  const preferred = cycle === "annual" ? table.annual : table.monthly;
+  if (preferred) return preferred;
+  // Fallback: annual unconfigured → try monthly.
+  if (cycle === "annual" && table.monthly) return table.monthly;
+  return null;
+}
+
 export async function createCheckoutSession(opts: {
   tenant: Tenant;
   ownerEmail: string;
   plan: Exclude<Plan, "ENTERPRISE">;
+  cycle?: BillingCycle;
   returnUrl: string;
 }): Promise<string | null> {
   if (!stripe) return null;
-  const priceId = PRICE_IDS[opts.plan];
+  const cycle = opts.cycle ?? "monthly";
+  const priceId = resolvePriceId(opts.plan, cycle);
   if (!priceId) return null;
 
   const customerId = await ensureStripeCustomer(opts.tenant, opts.ownerEmail);
@@ -49,7 +68,7 @@ export async function createCheckoutSession(opts: {
     success_url: `${opts.returnUrl}?checkout=success`,
     cancel_url: `${opts.returnUrl}?checkout=canceled`,
     subscription_data: {
-      metadata: { tenantId: opts.tenant.id, plan: opts.plan },
+      metadata: { tenantId: opts.tenant.id, plan: opts.plan, cycle },
     },
   });
   return session.url ?? null;

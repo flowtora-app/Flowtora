@@ -32,6 +32,11 @@ const signupSchema = z.object({
   password: z.string().min(8).max(200),
   shopName: z.string().min(1).max(120),
   slug: z.string().min(2).max(40),
+  // Optional purchase-intent fields. When present, the new tenant is
+  // routed through /t/{slug}/checkout-direct after sign-in so Stripe
+  // checkout opens immediately instead of the trial onboarding.
+  plan: z.enum(["starter", "growth", "pro"]).optional(),
+  cycle: z.enum(["monthly", "annual"]).optional(),
 });
 
 export async function signupAction(formData: FormData) {
@@ -40,7 +45,7 @@ export async function signupAction(formData: FormData) {
   if (!parsed.success) {
     redirect(`/signup?error=${encodeURIComponent(parsed.error.issues[0]?.message ?? "Invalid input")}`);
   }
-  const { name, email, password, shopName } = parsed.data;
+  const { name, email, password, shopName, plan, cycle } = parsed.data;
   const slug = slugify(parsed.data.slug);
 
   if (isReservedSlug(slug) || slug.length < 2) {
@@ -106,15 +111,25 @@ export async function signupAction(formData: FormData) {
     // Swallow — verification can always be re-issued from the workspace banner.
   }
 
-  // A brand-new tenant has `onboardingCompletedAt = null`, so the tenant
-  // layout would just bounce /dashboard → /onboarding anyway. Skipping
-  // the hop avoids an intermittent RSC-flush issue where the chained
-  // redirect after `signIn` lands on a blank view until the user
-  // manually refreshes.
+  // Purchase-intent fork: the user clicked a tier CTA on /pricing (or
+  // the home pricing preview) and wants to subscribe now. Route them
+  // into the checkout-direct page which creates a Stripe session and
+  // 302s to it. Trial users fall through to the onboarding wizard.
+  //
+  // A brand-new tenant has `onboardingCompletedAt = null`, so for the
+  // trial path the tenant layout would bounce /dashboard → /onboarding
+  // anyway. Skipping the hop avoids an intermittent RSC-flush issue
+  // where the chained redirect after `signIn` lands on a blank view
+  // until the user manually refreshes.
+  const resolvedCycle = cycle ?? "annual";
+  const redirectTo = plan
+    ? `/t/${tenant.slug}/checkout-direct?plan=${plan.toUpperCase()}&cycle=${resolvedCycle}`
+    : `/t/${tenant.slug}/onboarding`;
+
   await signIn("credentials", {
     email,
     password,
-    redirectTo: `/t/${tenant.slug}/onboarding`,
+    redirectTo,
   });
 }
 

@@ -10,6 +10,15 @@ import type { PricingTier } from "@/components/marketing/PricingTable";
 //
 // `LANDING_TIERS` — compact version shown on /. `FULL_TIERS` — deep
 // version shown on /pricing with every bullet expanded.
+//
+// Tier CTAs: clicking a price card drops the user into a PURCHASE
+// flow, not the trial. The href carries `?plan=…` and the
+// PricingTable appends the active billing cycle at render time, so
+// the full URL the user hits looks like
+// `/signup?plan=pro&cycle=annual`. After signup the auth action
+// redirects through /t/{slug}/checkout-direct → Stripe. The
+// "Start free trial" CTA lives in the header / hero / final CTA
+// blocks for visitors who'd rather evaluate without committing.
 
 const sharedStarter = [
   "Up to 3 user seats",
@@ -45,7 +54,7 @@ export const LANDING_TIERS: PricingTier[] = [
     name: "Starter",
     description: "For single-location shops getting organized.",
     price: { monthly: 79, annual: 63 },
-    cta: { label: "Start free trial", href: "/signup" },
+    cta: { label: "Get Starter", href: "/signup?plan=starter" },
     features: sharedStarter.map((label) => ({ label, included: true })),
   },
   {
@@ -53,7 +62,7 @@ export const LANDING_TIERS: PricingTier[] = [
     description: "For growing shops who need production and install flow.",
     price: { monthly: 199, annual: 159 },
     highlight: true,
-    cta: { label: "Start free trial", href: "/signup" },
+    cta: { label: "Get Pro", href: "/signup?plan=pro" },
     features: sharedPro.map((label) => ({ label, included: true })),
   },
   {
@@ -70,7 +79,7 @@ export const FULL_TIERS: PricingTier[] = [
     name: "Starter",
     description: "For single-location shops getting organized.",
     price: { monthly: 79, annual: 63 },
-    cta: { label: "Start free trial", href: "/signup" },
+    cta: { label: "Get Starter", href: "/signup?plan=starter" },
     features: [
       { label: "3 user seats included", included: true },
       { label: "Unlimited customers", included: true },
@@ -90,7 +99,7 @@ export const FULL_TIERS: PricingTier[] = [
     description: "For growing shops who need production and install flow.",
     price: { monthly: 199, annual: 159 },
     highlight: true,
-    cta: { label: "Start free trial", href: "/signup" },
+    cta: { label: "Get Pro", href: "/signup?plan=pro" },
     features: [
       { label: "15 user seats included", included: true, note: "extra seats $12/mo" },
       { label: "Unlimited customers", included: true },

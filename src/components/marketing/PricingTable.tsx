@@ -32,6 +32,16 @@ export interface PricingTableProps {
   billing?: "monthly" | "annual";
 }
 
+// Append the active billing cycle to CTAs that start a purchase flow
+// so the signup action can read it and route straight to Stripe
+// checkout for that plan + cycle. Enterprise / external links (like
+// /contact) are passed through untouched.
+function withCycle(href: string, billing: "monthly" | "annual"): string {
+  if (!href.startsWith("/signup")) return href;
+  const sep = href.includes("?") ? "&" : "?";
+  return `${href}${sep}cycle=${billing}`;
+}
+
 export function PricingTable({ tiers, billing = "monthly" }: PricingTableProps) {
   return (
     <div className="grid grid-cols-1 gap-6 md:grid-cols-3">
@@ -113,7 +123,7 @@ export function PricingTable({ tiers, billing = "monthly" }: PricingTableProps) 
           </div>
 
           <Link
-            href={tier.cta.href}
+            href={withCycle(tier.cta.href, billing)}
             className="mt-6 inline-flex h-10 items-center justify-center rounded-md text-sm font-medium transition-colors hover:brightness-110"
             style={
               tier.highlight
