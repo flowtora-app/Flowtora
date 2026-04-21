@@ -2,37 +2,41 @@ import type { Metadata } from "next";
 import Link from "next/link";
 import { Hero } from "@/components/marketing/Hero";
 import { Section } from "@/components/marketing/Section";
-import { FeatureGrid } from "@/components/marketing/FeatureGrid";
 import { LogoCloud } from "@/components/marketing/LogoCloud";
-import { StatRow } from "@/components/marketing/StatRow";
 import { Testimonial } from "@/components/marketing/Testimonial";
 import { CTA } from "@/components/marketing/CTA";
 import { PricingTable } from "@/components/marketing/PricingTable";
-import { ComparisonMatrix, type ComparisonRow } from "@/components/marketing/ComparisonMatrix";
 import { FAQ } from "@/components/marketing/FAQ";
 import { ProductMock } from "@/components/marketing/ProductMock";
 import { ScreenshotFrame } from "@/components/marketing/ScreenshotFrame";
+import { ProductOrbit } from "@/components/marketing/ProductOrbit";
+import { FeatureShowcase } from "@/components/marketing/FeatureShowcase";
+import { FeatureMock } from "@/components/marketing/FeatureMock";
+import { IndustryPath } from "@/components/marketing/IndustryPath";
+import { KpiStrip } from "@/components/marketing/KpiStrip";
 import { StickyDemoCTA } from "@/components/marketing/StickyDemoCTA";
 import { LANDING_TIERS } from "@/lib/marketing/pricing";
 
-// Phase 5 — public landing page (upgraded).
+// Landing page (Phase 2 upgrade) — the premium 14-section narrative.
 //
-// Narrative:
-//   1. Hero — positioning + two CTAs + product mock
-//   2. Logo cloud — trust signal
-//   3. Product overview — feature grid
-//   4. Workflow — 4-step how-it-works
-//   5. Industry split
-//   6. Comparison — "vs. the usual alternatives"
-//   7. Stats
-//   8. Testimonial
-//   9. Pricing preview
-//  10. FAQ — top buyer objections
-//  11. Final CTA
+//    1. Hero (split layout)
+//    2. Logo cloud
+//    3. Product orbit — the whole product at a glance
+//    4. How it works (4 steps)
+//    5. Feature spotlight #1 — Quoting & proofs (visual right)
+//    6. Feature spotlight #2 — Production & installs (visual left, muted)
+//    7. Feature spotlight #3 — Invoicing & portal (visual right)
+//    8. Industry split (deep IndustryPath cards)
+//    9. Outcomes (KpiStrip)
+//   10. Testimonial
+//   11. Pricing preview
+//   12. FAQ
+//   13. Final CTA
+//   14. Footer (rendered by marketing layout)
 //
-// Every section answers a question a buyer has already asked in the
-// scroll above it. Sticky "Book a demo" CTA trails after the user
-// crosses the hero (see StickyDemoCTA).
+// Rationale: each section answers a question the previous one leaves
+// open. Orbit shows breadth; spotlights show depth; KPIs prove it;
+// testimonial validates it; pricing monetizes it; FAQ closes it.
 
 export const metadata: Metadata = {
   title: "Flowtora — The operating system for sign and print shops",
@@ -47,57 +51,12 @@ export const metadata: Metadata = {
   },
 };
 
-const FEATURES = [
-  {
-    icon: "✏️",
-    title: "Quoting that wins",
-    description:
-      "Build estimates customers actually understand. Sq-ft and linear-ft pricing, options, and one-click approval.",
-    href: "/features",
-  },
-  {
-    icon: "🎨",
-    title: "Proof & approve",
-    description:
-      "Send proofs, capture sign-offs, keep a versioned history of every round. No more chasing email threads.",
-    href: "/features",
-  },
-  {
-    icon: "🏭",
-    title: "Shop-floor production",
-    description:
-      "Department boards, checklist-driven jobs, time tracking. See where every job sits, end of day.",
-    href: "/features",
-  },
-  {
-    icon: "🚚",
-    title: "Install & field",
-    description:
-      "Route the crew, photograph the job, capture the signature — all from a phone.",
-    href: "/features",
-  },
-  {
-    icon: "💳",
-    title: "Deposits → paid in full",
-    description:
-      "Invoice from the same record, accept cards and ACH, reconcile against the order in a click.",
-    href: "/features",
-  },
-  {
-    icon: "📊",
-    title: "Operational reports",
-    description:
-      "Revenue by location, WIP aging, rep leaderboards, margin snapshots. Built for the shop owner who hates spreadsheets.",
-    href: "/features",
-  },
-];
-
 const HOW_IT_WORKS = [
   {
     step: "01",
     title: "Capture the lead",
     description:
-      "Web inquiries, walk-ins, phone calls — every opportunity lands in one pipeline, tagged to the salesperson who owns it.",
+      "Web inquiries, walk-ins, phone calls — every opportunity lands in one pipeline, tagged to the rep who owns it.",
   },
   {
     step: "02",
@@ -119,83 +78,6 @@ const HOW_IT_WORKS = [
   },
 ];
 
-// "Flowtora vs. the three common alternatives." We name named-alternatives
-// generically — a lawyer-safe, honest framing that still lands the point.
-const COMPARISON_ROWS: ComparisonRow[] = [
-  {
-    capability: "One record from quote to install",
-    subcopy: "Customer, quote, proof, order, invoice — same thread, every view.",
-    cells: [
-      { mark: "yes", note: "Every object linked by design." },
-      { mark: "no", note: "Silos + CSV exports." },
-      { mark: "partial", note: "Customer + quote, but not production." },
-      { mark: "no", note: "Re-keyed into accounting." },
-    ],
-  },
-  {
-    capability: "Built-in proofing & versioned approvals",
-    subcopy: "Send proof, capture signature, keep every round.",
-    cells: [
-      { mark: "yes", note: "First-class, audit-trail included." },
-      { mark: "no", note: "Email threads + shared drives." },
-      { mark: "partial", note: "Add-on, limited history." },
-      { mark: "no", note: "Not in scope." },
-    ],
-  },
-  {
-    capability: "Shop-floor production board",
-    subcopy: "Department queues, checklist-driven jobs, time tracked per station.",
-    cells: [
-      { mark: "yes", note: "Per-department routing out of the box." },
-      { mark: "no", note: "Whiteboard in the back." },
-      { mark: "partial", note: "Kanban, but no station logic." },
-      { mark: "no", note: "No production concept." },
-    ],
-  },
-  {
-    capability: "Install field app (phone-first)",
-    subcopy: "Crew executes checklist, captures GPS-tagged photos, gets sig.",
-    cells: [
-      { mark: "yes", note: "Same account, same record." },
-      { mark: "no", note: "Text messages + camera roll." },
-      { mark: "no", note: "Add a second app." },
-      { mark: "no", note: "Not in scope." },
-    ],
-  },
-  {
-    capability: "Deposits, invoices, and payments",
-    subcopy: "Card, ACH, reconciled against the same order.",
-    cells: [
-      { mark: "yes", note: "One-click from order → invoice → paid." },
-      { mark: "partial", note: "Invoice tool exists; order linkage is manual." },
-      { mark: "partial", note: "Separate billing module." },
-      { mark: "yes", note: "Purpose-built for accounting." },
-    ],
-  },
-  {
-    capability: "Multi-location, multi-franchise ready",
-    subcopy: "Per-branch scoping, shared catalogs, per-branch reporting.",
-    cells: [
-      { mark: "yes", note: "Designed in, not bolted on." },
-      { mark: "no", note: "One sheet per shop." },
-      { mark: "partial", note: "Workspaces, no branch scoping." },
-      { mark: "partial", note: "Subsidiary bookkeeping, no ops." },
-    ],
-  },
-  {
-    capability: "Honest, no-hidden-tier pricing",
-    subcopy: "Every plan, every feature, visible on the pricing page.",
-    cells: [
-      { mark: "yes", note: "Same for year 1 and year 3." },
-      { mark: "yes", note: "Free." },
-      { mark: "partial", note: "Enterprise = 'call us'." },
-      { mark: "partial", note: "Tier-gated essentials." },
-    ],
-  },
-];
-
-// Top objections we hear during sales calls, answered once here so the
-// rep's first hour with us is spent on their shop, not our pricing.
 const LANDING_FAQ = [
   {
     q: "How is this different from a CRM plus QuickBooks plus a Google Sheet?",
@@ -208,13 +90,6 @@ const LANDING_FAQ = [
           install, and invoice on one record — so anyone in the shop
           can answer &ldquo;what&apos;s happening with this job?&rdquo;
           in ten seconds.
-        </p>
-        <p className="mt-2">
-          Full head-to-head:{" "}
-          <a href="#compare" className="underline" style={{ color: "var(--accent-primary)" }}>
-            see the comparison
-          </a>
-          .
         </p>
       </>
     ),
@@ -275,25 +150,8 @@ const LANDING_FAQ = [
           <a href="/pricing" className="underline" style={{ color: "var(--accent-primary)" }}>
             full plan comparison
           </a>
-          . If you run more than one shop, annual billing gets a 15%
-          discount; multi-location franchises get a franchise plan —
-          talk to us.
-        </p>
-      </>
-    ),
-  },
-  {
-    q: "What if I need something you don't have?",
-    a: (
-      <>
-        <p>
-          Tell us. We publish a public roadmap and a{" "}
-          <a href="/changelog" className="underline" style={{ color: "var(--accent-primary)" }}>
-            weekly changelog
-          </a>
-          . Things customers actually need — not hypothetical enterprise
-          RFPs — move to the top of the queue. The core team works
-          directly with accounts on pilot features.
+          . Annual billing gets 20% off; multi-location franchises get
+          a franchise plan — talk to us.
         </p>
       </>
     ),
@@ -315,14 +173,11 @@ const LANDING_FAQ = [
 export default function LandingPage() {
   return (
     <>
+      {/* 1. HERO */}
       <Hero
         layout="split"
         eyebrow={<>Built for sign &amp; print shops</>}
-        title={
-          <>
-            Run your shop like a modern software team.
-          </>
-        }
+        title={<>Run your shop like a modern software team.</>}
         description={
           <>
             Quotes, proofs, production, installs, and invoicing — one platform
@@ -334,29 +189,61 @@ export default function LandingPage() {
         secondary={{ label: "Book a demo", href: "/book-demo" }}
         footnote="No credit card required · Set up in under 5 minutes"
         visual={
-          // ProductMock ships its own window chrome, so we use the
-          // ScreenshotFrame's chromeless mode here — it contributes
-          // the accent aura without doubling up the frame.
           <ScreenshotFrame chromeless>
             <ProductMock className="w-full" />
           </ScreenshotFrame>
         }
       />
 
+      {/* 2. LOGO CLOUD */}
       <LogoCloud
         label="Built with input from shops running"
         logos={["Flatbed UV", "Routers", "Vinyl", "Laser", "CNC", "Install crews"]}
       />
 
+      {/* 3. PRODUCT ORBIT */}
       <Section
-        eyebrow="What you get"
-        title="A purpose-built platform, not a CRM glued to a billing tool."
-        description="Every screen is designed for the way sign and print shops actually work — not adapted from a SaaS stack for agencies or ecommerce."
+        eyebrow="The whole product"
+        title="Every object in your shop, linked by design."
+        description="The customer, the quote, the proof, the order, the install, the invoice — same thread, every view. Click anything and see where it came from and what happens next."
         align="center"
       >
-        <FeatureGrid features={FEATURES} columns={3} />
+        <ProductOrbit
+          visual={
+            <ScreenshotFrame caption="flowtora.app/t/signshop">
+              <ProductMock className="w-full" />
+            </ScreenshotFrame>
+          }
+          chips={[
+            {
+              anchor: "tl",
+              tone: "accent",
+              label: "CRM",
+              detail: "Every customer, every touch, one timeline.",
+            },
+            {
+              anchor: "tr",
+              tone: "info",
+              label: "Proofs",
+              detail: "Versioned rounds, one-click sign-off.",
+            },
+            {
+              anchor: "bl",
+              tone: "warning",
+              label: "Production",
+              detail: "Shop-floor board by department.",
+            },
+            {
+              anchor: "br",
+              tone: "success",
+              label: "Invoices",
+              detail: "Deposits, cards, ACH — reconciled.",
+            },
+          ]}
+        />
       </Section>
 
+      {/* 4. HOW IT WORKS */}
       <Section
         muted
         eyebrow="The shop workflow"
@@ -369,7 +256,10 @@ export default function LandingPage() {
             <li
               key={step.step}
               className="rounded-xl p-6"
-              style={{ background: "var(--surface-2)", border: "1px solid var(--border-subtle)" }}
+              style={{
+                background: "var(--surface-2)",
+                border: "1px solid var(--border-subtle)",
+              }}
             >
               <div
                 className="text-xs font-semibold tracking-widest"
@@ -388,46 +278,159 @@ export default function LandingPage() {
         </ol>
       </Section>
 
-      <Section eyebrow="Built for your shop" title="One platform, tuned for how you make things." align="center">
+      {/* 5. FEATURE SPOTLIGHT — QUOTING & PROOFS */}
+      <FeatureShowcase
+        eyebrow="Quoting & proofs"
+        title="Send quotes your customers actually understand."
+        description="Sq-ft, linear-ft, sheet, and job pricing with options baked in. Capture proof rounds and e-signatures inside the same record — no more hunting through email threads."
+        bullets={[
+          {
+            title: "Price books, not calculators",
+            detail:
+              "Materials, labor, and finishes priced once. Drop them into any quote — markup, margin, and tax just work.",
+          },
+          {
+            title: "Versioned proofs with audit trail",
+            detail:
+              "Every revision saved. Customer click-signs. Your rep doesn't re-send the last PDF anymore.",
+          },
+          {
+            title: "One-click approval → order",
+            detail:
+              "Approved quote becomes a production-ready order without a rekey.",
+          },
+        ]}
+        cta={{ label: "See quoting in depth", href: "/features" }}
+        visual={<FeatureMock kind="quote" className="w-full" />}
+      />
+
+      {/* 6. FEATURE SPOTLIGHT — PRODUCTION & INSTALLS */}
+      <FeatureShowcase
+        muted
+        reverse
+        eyebrow="Production & installs"
+        title="A shop-floor board your whole crew will actually open."
+        description="Department queues for routers, printers, and finishing. Phone-first field app for the install crew. Everyone sees what's theirs, when it's due, and what's blocking them."
+        bullets={[
+          {
+            title: "Department-aware routing",
+            detail:
+              "Jobs flow through print → finish → QC based on what they need, not a generic kanban.",
+          },
+          {
+            title: "Install crews in the field",
+            detail:
+              "Checklist-driven install records, GPS-tagged photos, customer signature — from a phone.",
+          },
+          {
+            title: "WIP aging, one glance",
+            detail:
+              "Old jobs float to the top. You catch stalled work before the customer calls to ask.",
+          },
+        ]}
+        cta={{ label: "See production in depth", href: "/features" }}
+        visual={<FeatureMock kind="production" className="w-full" />}
+      />
+
+      {/* 7. FEATURE SPOTLIGHT — INVOICING & PORTAL */}
+      <FeatureShowcase
+        eyebrow="Invoicing & portal"
+        title="Deposits to paid-in-full, on the same record."
+        description="Accept cards and ACH, reconcile against the order in a click, and give customers a branded portal to see status and pay balances without another login."
+        bullets={[
+          {
+            title: "Deposit + balance out of the box",
+            detail:
+              "Send the deposit invoice when the quote is approved. Bill the balance when install completes.",
+          },
+          {
+            title: "Reconciliation without spreadsheets",
+            detail:
+              "Every payment is linked to the order. Your AR page shows what's owed — and who to call.",
+          },
+          {
+            title: "Tenant-branded customer portal",
+            detail:
+              "Your logo. Your subdomain. Customers see their quotes, proofs, and invoices in one place.",
+          },
+        ]}
+        cta={{ label: "See invoicing in depth", href: "/features" }}
+        visual={<FeatureMock kind="invoice" className="w-full" />}
+      />
+
+      {/* 8. INDUSTRY SPLIT */}
+      <Section
+        eyebrow="Built for your shop"
+        title="Two industries. One platform. Tuned for how you make things."
+        description="The shape of a sign-shop job is not the shape of a print-shop job. We built for both, natively — not as a theme."
+        align="center"
+      >
         <div className="grid grid-cols-1 gap-6 md:grid-cols-2">
-          <IndustryCard
-            title="For sign shops"
-            description="Sq-ft pricing, illumination and mounting options, install routing, and shop-floor boards for routers, printers, and finishers."
+          <IndustryPath
+            tone="primary"
+            eyebrow="For sign shops"
+            title="Signage that ships."
+            lede="Site surveys, permit tracking, install routing, and shop-floor boards for routers, printers, and finishers. Plus the install field app your crew will actually use."
+            bullets={[
+              { label: "Sq-ft & linear-ft pricing" },
+              { label: "Permit & city-fee tracking" },
+              { label: "Install routing + field app" },
+              { label: "Mounting, illumination, wraps" },
+            ]}
+            icon={<span aria-hidden>⚡</span>}
             href="/for-sign-shops"
           />
-          <IndustryCard
-            title="For print shops"
-            description="Linear-ft, sheet, and job-based pricing; bleed-aware proofs; production queues for flatbed, wide-format, and finishing."
+          <IndustryPath
+            tone="secondary"
+            eyebrow="For print shops"
+            title="Print runs, made simple."
+            lede="SKUs, bulk-run pricing, bleed-aware proofs, and production queues for flatbed, wide-format, and finishing. Reorders become one-click, not one-quote."
+            bullets={[
+              { label: "SKU & reorder templates" },
+              { label: "Bulk pricing tiers" },
+              { label: "Bleed-aware proofs" },
+              { label: "Finishing + multi-shipment" },
+            ]}
+            icon={<span aria-hidden>◩</span>}
             href="/for-print-shops"
           />
         </div>
       </Section>
 
+      {/* 9. OUTCOMES (KPI STRIP) */}
       <Section
-        id="compare"
         muted
-        eyebrow="vs. the usual alternatives"
-        title="One system vs. the patchwork you're running today."
-        description="Most shops we talk to are piecing together 3–4 tools. Here's what that actually costs you — and what changes when the record stops splitting."
+        eyebrow="Outcomes, not features"
+        title="What changes when your shop runs on one record."
         align="center"
       >
-        <ComparisonMatrix
-          competitors={["Spreadsheets + email", "Generic CRM", "Accounting-only"]}
-          rows={COMPARISON_ROWS}
-        />
-      </Section>
-
-      <Section padding="sm">
-        <StatRow
-          stats={[
-            { value: "4×", label: "faster quote-to-approval" },
-            { value: "31%", label: "higher deposit capture" },
-            { value: "0", label: "double-entry between apps" },
-            { value: "1", label: "customer record, from lead to last dollar" },
+        <KpiStrip
+          kpis={[
+            {
+              value: "4×",
+              label: "Faster quote-to-approval",
+              caption: "vs. email + spreadsheet workflow",
+            },
+            {
+              value: "+31%",
+              label: "Deposit capture rate",
+              caption: "from one-click e-signatures",
+            },
+            {
+              value: "−22d",
+              label: "AR aging",
+              caption: "balance billed on install, not next month",
+            },
+            {
+              value: "0",
+              label: "Double-entry between apps",
+              caption: "quote, order, invoice — same record",
+            },
           ]}
         />
       </Section>
 
+      {/* 10. TESTIMONIAL */}
       <Section align="center">
         <div className="mx-auto max-w-3xl">
           <Testimonial
@@ -439,6 +442,7 @@ export default function LandingPage() {
         </div>
       </Section>
 
+      {/* 11. PRICING PREVIEW */}
       <Section
         muted
         eyebrow="Pricing"
@@ -458,6 +462,7 @@ export default function LandingPage() {
         </div>
       </Section>
 
+      {/* 12. FAQ */}
       <Section
         eyebrow="Common questions"
         title="Things buyers ask us, answered up front."
@@ -468,6 +473,7 @@ export default function LandingPage() {
         <FAQ items={LANDING_FAQ} />
       </Section>
 
+      {/* 13. FINAL CTA */}
       <CTA
         eyebrow="Ready when you are"
         title="Spin up your shop in 15 minutes."
@@ -479,31 +485,5 @@ export default function LandingPage() {
       {/* Sticky CTA after first scroll. Skipped on /book-demo and /contact. */}
       <StickyDemoCTA />
     </>
-  );
-}
-
-function IndustryCard({ title, description, href }: { title: string; description: string; href: string }) {
-  return (
-    <Link
-      href={href}
-      className="group block rounded-xl p-8 transition-colors hover:brightness-110"
-      style={{
-        background: "var(--surface-1)",
-        border: "1px solid var(--border-subtle)",
-      }}
-    >
-      <div className="text-xl font-semibold" style={{ color: "var(--text-default)" }}>
-        {title}
-      </div>
-      <p className="mt-2 text-sm leading-relaxed" style={{ color: "var(--text-muted)" }}>
-        {description}
-      </p>
-      <span
-        className="mt-4 inline-flex items-center gap-1 text-sm font-medium"
-        style={{ color: "var(--accent-primary)" }}
-      >
-        Explore →
-      </span>
-    </Link>
   );
 }
