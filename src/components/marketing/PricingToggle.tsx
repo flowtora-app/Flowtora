@@ -41,7 +41,7 @@ export function PricingToggle({ tiers }: { tiers: PricingTier[] }) {
                 color: "var(--success-fg)",
               }}
             >
-              Save ~17%
+              Save 20%
             </span>
           </BillingButton>
         </div>

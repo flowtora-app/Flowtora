@@ -35,18 +35,23 @@ const sharedEnt = [
   "Priority support SLA",
 ];
 
+// Annual pricing = 20% off monthly (marketing-page rule; keep the
+// `annual` field in lockstep with `monthly * 0.8` rounded to the
+// nearest dollar). Changed from 17% to 20% in Phase 4 to line up
+// with the headline claim on /pricing.
+
 export const LANDING_TIERS: PricingTier[] = [
   {
     name: "Starter",
     description: "For single-location shops getting organized.",
-    price: { monthly: 79, annual: 65 },
+    price: { monthly: 79, annual: 63 },
     cta: { label: "Start free trial", href: "/signup" },
     features: sharedStarter.map((label) => ({ label, included: true })),
   },
   {
     name: "Pro",
     description: "For growing shops who need production and install flow.",
-    price: { monthly: 199, annual: 165 },
+    price: { monthly: 199, annual: 159 },
     highlight: true,
     cta: { label: "Start free trial", href: "/signup" },
     features: sharedPro.map((label) => ({ label, included: true })),
@@ -64,7 +69,7 @@ export const FULL_TIERS: PricingTier[] = [
   {
     name: "Starter",
     description: "For single-location shops getting organized.",
-    price: { monthly: 79, annual: 65 },
+    price: { monthly: 79, annual: 63 },
     cta: { label: "Start free trial", href: "/signup" },
     features: [
       { label: "3 user seats included", included: true },
@@ -83,7 +88,7 @@ export const FULL_TIERS: PricingTier[] = [
   {
     name: "Pro",
     description: "For growing shops who need production and install flow.",
-    price: { monthly: 199, annual: 165 },
+    price: { monthly: 199, annual: 159 },
     highlight: true,
     cta: { label: "Start free trial", href: "/signup" },
     features: [

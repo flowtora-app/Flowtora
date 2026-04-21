@@ -65,22 +65,49 @@ export function PricingTable({ tiers, billing = "monthly" }: PricingTableProps) 
 
           <div className="mt-6">
             {tier.price === "custom" ? (
-              <div className="text-3xl font-semibold" style={{ color: "var(--text-default)" }}>
+              <div className="text-4xl font-semibold tracking-tight" style={{ color: "var(--text-default)" }}>
                 Custom
               </div>
             ) : (
-              <div className="flex items-baseline gap-1">
-                <span className="text-4xl font-semibold tracking-tight" style={{ color: "var(--text-default)" }}>
+              <div className="flex flex-wrap items-baseline gap-2">
+                <span
+                  className="text-4xl font-semibold tracking-tight md:text-5xl"
+                  style={{
+                    color: "var(--text-default)",
+                    letterSpacing: "-0.02em",
+                    // Small horizontal fade on flip — Tailwind's
+                    // transition-all handles color/size; we just nudge
+                    // opacity so the numeric swap feels deliberate.
+                    transition: "opacity 180ms ease",
+                  }}
+                  key={`${tier.name}-${billing}`}
+                >
                   ${billing === "annual" && tier.price.annual ? tier.price.annual : tier.price.monthly}
                 </span>
                 <span className="text-sm" style={{ color: "var(--text-muted)" }}>
                   / month
                 </span>
+                {billing === "annual" && tier.price.annual && (
+                  <span
+                    className="ml-1 rounded-full px-2 py-0.5 text-[10px] font-semibold uppercase tracking-wider"
+                    style={{
+                      background: "var(--success-surface)",
+                      color: "var(--success-fg)",
+                    }}
+                  >
+                    –{Math.round((1 - tier.price.annual / tier.price.monthly) * 100)}%
+                  </span>
+                )}
               </div>
             )}
             {tier.price !== "custom" && billing === "annual" && tier.price.annual && (
               <div className="mt-1 text-xs" style={{ color: "var(--text-muted)" }}>
-                Billed annually · save {Math.round((1 - tier.price.annual / tier.price.monthly) * 100)}%
+                Billed annually · ${tier.price.annual * 12}/yr
+              </div>
+            )}
+            {tier.price !== "custom" && billing === "monthly" && (
+              <div className="mt-1 text-xs" style={{ color: "var(--text-muted)" }}>
+                Billed monthly · no commitment
               </div>
             )}
           </div>
