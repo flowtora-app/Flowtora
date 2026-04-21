@@ -18,7 +18,11 @@ import * as React from "react";
 export interface ComparisonRow {
   capability: string;
   subcopy?: string;
-  cells: [CellValue, CellValue, CellValue, CellValue]; // Flowtora, ColA, ColB, ColC
+  // First cell is always Flowtora; remaining cells map positionally to
+  // the `competitors` header array. We don't enforce a fixed length at
+  // the type level so callers can pass 2 or 3 competitors without
+  // fighting the compiler.
+  cells: CellValue[];
 }
 
 export type CellValue =
@@ -27,7 +31,8 @@ export type CellValue =
   | { mark: "no"; note?: string };
 
 export interface ComparisonMatrixProps {
-  competitors: [string, string, string]; // column headers for the 3 alternatives
+  /** 2 or 3 competitor column headers. Flowtora is always the first column. */
+  competitors: string[];
   rows: ComparisonRow[];
 }
 
@@ -119,15 +124,11 @@ export function ComparisonMatrix({ competitors, rows }: ComparisonMatrixProps) {
                 >
                   <Cell value={row.cells[0]} emphasis />
                 </td>
-                <td className="px-6 py-5 align-top">
-                  <Cell value={row.cells[1]} />
-                </td>
-                <td className="px-6 py-5 align-top">
-                  <Cell value={row.cells[2]} />
-                </td>
-                <td className="px-6 py-5 align-top">
-                  <Cell value={row.cells[3]} />
-                </td>
+                {competitors.map((_, ci) => (
+                  <td key={ci} className="px-6 py-5 align-top">
+                    <Cell value={row.cells[ci + 1]} />
+                  </td>
+                ))}
               </tr>
             ))}
           </tbody>
