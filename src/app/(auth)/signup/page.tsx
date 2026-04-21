@@ -166,9 +166,7 @@ export default async function SignupPage({
             color: "var(--accent-fg)",
           }}
         >
-          {isPurchase
-            ? `Create account & continue to checkout`
-            : "Start free trial"}
+          {isPurchase ? "Create account" : "Start free trial"}
         </button>
 
         {isPurchase ? (
