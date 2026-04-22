@@ -82,6 +82,15 @@ export async function createCheckoutSession(opts: {
   const customerId = await ensureStripeCustomer(opts.tenant, opts.ownerEmail);
   if (!customerId) return null;
 
+  // Look up the PricingPlan by slug so the webhook can pin the
+  // tenant to an exact PricingPlan row via metadata — cheaper than
+  // re-querying by price ID and survives Price ID rotation (Stripe
+  // Prices are immutable, so every price change = new ID).
+  const pricingPlan = await db.pricingPlan.findUnique({
+    where: { slug: opts.plan.toLowerCase() },
+    select: { id: true, slug: true },
+  });
+
   // Build success/cancel URLs that preserve any query params callers
   // may have baked into returnUrl (e.g. /welcome?plan=PRO&cycle=annual).
   // A naive `${returnUrl}?checkout=success` would blow those away or
@@ -91,14 +100,29 @@ export async function createCheckoutSession(opts: {
   const cancelUrl = new URL(opts.returnUrl);
   cancelUrl.searchParams.set("checkout", "canceled");
 
+  const subscriptionMetadata: Record<string, string> = {
+    tenantId: opts.tenant.id,
+    plan: opts.plan,
+    cycle,
+  };
+  if (pricingPlan) {
+    subscriptionMetadata.pricingPlanId = pricingPlan.id;
+    subscriptionMetadata.pricingPlanSlug = pricingPlan.slug;
+  }
+
   const session = await stripe.checkout.sessions.create({
     mode: "subscription",
     customer: customerId,
     line_items: [{ price: priceId, quantity: 1 }],
     success_url: successUrl.toString(),
     cancel_url: cancelUrl.toString(),
+    // Mirror the same metadata on the Checkout Session itself so the
+    // checkout.session.completed webhook can update the tenant
+    // immediately, before the separate customer.subscription.created
+    // event arrives.
+    metadata: { ...subscriptionMetadata },
     subscription_data: {
-      metadata: { tenantId: opts.tenant.id, plan: opts.plan, cycle },
+      metadata: subscriptionMetadata,
     },
   });
   return session.url ?? null;

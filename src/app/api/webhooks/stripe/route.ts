@@ -25,6 +25,61 @@ export async function POST(req: Request) {
   }
 
   switch (event.type) {
+    // Fires the moment Stripe Checkout finishes — seconds faster than
+    // customer.subscription.created. The subscription is already
+    // created (mode: "subscription") by the time this event fires, so
+    // we expand it and run the same tenant-update path. Gives us
+    // instant plan reflection when the user lands on /welcome →
+    // /settings/billing without waiting for the sub.created webhook.
+    case "checkout.session.completed": {
+      const session = event.data.object as Stripe.Checkout.Session;
+      if (session.mode !== "subscription" || !session.subscription) break;
+
+      const subId =
+        typeof session.subscription === "string"
+          ? session.subscription
+          : session.subscription.id;
+      const sub = await stripe.subscriptions.retrieve(subId);
+
+      const tenantId =
+        (session.metadata?.tenantId as string | undefined) ??
+        (sub.metadata?.tenantId as string | undefined);
+      const tenant = tenantId
+        ? await db.tenant.findUnique({ where: { id: tenantId } })
+        : await db.tenant.findFirst({
+            where: { stripeCustomerId: session.customer as string },
+          });
+
+      if (tenant) {
+        const status = mapStripeStatus(sub.status);
+        const resolved = await resolvePlanFromSubscription(sub);
+        await db.tenant.update({
+          where: { id: tenant.id },
+          data: {
+            stripeSubscriptionId: sub.id,
+            stripeCustomerId: (session.customer as string) ?? tenant.stripeCustomerId,
+            status,
+            ...(resolved?.plan ? { plan: resolved.plan } : {}),
+            ...(resolved?.pricingPlanId
+              ? { pricingPlanId: resolved.pricingPlanId }
+              : {}),
+          },
+        });
+        await logAudit({
+          tenantId: tenant.id,
+          action: "stripe.checkout.session.completed",
+          metadata: {
+            subId: sub.id,
+            status,
+            plan: resolved?.plan ?? null,
+            pricingPlanId: resolved?.pricingPlanId ?? null,
+            resolvedVia: resolved?.source ?? "unresolved",
+          },
+        });
+      }
+      break;
+    }
+
     case "customer.subscription.created":
     case "customer.subscription.updated": {
       const sub = event.data.object as Stripe.Subscription;
@@ -123,7 +178,27 @@ async function resolvePlanFromSubscription(
 > {
   const priceId = sub.items?.data?.[0]?.price?.id;
 
-  // 1. DB lookup — newest source of truth.
+  // 0. Explicit pricingPlanId metadata stamped by createCheckoutSession.
+  //    This is the most precise pointer — survives Stripe Price ID
+  //    rotation and removes any ambiguity when multiple plans happen
+  //    to share a price ID (shouldn't happen but defense in depth).
+  const metaPricingPlanId = sub.metadata?.pricingPlanId;
+  if (metaPricingPlanId) {
+    const row = await db.pricingPlan.findUnique({
+      where: { id: metaPricingPlanId },
+      select: { id: true, slug: true },
+    });
+    if (row) {
+      return {
+        plan: mapSlugToLegacyEnum(row.slug),
+        pricingPlanId: row.id,
+        source: "db",
+      };
+    }
+  }
+
+  // 1. DB lookup by Stripe price ID. Matches on stripePriceMonthly /
+  //    stripePriceAnnual — the canonical linkage after a Sync to Stripe.
   if (priceId) {
     const row = await db.pricingPlan.findFirst({
       where: {
@@ -143,7 +218,7 @@ async function resolvePlanFromSubscription(
     }
   }
 
-  // 2. Subscription metadata.
+  // 2. Subscription metadata — legacy enum stamped by pre-M6 checkouts.
   const fromMeta = (sub.metadata?.plan ?? "").toUpperCase();
   if (fromMeta === "STARTER" || fromMeta === "GROWTH" || fromMeta === "PRO") {
     return {
