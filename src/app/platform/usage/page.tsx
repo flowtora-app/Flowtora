@@ -1,7 +1,7 @@
 import Link from "next/link";
 import { db } from "@/lib/db";
 import { requirePlatformStaff } from "@/lib/platform";
-import { PLAN_ORDER } from "@/lib/platform-pricing";
+import { getAllPlans } from "@/lib/plans";
 
 export const dynamic = "force-dynamic";
 
@@ -56,6 +56,9 @@ export default async function PlatformUsagePage() {
     topEngagedTenants,
     // Onboarding completion
     onboardingDone,
+    // Plan catalog — DB-backed (M6). Drop drafts/archived but keep HIDDEN
+    // so legacy tiers (e.g. Growth) with paying tenants still show.
+    allPlans,
   ] = await Promise.all([
     db.tenant.count(),
     db.tenant.count({ where: { status: { in: ["ACTIVE", "TRIAL"] } } }),
@@ -125,7 +128,13 @@ export default async function PlatformUsagePage() {
     }),
 
     db.tenant.count({ where: { onboardingCompletedAt: { not: null } } }),
+
+    getAllPlans(),
   ]);
+
+  const planList = allPlans.filter(
+    (p) => p.status !== "DRAFT" && p.status !== "ARCHIVED",
+  );
 
   const modules: ModuleStat[] = [
     { label: "Customers",     tenantsUsing: customerTenants.length, recordsAll: customerAll, records30d: customerStats30 },
@@ -215,21 +224,27 @@ export default async function PlatformUsagePage() {
         <div
           className="mt-3 grid grid-cols-2 gap-4 md:grid-cols-4"
         >
-          {PLAN_ORDER.map((plan) => (
-            <div
-              key={plan}
-              className="rounded-lg px-4 py-4"
-              style={{ background: "var(--surface-1)", border: "1px solid var(--border-subtle)" }}
-            >
-              <div className="text-xs" style={{ color: "var(--text-muted)" }}>{plan}</div>
-              <div className="mt-1 text-2xl font-semibold">
-                {activeMembersByPlan.get(plan) ?? 0}
+          {planList.map((plan) => {
+            // The membership query groups by tenant.plan (legacy enum);
+            // our slugs are lowercase mirrors of the enum per seed, so
+            // slug.toUpperCase() matches the map key.
+            const enumKey = plan.slug.toUpperCase();
+            return (
+              <div
+                key={plan.id}
+                className="rounded-lg px-4 py-4"
+                style={{ background: "var(--surface-1)", border: "1px solid var(--border-subtle)" }}
+              >
+                <div className="text-xs" style={{ color: "var(--text-muted)" }}>{plan.name}</div>
+                <div className="mt-1 text-2xl font-semibold">
+                  {activeMembersByPlan.get(enumKey) ?? 0}
+                </div>
+                <div className="mt-0.5 text-xs" style={{ color: "var(--text-faint)" }}>
+                  distinct active members
+                </div>
               </div>
-              <div className="mt-0.5 text-xs" style={{ color: "var(--text-faint)" }}>
-                distinct active members
-              </div>
-            </div>
-          ))}
+            );
+          })}
         </div>
       </section>
 

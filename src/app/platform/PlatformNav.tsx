@@ -43,7 +43,8 @@ const GROUPS: NavGroup[] = [
       { href: "/platform/tenants", label: "Tenants", icon: "Building" },
       { href: "/platform/usage",   label: "Usage",   icon: "Activity" },
       { href: "/platform/leads",   label: "Leads",   icon: "Target" },
-      { href: "/platform/plans",   label: "Plans",   icon: "Package" },
+      { href: "/platform/plans",    label: "Plans",    icon: "Package" },
+      { href: "/platform/features", label: "Features", icon: "Sparkles" },
     ],
   },
   {

@@ -6,7 +6,7 @@ import { PricingToggle } from "@/components/marketing/PricingToggle";
 import { PricingCompareTable, type CompareCategory } from "@/components/marketing/PricingCompareTable";
 import { FAQ } from "@/components/marketing/FAQ";
 import { CTA } from "@/components/marketing/CTA";
-import { FULL_TIERS } from "@/lib/marketing/pricing";
+import { getPublishedPlans, planToPricingTier, formatPlanTagline } from "@/lib/plans";
 
 // Pricing page (Phase 4 upgrade).
 //
@@ -286,7 +286,30 @@ const PRICING_FAQ: { q: string; a: React.ReactNode }[] = [
   },
 ];
 
-export default function PricingPage() {
+export default async function PricingPage() {
+  // DB-backed since M2. Filter to plans flagged for the pricing page
+  // and expand to the full-bullet shape (shows excluded features too
+  // so buyers can cross-reference tiers at a glance).
+  const plans = await getPublishedPlans();
+  const visible = plans.filter((p) => p.showOnPricing);
+  const fullTiers = visible.map((p) => planToPricingTier(p, { mode: "full" }));
+
+  // Compare-table header cells. We look up by slug rather than taking
+  // the first N plans so the row-order expectation of COMPARE_CATEGORIES
+  // (Starter → Pro → Enterprise) stays explicit; if a plan is missing
+  // we fall back to a placeholder tagline so the table still renders.
+  const planBySlug = new Map(visible.map((p) => [p.slug, p] as const));
+  const compareTiers = (["starter", "pro", "enterprise"] as const).map(
+    (slug) => {
+      const plan = planBySlug.get(slug);
+      return {
+        name: plan?.name ?? slug[0].toUpperCase() + slug.slice(1),
+        tagline: plan ? formatPlanTagline(plan) : "—",
+        ...(plan?.highlight ? { highlight: true as const } : {}),
+      };
+    },
+  );
+
   return (
     <>
       <Hero
@@ -304,7 +327,7 @@ export default function PricingPage() {
       />
 
       <Section padding="sm">
-        <PricingToggle tiers={FULL_TIERS} />
+        <PricingToggle tiers={fullTiers} />
       </Section>
 
       <Section
@@ -315,11 +338,7 @@ export default function PricingPage() {
         align="center"
       >
         <PricingCompareTable
-          tiers={[
-            { name: "Starter", tagline: "$79 /mo" },
-            { name: "Pro", tagline: "$199 /mo", highlight: true },
-            { name: "Enterprise", tagline: "Custom" },
-          ]}
+          tiers={compareTiers}
           categories={COMPARE_CATEGORIES}
         />
       </Section>

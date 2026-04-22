@@ -17,6 +17,10 @@ import {
   deleteFeatureFlag,
   resetTenantSandbox,
 } from "@/app/actions/platform";
+import {
+  upsertPriceOverride,
+  deletePriceOverride,
+} from "@/app/actions/plan-overrides";
 import { formatMoney } from "@/lib/format";
 import { resolveAllEntitlements } from "@/lib/entitlements";
 import { computeTenantHealth, environmentColor, healthColor } from "@/lib/tenant-health";
@@ -121,7 +125,8 @@ export default async function PlatformTenantDetailPage({
   // Per-tenant entitlement matrix — Slice C. Pulls resolved state for
   // every FeatureKey (per-tenant → global → plan) plus the raw tenant-
   // scoped override rows so we have an id for the "Clear" button.
-  const [entitlements, tenantFlagRows, openTickets] = await Promise.all([
+  const [entitlements, tenantFlagRows, openTickets, priceOverrides, pricingPlans] =
+    await Promise.all([
     resolveAllEntitlements(tenant.id, tenant.plan),
     db.featureFlag.findMany({
       where: { tenantId: tenant.id },
@@ -138,6 +143,29 @@ export default async function PlatformTenantDetailPage({
         id: true, subject: true, status: true, priority: true, category: true,
         updatedAt: true, assignedTo: true,
       },
+    }),
+    // M5 — price overrides for this tenant + list of plans we can
+    // create new overrides against. Both tiny queries, run in the
+    // same Promise.all to keep the page waterfall flat.
+    db.planPriceOverride.findMany({
+      where: { tenantId: tenant.id },
+      orderBy: { createdAt: "desc" },
+      select: {
+        id: true,
+        planId: true,
+        priceMonthly: true,
+        priceAnnual: true,
+        currency: true,
+        note: true,
+        expiresAt: true,
+        createdAt: true,
+        plan: { select: { slug: true, name: true } },
+      },
+    }),
+    db.pricingPlan.findMany({
+      where: { status: { in: ["PUBLISHED", "HIDDEN"] } },
+      orderBy: [{ sortOrder: "asc" }],
+      select: { id: true, slug: true, name: true, priceMonthly: true, priceAnnual: true },
     }),
   ]);
   const tenantFlagByKey = new Map(tenantFlagRows.map((f) => [f.key, f]));
@@ -476,6 +504,163 @@ export default async function PlatformTenantDetailPage({
           </form>
         </Card>
       </div>
+
+      {/* ── M5 — Price overrides ─────────────────────────────────────
+           Grandfathered pricing and custom negotiated deals. Overrides
+           take priority over the plan's sticker price when billing
+           computes this tenant's next invoice (plumbing lands in M6). ── */}
+      <Card>
+        <CardHeader
+          title="Price overrides"
+          description="Custom pricing that beats the plan's sticker price. One override per plan max. Add more as legacy pricing commitments or Enterprise deals demand."
+          right={
+            priceOverrides.length === 0 ? (
+              <span className="text-xs" style={{ color: "var(--text-faint)" }}>
+                Uses plan sticker prices
+              </span>
+            ) : undefined
+          }
+        />
+
+        {priceOverrides.length > 0 && (
+          <div className="overflow-x-auto" style={{ borderBottom: "1px solid var(--border-subtle)" }}>
+            <table className="w-full text-sm">
+              <thead style={{ color: "var(--text-muted)" }}>
+                <tr className="text-left">
+                  <th className="px-5 py-3 font-normal">Plan</th>
+                  <th className="px-5 py-3 font-normal text-right">Monthly</th>
+                  <th className="px-5 py-3 font-normal text-right">Annual</th>
+                  <th className="px-5 py-3 font-normal">Note</th>
+                  <th className="px-5 py-3 font-normal">Expires</th>
+                  <th className="px-5 py-3 font-normal"></th>
+                </tr>
+              </thead>
+              <tbody>
+                {priceOverrides.map((o) => {
+                  const expired =
+                    o.expiresAt != null && o.expiresAt.getTime() < Date.now();
+                  return (
+                    <tr key={o.id} style={{ borderTop: "1px solid var(--border-subtle)" }}>
+                      <td className="px-5 py-3">
+                        <div className="font-medium">{o.plan.name}</div>
+                        <div className="mt-0.5 font-mono text-[11px]" style={{ color: "var(--text-faint)" }}>
+                          {o.plan.slug}
+                        </div>
+                      </td>
+                      <td className="px-5 py-3 text-right">
+                        {o.priceMonthly != null
+                          ? formatMoney(Number(o.priceMonthly), o.currency)
+                          : <span style={{ color: "var(--text-faint)" }}>—</span>}
+                      </td>
+                      <td className="px-5 py-3 text-right">
+                        {o.priceAnnual != null
+                          ? formatMoney(Number(o.priceAnnual), o.currency)
+                          : <span style={{ color: "var(--text-faint)" }}>—</span>}
+                      </td>
+                      <td className="px-5 py-3 text-xs" style={{ color: "var(--muted)" }}>
+                        {o.note ?? <span style={{ color: "var(--text-faint)" }}>—</span>}
+                      </td>
+                      <td className="px-5 py-3 text-xs">
+                        {o.expiresAt == null ? (
+                          <span style={{ color: "var(--text-faint)" }}>Never</span>
+                        ) : (
+                          <span
+                            style={{
+                              color: expired ? "var(--danger-fg)" : "var(--muted)",
+                            }}
+                          >
+                            {o.expiresAt.toISOString().slice(0, 10)}
+                            {expired && " (expired)"}
+                          </span>
+                        )}
+                      </td>
+                      <td className="px-5 py-3 text-right">
+                        {ctx.canWrite && (
+                          <form action={deletePriceOverride.bind(null, tenant.id, o.id)}>
+                            <button
+                              type="submit"
+                              className="rounded-md px-2 py-1 text-xs font-medium"
+                              style={{
+                                background: "var(--danger-surface)",
+                                color: "var(--danger-fg)",
+                                border: "1px solid var(--danger-border)",
+                              }}
+                            >
+                              Remove
+                            </button>
+                          </form>
+                        )}
+                      </td>
+                    </tr>
+                  );
+                })}
+              </tbody>
+            </table>
+          </div>
+        )}
+
+        {ctx.canWrite && pricingPlans.length > 0 && (
+          <form action={upsertPriceOverride.bind(null, tenant.id)} className="space-y-4 px-5 py-5">
+            <div className="grid gap-3 md:grid-cols-3">
+              <SelectField
+                label="Plan"
+                name="planId"
+                defaultValue={pricingPlans[0]?.id ?? ""}
+                options={pricingPlans.map((p) => ({
+                  value: p.id,
+                  label: `${p.name} (${p.slug})`,
+                }))}
+              />
+              <Field
+                label="Override monthly"
+                name="priceMonthly"
+                placeholder="e.g. 49"
+                hint="Blank = use plan's annual price only."
+              />
+              <Field
+                label="Override annual"
+                name="priceAnnual"
+                placeholder="e.g. 490"
+                hint="Blank = use plan's monthly price only."
+              />
+            </div>
+            <div className="grid gap-3 md:grid-cols-3">
+              <Field
+                label="Currency"
+                name="currency"
+                defaultValue="USD"
+                maxLength={3}
+                hint="ISO code."
+              />
+              <Field
+                label="Expires at"
+                name="expiresAt"
+                type="date"
+                hint="Blank = permanent."
+              />
+              <Field
+                label="Note"
+                name="note"
+                placeholder="e.g. 2024 launch deal"
+                hint="Internal only. 400 chars max."
+                maxLength={400}
+              />
+            </div>
+            <div className="flex items-center justify-between">
+              <p className="text-xs" style={{ color: "var(--text-faint)" }}>
+                Saving on a plan that already has an override replaces it in place.
+              </p>
+              <Button type="submit">Save override</Button>
+            </div>
+          </form>
+        )}
+
+        {!ctx.canWrite && priceOverrides.length === 0 && (
+          <p className="px-5 py-8 text-center text-sm" style={{ color: "var(--text-muted)" }}>
+            No overrides. Admins can add one here.
+          </p>
+        )}
+      </Card>
 
       {/* ── Phase 1: environment + lifecycle · Phase 19: cohort ── */}
       <div className="grid gap-4 md:grid-cols-2">

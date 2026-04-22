@@ -1,17 +1,21 @@
 import Link from "next/link";
-import type { Plan, TenantStatus } from "@prisma/client";
+import type { TenantStatus } from "@prisma/client";
 import { db } from "@/lib/db";
 import { requirePlatformStaff } from "@/lib/platform";
 import { TrendChart } from "@/components/charts/TrendChart";
 import { chooseBucketGranularity, bucketKey, buildTrendSeries } from "@/lib/reports";
-import { PLAN_PRICE_USD, PLAN_ORDER } from "@/lib/platform-pricing";
+import { getAllPlans } from "@/lib/plans";
 
 export const dynamic = "force-dynamic";
 
 // Phase B — Revenue, subscriptions & billing oversight.
 //
 // All numbers here are derived from the live DB:
-//   MRR         = sum over active tenants of PLAN_PRICE_USD[plan]
+//   MRR         = sum over active tenants of PricingPlan.priceMonthly
+//                 (was PLAN_PRICE_USD before M6 retired the hardcoded
+//                 map; prices now come from getAllPlans() so editing
+//                 them in the admin propagates here on the next tag
+//                 invalidation)
 //   ARR         = MRR * 12
 //   Revenue     = sum of Payment.amount received in the period, excluding
 //                 voided rows (Payment.voidedAt != null)
@@ -42,6 +46,7 @@ export default async function PlatformRevenuePage() {
     newPaid30,
     newPaid60,
     trialEndingSoon,
+    allPlans,
   ] = await Promise.all([
     db.tenant.groupBy({
       by: ["plan"],
@@ -100,7 +105,16 @@ export default async function PlatformRevenuePage() {
       take: 10,
       select: { id: true, name: true, trialEndsAt: true, plan: true },
     }),
+
+    // DB plan catalog (M6). Filter out drafts/archived — HIDDEN tiers
+    // (e.g. legacy Growth) still have paying tenants and belong in
+    // the MRR breakdown.
+    getAllPlans(),
   ]);
+
+  const planList = allPlans.filter(
+    (p) => p.status !== "DRAFT" && p.status !== "ARCHIVED",
+  );
 
   // Hydrate top-revenue tenant names.
   const topTenantIds = topRevenueRows.map((r) => r.tenantId);
@@ -112,10 +126,16 @@ export default async function PlatformRevenuePage() {
     : [];
   const topTenantById = new Map(topTenants.map((t) => [t.id, t]));
 
-  // MRR / ARR
+  // MRR / ARR — index plan prices by slug.toUpperCase() so we can look
+  // them up against the activeByPlan groupBy (which is still keyed on
+  // the legacy Plan enum). Slugs mirror the enum per seed convention.
+  const priceByEnum = new Map<string, number>();
+  for (const p of planList) {
+    priceByEnum.set(p.slug.toUpperCase(), p.priceMonthly ?? 0);
+  }
   let mrr = 0;
   for (const row of activeByPlan) {
-    mrr += (PLAN_PRICE_USD[row.plan as Plan] ?? 0) * row._count._all;
+    mrr += (priceByEnum.get(row.plan) ?? 0) * row._count._all;
   }
   const arr = mrr * 12;
 
@@ -220,16 +240,31 @@ export default async function PlatformRevenuePage() {
               </tr>
             </thead>
             <tbody>
-              {PLAN_ORDER.map((plan) => {
-                const count = activeByPlan.find((r) => r.plan === plan)?._count._all ?? 0;
-                const price = PLAN_PRICE_USD[plan];
+              {planList.map((plan) => {
+                const enumKey = plan.slug.toUpperCase();
+                const count =
+                  activeByPlan.find((r) => r.plan === enumKey)?._count._all ?? 0;
+                const price = plan.priceMonthly ?? 0;
                 const planMrr = count * price;
                 const share = mrr > 0 ? Math.round((planMrr / mrr) * 100) : 0;
                 return (
-                  <tr key={plan} style={{ borderTop: "1px solid var(--border-subtle)" }}>
-                    <Td className="font-medium">{plan}</Td>
+                  <tr key={plan.id} style={{ borderTop: "1px solid var(--border-subtle)" }}>
+                    <Td className="font-medium">
+                      {plan.name}
+                      {plan.isContactSales && (
+                        <span
+                          className="ml-2 rounded-md px-1.5 py-0.5 text-[10px] font-semibold"
+                          style={{
+                            background: "var(--surface-2)",
+                            color: "var(--text-muted)",
+                          }}
+                        >
+                          Contact
+                        </span>
+                      )}
+                    </Td>
                     <Td>{count}</Td>
-                    <Td muted>{fmtUsd(price)}</Td>
+                    <Td muted>{plan.isContactSales ? "—" : fmtUsd(price)}</Td>
                     <Td>{fmtUsd(planMrr)}</Td>
                     <Td>
                       <ShareBar pct={share} />

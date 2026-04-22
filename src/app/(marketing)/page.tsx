@@ -15,7 +15,7 @@ import { FeatureMock } from "@/components/marketing/FeatureMock";
 import { IndustryPath } from "@/components/marketing/IndustryPath";
 import { KpiStrip } from "@/components/marketing/KpiStrip";
 import { StickyDemoCTA } from "@/components/marketing/StickyDemoCTA";
-import { LANDING_TIERS } from "@/lib/marketing/pricing";
+import { getPublishedPlans, planToPricingTier } from "@/lib/plans";
 
 // Landing page (Phase 2 upgrade) — the premium 14-section narrative.
 //
@@ -170,7 +170,15 @@ const LANDING_FAQ = [
   },
 ];
 
-export default function LandingPage() {
+export default async function LandingPage() {
+  // Landing pricing teaser — DB-backed since M2. Filter to plans flagged
+  // `showOnLanding` (keeps legacy Growth out) and render a compact
+  // bullet list via the landing-mode adapter.
+  const plans = await getPublishedPlans();
+  const landingTiers = plans
+    .filter((p) => p.showOnLanding)
+    .map((p) => planToPricingTier(p, { mode: "landing", maxFeatures: 5 }));
+
   return (
     <>
       {/* 1. HERO */}
@@ -450,7 +458,7 @@ export default function LandingPage() {
         description="Start on the free trial. No credit card required. Upgrade when you're ready."
         align="center"
       >
-        <PricingTable tiers={LANDING_TIERS} />
+        <PricingTable tiers={landingTiers} />
         <div className="mt-10 text-center">
           <Link
             href="/pricing"
