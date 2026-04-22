@@ -514,16 +514,19 @@ export default async function BillingSettings({
           />
           <div className="grid grid-cols-1 gap-4 p-5 md:grid-cols-3">
             {publishedPlans
-              .filter((p) => p.showOnSignup && !p.isContactSales)
+              .filter((p) => p.showOnSignup)
               .map((p) => {
                 const isCurrent =
                   (freshTenant?.pricingPlanId &&
                     freshTenant.pricingPlanId === p.id) ||
                   p.slug.toUpperCase() === (t.plan as string).toUpperCase();
+                // A plan is self-serve checkoutable if it has a price set
+                // and isn't flagged as contact-sales. Enterprise with a
+                // price counts; Enterprise with isContactSales=true does
+                // not (falls through to the "Contact sales" CTA).
                 const canCheckout =
-                  p.slug === "starter" ||
-                  p.slug === "growth" ||
-                  p.slug === "pro";
+                  !p.isContactSales &&
+                  (p.priceMonthly != null || p.priceAnnual != null);
                 return (
                   <div
                     key={p.id}
@@ -598,14 +601,20 @@ export default async function BillingSettings({
                         </Button>
                       </form>
                     ) : (
-                      <Button
-                        type="button"
-                        variant="secondary"
-                        disabled
-                        className="mt-4 w-full opacity-60"
+                      // Only remaining case: contact-sales plan with no
+                      // self-serve price. Link to /contact instead of
+                      // dead-ending with a disabled button.
+                      <a
+                        href={p.ctaHref ?? "/contact"}
+                        className="mt-4 inline-flex h-10 w-full items-center justify-center rounded-md text-sm font-medium transition-colors hover:brightness-110"
+                        style={{
+                          background: "var(--surface-2)",
+                          color: "var(--text-default)",
+                          border: "1px solid var(--border-default)",
+                        }}
                       >
-                        Contact sales
-                      </Button>
+                        {p.ctaLabel ?? "Contact sales"}
+                      </a>
                     )}
                   </div>
                 );

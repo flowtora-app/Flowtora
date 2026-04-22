@@ -13,20 +13,55 @@ import type { BillingCycle } from "@/lib/stripe";
 import type Stripe from "stripe";
 
 // startCheckout — form-driven action used by the in-app billing
-// settings page. Reads `plan` from a hidden form input; cycle defaults
-// to monthly because that page doesn't expose a cycle toggle yet.
+// settings page. Accepts any plan that:
+//   * exists in the PricingPlan table
+//   * is PUBLISHED and showOnSignup
+//   * is NOT isContactSales (those aren't self-serve purchasable)
+//   * has a priceMonthly or priceAnnual set
+//
+// The legacy STARTER/GROWTH/PRO hardcode is gone — Enterprise (or any
+// future tier) is automatically checkoutable the moment the admin prices
+// it in /platform/plans.
 export async function startCheckout(slug: string, formData: FormData) {
   const ctx = await requirePermission(slug, "tenant:billing");
-  const plan = String(formData.get("plan") ?? "") as Plan;
-  if (plan !== "STARTER" && plan !== "GROWTH" && plan !== "PRO") {
+  const rawPlan = String(formData.get("plan") ?? "").toUpperCase();
+  const slugInput = rawPlan.toLowerCase();
+
+  const planRow = await db.pricingPlan.findUnique({
+    where: { slug: slugInput },
+    select: {
+      slug: true,
+      status: true,
+      showOnSignup: true,
+      isContactSales: true,
+      priceMonthly: true,
+      priceAnnual: true,
+    },
+  });
+  if (
+    !planRow ||
+    planRow.status !== "PUBLISHED" ||
+    !planRow.showOnSignup ||
+    planRow.isContactSales ||
+    (planRow.priceMonthly == null && planRow.priceAnnual == null)
+  ) {
     redirect(`/t/${slug}/settings/billing?error=invalid_plan`);
   }
-  const cycle = (String(formData.get("cycle") ?? "monthly") as BillingCycle);
+
+  // Coerce back to the legacy Plan enum for createCheckoutSession. Any
+  // slug not in the enum (e.g. a future custom tier) returns null and
+  // we reject with invalid_plan.
+  const enumPlan = mapSlugToPlan(planRow.slug);
+  if (!enumPlan) {
+    redirect(`/t/${slug}/settings/billing?error=invalid_plan`);
+  }
+
+  const cycle = String(formData.get("cycle") ?? "monthly") as BillingCycle;
   const session = await auth();
   const url = await createCheckoutSession({
     tenant: ctx.tenant,
     ownerEmail: session?.user?.email ?? "",
-    plan,
+    plan: enumPlan,
     cycle,
     returnUrl: `${process.env.APP_URL ?? "http://localhost:3000"}/t/${slug}/settings/billing`,
   });
@@ -47,7 +82,7 @@ export async function startCheckout(slug: string, formData: FormData) {
 // would feel cold and miss the chance to funnel them into setup.
 export async function startCheckoutDirect(
   slug: string,
-  plan: Exclude<Plan, "ENTERPRISE">,
+  plan: Plan,
   cycle: BillingCycle,
 ) {
   const ctx = await requirePermission(slug, "tenant:billing");

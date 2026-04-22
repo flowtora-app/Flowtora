@@ -42,23 +42,30 @@ export async function ensureStripeCustomer(tenant: Tenant, ownerEmail: string): 
 // the annual price don't hard-fail the checkout flow — they just bill
 // monthly instead of annually until the admin fills in the annual price.
 async function resolvePriceId(
-  plan: Exclude<Plan, "ENTERPRISE">,
+  plan: Plan,
   cycle: BillingCycle,
 ): Promise<string | null> {
   // 1. DB — match PricingPlan by slug. Plan enum is uppercase
-  //    (STARTER/GROWTH/PRO); slugs are lowercase.
+  //    (STARTER/GROWTH/PRO/ENTERPRISE); slugs are lowercase.
   const slug = plan.toLowerCase();
   const row = await db.pricingPlan.findUnique({
     where: { slug },
-    select: { stripePriceMonthly: true, stripePriceAnnual: true },
+    select: { stripePriceMonthly: true, stripePriceAnnual: true, isContactSales: true },
   });
   if (row) {
+    // Contact-sales plans have no Stripe prices and can't be checked
+    // out. The caller (startCheckout / startCheckoutDirect) should
+    // gate this earlier; we no-op here defensively.
+    if (row.isContactSales) return null;
     const dbPreferred = cycle === "annual" ? row.stripePriceAnnual : row.stripePriceMonthly;
     if (dbPreferred) return dbPreferred;
     if (cycle === "annual" && row.stripePriceMonthly) return row.stripePriceMonthly;
   }
 
-  // 2. Env fallback. Empty string = unset → falls through.
+  // 2. Env fallback for tenants created before M6. ENTERPRISE isn't in
+  //    PRICE_IDS so it falls through to null unless the DB lookup above
+  //    already found a price.
+  if (plan === "ENTERPRISE") return null;
   const table = PRICE_IDS[plan];
   if (!table) return null;
   const preferred = cycle === "annual" ? table.annual : table.monthly;
@@ -70,7 +77,7 @@ async function resolvePriceId(
 export async function createCheckoutSession(opts: {
   tenant: Tenant;
   ownerEmail: string;
-  plan: Exclude<Plan, "ENTERPRISE">;
+  plan: Plan;
   cycle?: BillingCycle;
   returnUrl: string;
 }): Promise<string | null> {

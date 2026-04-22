@@ -18,7 +18,7 @@ import type { BillingCycle } from "@/lib/stripe";
 // invisible handoff. The returned JSX is a minimal fallback only
 // rendered if neither redirect fires (shouldn't happen).
 
-const VALID_PLANS = new Set<string>(["STARTER", "GROWTH", "PRO"]);
+const VALID_PLANS = new Set<string>(["STARTER", "GROWTH", "PRO", "ENTERPRISE"]);
 const VALID_CYCLES = new Set<string>(["monthly", "annual"]);
 
 export default async function CheckoutDirectPage({
@@ -37,7 +37,7 @@ export default async function CheckoutDirectPage({
     redirect(`/t/${slug}/settings/billing?error=invalid_plan`);
   }
 
-  const plan = rawPlan as Exclude<Plan, "ENTERPRISE">;
+  const plan = rawPlan as Plan;
   const cycle = rawCycle as BillingCycle;
 
   // startCheckoutDirect throws a NEXT_REDIRECT on both success
