@@ -29,19 +29,40 @@ export async function ensureStripeCustomer(tenant: Tenant, ownerEmail: string): 
   return customer.id;
 }
 
-// Resolve the right Stripe price ID for a plan + cycle. Falls back to
-// monthly when annual isn't configured so deploys missing the annual
-// env vars don't hard-fail the checkout flow — they just bill monthly
-// instead of annually until the ops env is updated.
-function resolvePriceId(
+// Resolve the right Stripe price ID for a plan + cycle.
+//
+// Resolution order (post-M6):
+//   1. DB — PricingPlan row matched by slug (admin-managed, written by
+//      "Sync to Stripe"). This is the source of truth once an admin has
+//      pushed prices to Stripe from /platform/plans.
+//   2. Env map (PRICE_IDS) — legacy fallback for deploys that predate
+//      M6 and still configure prices via STRIPE_PRICE_* env vars.
+//
+// Falls back to monthly when annual isn't configured so deploys missing
+// the annual price don't hard-fail the checkout flow — they just bill
+// monthly instead of annually until the admin fills in the annual price.
+async function resolvePriceId(
   plan: Exclude<Plan, "ENTERPRISE">,
   cycle: BillingCycle,
-): string | null {
+): Promise<string | null> {
+  // 1. DB — match PricingPlan by slug. Plan enum is uppercase
+  //    (STARTER/GROWTH/PRO); slugs are lowercase.
+  const slug = plan.toLowerCase();
+  const row = await db.pricingPlan.findUnique({
+    where: { slug },
+    select: { stripePriceMonthly: true, stripePriceAnnual: true },
+  });
+  if (row) {
+    const dbPreferred = cycle === "annual" ? row.stripePriceAnnual : row.stripePriceMonthly;
+    if (dbPreferred) return dbPreferred;
+    if (cycle === "annual" && row.stripePriceMonthly) return row.stripePriceMonthly;
+  }
+
+  // 2. Env fallback. Empty string = unset → falls through.
   const table = PRICE_IDS[plan];
   if (!table) return null;
   const preferred = cycle === "annual" ? table.annual : table.monthly;
   if (preferred) return preferred;
-  // Fallback: annual unconfigured → try monthly.
   if (cycle === "annual" && table.monthly) return table.monthly;
   return null;
 }
@@ -55,7 +76,7 @@ export async function createCheckoutSession(opts: {
 }): Promise<string | null> {
   if (!stripe) return null;
   const cycle = opts.cycle ?? "monthly";
-  const priceId = resolvePriceId(opts.plan, cycle);
+  const priceId = await resolvePriceId(opts.plan, cycle);
   if (!priceId) return null;
 
   const customerId = await ensureStripeCustomer(opts.tenant, opts.ownerEmail);
