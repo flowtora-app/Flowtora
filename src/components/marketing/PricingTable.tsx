@@ -21,6 +21,11 @@ export interface PricingFeature {
 export interface PricingTier {
   name: string;
   description: string;
+  // `monthly` is the per-month rate when the customer picks monthly
+  // billing; `annual` is the TOTAL yearly amount when they pick
+  // annual billing (matches the admin "Annual price" field and what
+  // Stripe charges for the annual Price interval). The annual/month
+  // display is derived by dividing by 12.
   price: { monthly: number; annual?: number } | "custom";
   highlight?: boolean;
   cta: { label: string; href: string };
@@ -79,40 +84,59 @@ export function PricingTable({ tiers, billing = "monthly" }: PricingTableProps) 
                 Custom
               </div>
             ) : (
-              <div className="flex flex-wrap items-baseline gap-2">
-                <span
-                  className="text-4xl font-semibold tracking-tight md:text-5xl"
-                  style={{
-                    color: "var(--text-default)",
-                    letterSpacing: "-0.02em",
-                    // Small horizontal fade on flip — Tailwind's
-                    // transition-all handles color/size; we just nudge
-                    // opacity so the numeric swap feels deliberate.
-                    transition: "opacity 180ms ease",
-                  }}
-                  key={`${tier.name}-${billing}`}
-                >
-                  ${billing === "annual" && tier.price.annual ? tier.price.annual : tier.price.monthly}
-                </span>
-                <span className="text-sm" style={{ color: "var(--text-muted)" }}>
-                  / month
-                </span>
-                {billing === "annual" && tier.price.annual && (
-                  <span
-                    className="ml-1 rounded-full px-2 py-0.5 text-[10px] font-semibold uppercase tracking-wider"
-                    style={{
-                      background: "var(--success-surface)",
-                      color: "var(--success-fg)",
-                    }}
-                  >
-                    –{Math.round((1 - tier.price.annual / tier.price.monthly) * 100)}%
-                  </span>
-                )}
-              </div>
+              (() => {
+                // Annual mode derives the per-month figure by dividing the
+                // full-year total by 12. Round for display; the exact total
+                // still shows in the "Billed annually" subtitle below. If
+                // monthly is 0 the discount chip is skipped to avoid a
+                // divide-by-zero nonsense percentage.
+                const monthlyEquivalent =
+                  billing === "annual" && tier.price.annual
+                    ? Math.round(tier.price.annual / 12)
+                    : tier.price.monthly;
+                const discountPct =
+                  billing === "annual" && tier.price.annual && tier.price.monthly > 0
+                    ? Math.max(
+                        0,
+                        Math.round(
+                          (1 - tier.price.annual / 12 / tier.price.monthly) * 100,
+                        ),
+                      )
+                    : 0;
+                return (
+                  <div className="flex flex-wrap items-baseline gap-2">
+                    <span
+                      className="text-4xl font-semibold tracking-tight md:text-5xl"
+                      style={{
+                        color: "var(--text-default)",
+                        letterSpacing: "-0.02em",
+                        transition: "opacity 180ms ease",
+                      }}
+                      key={`${tier.name}-${billing}`}
+                    >
+                      ${monthlyEquivalent}
+                    </span>
+                    <span className="text-sm" style={{ color: "var(--text-muted)" }}>
+                      / month
+                    </span>
+                    {billing === "annual" && discountPct > 0 && (
+                      <span
+                        className="ml-1 rounded-full px-2 py-0.5 text-[10px] font-semibold uppercase tracking-wider"
+                        style={{
+                          background: "var(--success-surface)",
+                          color: "var(--success-fg)",
+                        }}
+                      >
+                        –{discountPct}%
+                      </span>
+                    )}
+                  </div>
+                );
+              })()
             )}
             {tier.price !== "custom" && billing === "annual" && tier.price.annual && (
               <div className="mt-1 text-xs" style={{ color: "var(--text-muted)" }}>
-                Billed annually · ${tier.price.annual * 12}/yr
+                Billed annually · ${tier.price.annual.toLocaleString()}/yr
               </div>
             )}
             {tier.price !== "custom" && billing === "monthly" && (

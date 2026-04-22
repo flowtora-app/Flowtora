@@ -254,7 +254,10 @@ const PLANS: SeedPlan[] = [
     highlight: false,
     sortOrder: 10,
     priceMonthly: 79,
-    priceAnnual: 63,
+    // Annual = FULL-YEAR total (matches admin "Full year total" hint
+    // and what Stripe's annual Price charges). $63/mo × 12 = $756/yr,
+    // which is the headline "~20% off monthly rate" promise.
+    priceAnnual: 756,
     isContactSales: false,
     ctaLabel: "Get Starter",
     trialDays: 14,
@@ -296,7 +299,8 @@ const PLANS: SeedPlan[] = [
     highlight: false,
     sortOrder: 20,
     priceMonthly: 99,
-    priceAnnual: 79,
+    // $79/mo × 12 = $948/yr (~20% off the monthly rate).
+    priceAnnual: 948,
     isContactSales: false,
     ctaLabel: "Get Growth",
     trialDays: 14,
@@ -336,7 +340,8 @@ const PLANS: SeedPlan[] = [
     highlight: true,
     sortOrder: 30,
     priceMonthly: 199,
-    priceAnnual: 159,
+    // $159/mo × 12 = $1908/yr (~20% off the monthly rate).
+    priceAnnual: 1908,
     isContactSales: false,
     ctaLabel: "Get Pro",
     trialDays: 14,

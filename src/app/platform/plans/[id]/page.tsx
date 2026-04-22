@@ -437,8 +437,8 @@ function PricingTab({
             label="Annual price"
             name="priceAnnual"
             defaultValue={annual}
-            placeholder="790"
-            hint="Full year total, not /12. Blank = no annual option."
+            placeholder="756"
+            hint="Full-year total (e.g. 756 = $63/mo × 12). The card divides by 12 for the /mo display. Blank = no annual option."
             disabled={!canWrite}
           />
           <FormField
