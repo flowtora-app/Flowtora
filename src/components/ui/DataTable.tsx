@@ -199,7 +199,7 @@ export function DataTable<T extends { id: string }>({
           <button
             type="button"
             onClick={clear}
-            className="text-xs underline"
+            className="ts-focus rounded px-1 text-xs underline transition-colors hover:bg-[color:var(--surface-2)] hover:text-[color:var(--text-default)]"
             style={{ color: "var(--text-muted)" }}
           >
             Clear
@@ -363,7 +363,7 @@ export function DataTable<T extends { id: string }>({
                               <button
                                 type="button"
                                 aria-label="Row actions"
-                                className="ts-focus inline-flex h-7 w-7 items-center justify-center rounded-md"
+                                className="ts-focus inline-flex h-7 w-7 items-center justify-center rounded-md transition-colors hover:bg-[color:var(--surface-3)] hover:text-[color:var(--text-default)]"
                                 style={{
                                   color: "var(--text-muted)",
                                   background: "transparent",
@@ -403,7 +403,11 @@ export function DataTable<T extends { id: string }>({
                 type="button"
                 onClick={() => setAndPersistDensity("comfortable")}
                 aria-pressed={density === "comfortable"}
-                className="ts-focus rounded px-1.5 py-0.5"
+                className={cn(
+                  "ts-focus rounded px-1.5 py-0.5 transition-colors",
+                  density !== "comfortable" &&
+                    "hover:bg-[color:var(--surface-2)] hover:text-[color:var(--text-default)]",
+                )}
                 style={{
                   color:
                     density === "comfortable"
@@ -421,7 +425,11 @@ export function DataTable<T extends { id: string }>({
                 type="button"
                 onClick={() => setAndPersistDensity("compact")}
                 aria-pressed={density === "compact"}
-                className="ts-focus rounded px-1.5 py-0.5"
+                className={cn(
+                  "ts-focus rounded px-1.5 py-0.5 transition-colors",
+                  density !== "compact" &&
+                    "hover:bg-[color:var(--surface-2)] hover:text-[color:var(--text-default)]",
+                )}
                 style={{
                   color:
                     density === "compact"

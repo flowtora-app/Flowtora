@@ -188,6 +188,20 @@ html, body {
 
 a { color: inherit; }
 
+/* Baseline hover affordance for ad-hoc underlined links — the pattern
+   `<Link className="underline" style={{ color: "var(--text-muted)" }}>` is
+   used in dozens of places for "back to list" / "change" / inline admin
+   actions. Without an explicit hover class they read as static text on
+   hover. A subtle color shift to `--text-default` gives every such link
+   a visible hover state without needing per-call-site edits. Explicit
+   tokens like `.ts-btn-*`, nav primitives, etc. keep their own hover. */
+a.underline:not([class*="ts-btn"]):not([class*="ts-nav"]):hover {
+  color: var(--text-default);
+}
+button.underline:not([class*="ts-btn"]):not(:disabled):hover {
+  color: var(--text-default);
+}
+
 /* Default focus ring for interactive elements that opt in via .ts-focus */
 .ts-focus:focus-visible {
   outline: none;

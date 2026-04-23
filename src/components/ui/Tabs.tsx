@@ -69,6 +69,8 @@ export function Tabs({ items, activeHref, className, prefixMatch = false }: Tabs
             aria-current={isActive ? "page" : undefined}
             className={cn(
               "ts-focus relative inline-flex items-center gap-2 px-3 py-2 text-xs transition-colors",
+              !isActive &&
+                "hover:bg-[color:var(--surface-1)] hover:text-[color:var(--text-default)]",
             )}
             style={{
               color: isActive ? "var(--text-default)" : "var(--text-muted)",
