@@ -285,7 +285,10 @@ export default async function QuoteDetailPage({
   function ItemsUL({ items }: { items: LineItem[] }) {
     if (items.length === 0) return null;
     return (
-      <ul>
+      <ul
+        className="space-y-3 px-5 py-4"
+        style={{ borderTop: "1px solid var(--border-subtle)" }}
+      >
         {items.map((item) => {
           const meta = pricingMeta(item.pricingModel);
           const selected = parseSelectedOptions(item.selectedOptions as unknown);
@@ -295,10 +298,6 @@ export default async function QuoteDetailPage({
           const moveItem = moveQuoteItemToSection.bind(null, slug, item.id);
           const toggleOptional = toggleQuoteItemOptional.bind(null, slug, item.id);
 
-          // Phase 13 — tier hint. Parse the snapshotted tiers and determine
-          // whether any apply at the current quantity, so the rep can see
-          // why the price is what it is (or how close they are to the next
-          // break).
           const tiers = parseQuantityTiers(item.quantityTiers as unknown);
           const qtyForTier = item.quantity != null ? Number(item.quantity) : null;
           const tierApplies =
@@ -314,11 +313,6 @@ export default async function QuoteDetailPage({
                 .sort((a, b) => a.minQuantity - b.minQuantity)[0] ?? null
             : null;
 
-          // Phase 8 Slice D — per-line margin. Uses the snapshotted cost
-          // so the number is stable even if the catalog later changes. We
-          // only show this to staff (quotes:manage) — it's never for the
-          // customer-facing portal path, which renders from a different
-          // component anyway. Missing cost → no badge.
           const lineCostExt = computeLineCost({
             pricingModel: item.pricingModel,
             costPerUnit: item.costSnapshot != null ? Number(item.costSnapshot) : null,
@@ -333,217 +327,346 @@ export default async function QuoteDetailPage({
           const lineMargin =
             lineCostExt != null ? marginPercent(lineSubtotal, lineCostExt) : null;
 
+          const formula = formulaForItem(item, ctx.tenant.currency);
+          const hasOptionGroups = !!item.product && item.product.optionGroups.length > 0;
+          const hasTierInfo = tierApplies && tiers.length > 0;
+          const detailsSummary = [
+            "Description",
+            hasOptionGroups ? "options" : null,
+            hasTierInfo ? "tier breaks" : null,
+            "tax",
+          ]
+            .filter(Boolean)
+            .join(" · ");
+
           return (
-            <li
-              key={item.id}
-              className="px-5 py-4"
-              style={{
-                borderTop: "1px solid var(--border-subtle)",
-                // Phase 9 — dim optional rows a touch so they read visually
-                // as "not counted in the main total".
-                background: item.isOptional ? "var(--surface-1)" : undefined,
-              }}
-            >
-              <form action={save} className="space-y-3">
-                <div className="flex items-center justify-between gap-3">
-                  <div className="flex-1">
-                    <Field label="Name" name="name" required defaultValue={item.name} />
-                  </div>
-                  <div className="text-right text-sm">
-                    <div className="text-xs" style={{ color: "var(--text-muted)" }}>
-                      {meta.label} subtotal
-                      {item.isOptional && (
+            <li key={item.id}>
+              <div
+                className="overflow-hidden rounded-lg"
+                style={{
+                  background: item.isOptional ? "var(--surface-1)" : "var(--surface-0)",
+                  border: item.isOptional
+                    ? "1px solid var(--accent-primary)"
+                    : "1px solid var(--border-subtle)",
+                  boxShadow: "var(--shadow-xs, 0 1px 0 rgb(0 0 0 / 0.02))",
+                }}
+              >
+                <form action={save} className="contents">
+                  {/* Header: name on left, big total on right */}
+                  <div className="flex items-start gap-4 p-4">
+                    <div className="min-w-0 flex-1 space-y-2">
+                      <Field
+                        label="Line name"
+                        name="name"
+                        required
+                        defaultValue={item.name}
+                      />
+                      <div
+                        className="flex flex-wrap items-center gap-1.5 text-[11px]"
+                        style={{ color: "var(--text-muted)" }}
+                      >
                         <span
-                          className="ml-1.5 rounded-full px-1.5 py-0.5 text-[10px]"
+                          className="rounded-full px-2 py-0.5"
                           style={{
-                            background: "var(--accent-surface)",
-                            color: "var(--accent-primary)",
+                            background: "var(--surface-2)",
+                            border: "1px solid var(--border-subtle)",
                           }}
-                          title="Optional line — excluded from the main total. Rolled up as 'Optional add-ons' instead."
                         >
-                          Optional
+                          {meta.label}
                         </span>
+                        {item.isOptional && (
+                          <span
+                            className="rounded-full px-2 py-0.5 font-medium"
+                            style={{
+                              background: "var(--accent-surface)",
+                              color: "var(--accent-primary)",
+                              border: "1px solid var(--accent-primary)",
+                            }}
+                            title="Optional line — excluded from the main total. Rolled up as 'Optional add-ons' instead."
+                          >
+                            Optional add-on
+                          </span>
+                        )}
+                        {canManage && lineMargin != null && (
+                          <span
+                            className="rounded-full px-2 py-0.5 font-medium"
+                            style={{
+                              background:
+                                lineMargin >= 40
+                                  ? "var(--success-surface)"
+                                  : lineMargin >= 20
+                                    ? "var(--accent-surface)"
+                                    : "var(--danger-surface)",
+                              color:
+                                lineMargin >= 40
+                                  ? "var(--success-fg)"
+                                  : lineMargin >= 20
+                                    ? "var(--accent-primary)"
+                                    : "var(--danger-fg)",
+                            }}
+                            title={`Cost ${formatMoney(lineCostExt ?? 0, ctx.tenant.currency)} → ${lineMargin.toFixed(1)}% margin`}
+                          >
+                            {lineMargin.toFixed(1)}% margin
+                          </span>
+                        )}
+                        {canManage && lineMargin == null && item.pricingModel !== "CUSTOM_QUOTE" && (
+                          <span
+                            className="rounded-full px-2 py-0.5"
+                            style={{
+                              background: "var(--surface-2)",
+                              color: "var(--text-muted)",
+                            }}
+                            title="No cost snapshotted when this line was added — set a cost on the product to see margin next time."
+                          >
+                            no cost
+                          </span>
+                        )}
+                      </div>
+                    </div>
+                    <div className="shrink-0 text-right">
+                      <div
+                        className="text-[10px] uppercase tracking-wide"
+                        style={{ color: "var(--text-muted)" }}
+                      >
+                        Line total
+                      </div>
+                      <div
+                        className="text-2xl font-semibold tabular-nums leading-tight"
+                        style={{ color: "var(--text-default)" }}
+                      >
+                        {formatMoney(item.subtotal.toString(), ctx.tenant.currency)}
+                      </div>
+                      {formula && (
+                        <div
+                          className="mt-0.5 text-[11px] tabular-nums"
+                          style={{ color: "var(--text-muted)" }}
+                        >
+                          {formula}
+                        </div>
                       )}
                     </div>
-                    <div className="text-lg font-semibold">{formatMoney(item.subtotal.toString(), ctx.tenant.currency)}</div>
-                    {canManage && lineMargin != null && (
-                      <div
-                        className="mt-0.5 inline-flex items-center rounded-full px-1.5 py-0.5 text-[10px] font-medium"
-                        style={{
-                          background:
-                            lineMargin >= 40
-                              ? "var(--success-surface)"
-                              : lineMargin >= 20
-                                ? "var(--accent-surface)"
-                                : "var(--danger-surface)",
-                          color:
-                            lineMargin >= 40
-                              ? "var(--success-fg)"
-                              : lineMargin >= 20
-                                ? "var(--accent-primary)"
-                                : "var(--danger-fg)",
-                        }}
-                        title={`Cost ${formatMoney(lineCostExt ?? 0, ctx.tenant.currency)} → ${lineMargin.toFixed(1)}% margin`}
-                      >
-                        {lineMargin.toFixed(1)}% margin
-                      </div>
-                    )}
-                    {canManage && lineMargin == null && item.pricingModel !== "CUSTOM_QUOTE" && (
-                      <div
-                        className="mt-0.5 inline-flex items-center rounded-full px-1.5 py-0.5 text-[10px]"
-                        style={{
-                          background: "var(--surface-2)",
-                          color: "var(--text-muted)",
-                        }}
-                        title="No cost snapshotted when this line was added — set a cost on the product to see margin next time."
-                      >
-                        no cost
-                      </div>
-                    )}
                   </div>
-                </div>
 
-                <TextArea label="Description" name="description" rows={2} defaultValue={item.description ?? ""} />
-
-                {/* Pricing model inputs */}
-                <div className="grid grid-cols-5 gap-3">
-                  {item.pricingModel !== "CUSTOM_QUOTE" && (
-                    <Field
-                      label={`Base price${item.unit ? ` / ${item.unit}` : ""}`}
-                      name="basePrice"
-                      type="number"
-                      step="0.01"
-                      min="0"
-                      defaultValue={item.basePrice.toString()}
-                    />
-                  )}
-                  {meta.inputs.includes("quantity") && (
-                    <Field label="Quantity" name="quantity" type="number" step="0.01" min="0"
-                      defaultValue={item.quantity?.toString() ?? "1"} />
-                  )}
-                  {meta.inputs.includes("width") && (
-                    <Field label="Width (ft)" name="width" type="number" step="0.01" min="0"
-                      defaultValue={item.width?.toString() ?? ""} />
-                  )}
-                  {meta.inputs.includes("height") && (
-                    <Field label="Height (ft)" name="height" type="number" step="0.01" min="0"
-                      defaultValue={item.height?.toString() ?? ""} />
-                  )}
-                  {meta.inputs.includes("length") && (
-                    <Field label="Length (ft)" name="length" type="number" step="0.01" min="0"
-                      defaultValue={item.length?.toString() ?? ""} />
-                  )}
-                  {meta.inputs.includes("hours") && (
-                    <Field label="Hours" name="hours" type="number" step="0.25" min="0"
-                      defaultValue={item.hours?.toString() ?? ""} />
-                  )}
-                  {item.pricingModel === "CUSTOM_QUOTE" && (
-                    <Field label="Price (manual)" name="manualPrice" type="number" step="0.01" min="0"
-                      defaultValue={item.manualPrice?.toString() ?? ""} />
-                  )}
-                </div>
-
-                {/* Option groups (only if product still exists) */}
-                {item.product && item.product.optionGroups.length > 0 && (
-                  <div className="grid grid-cols-3 gap-3">
-                    {item.product.optionGroups.map((g) => {
-                      const currentLabel = selectedByGroup.get(g.name);
-                      const currentId = g.options.find((o) => o.label === currentLabel)?.id ?? "";
-                      return (
-                        <SelectField
-                          key={g.id}
-                          label={`${g.name}${g.required ? " *" : ""}`}
-                          name={`option_${g.id}`}
-                          defaultValue={currentId}
-                          options={[
-                            { value: "", label: g.required ? "— select —" : "— none —" },
-                            ...g.options.map((o) => ({
-                              value: o.id,
-                              label: Number(o.priceAdjustment) === 0
-                                ? o.label
-                                : `${o.label} (${Number(o.priceAdjustment) > 0 ? "+" : ""}${formatMoney(o.priceAdjustment.toString(), ctx.tenant.currency)})`,
-                            })),
-                          ]}
-                        />
-                      );
-                    })}
-                  </div>
-                )}
-
-                {/* Read-only snapshot for detached products */}
-                {!item.product && selected.length > 0 && (
-                  <div className="text-xs" style={{ color: "var(--text-muted)" }}>
-                    Options: {selected.map((o) => `${o.groupName}: ${o.label}`).join(" · ")}
-                  </div>
-                )}
-
-                {/* Phase 13 — quantity break hint */}
-                {tierApplies && tiers.length > 0 && (
-                  <div className="text-xs" style={{ color: "var(--text-muted)" }}>
-                    {activeTierPrice != null ? (
-                      <>
-                        Tier price applied: {formatMoney(activeTierPrice, ctx.tenant.currency)} / unit.
-                      </>
-                    ) : (
-                      <>Base price in effect.</>
+                  {/* Pricing inputs */}
+                  <div className="grid grid-cols-2 gap-3 px-4 pb-4 md:grid-cols-4">
+                    {item.pricingModel !== "CUSTOM_QUOTE" && (
+                      <Field
+                        label={`Base${item.unit ? ` / ${item.unit}` : ""}`}
+                        name="basePrice"
+                        type="number"
+                        step="0.01"
+                        min="0"
+                        defaultValue={item.basePrice.toString()}
+                      />
                     )}
-                    {nextTier && (
-                      <>
-                        {" "}Next break at {nextTier.minQuantity}+ units:{" "}
-                        {formatMoney(nextTier.pricePerUnit, ctx.tenant.currency)} / unit.
-                      </>
+                    {meta.inputs.includes("quantity") && (
+                      <Field
+                        label="Qty"
+                        name="quantity"
+                        type="number"
+                        step="0.01"
+                        min="0"
+                        defaultValue={item.quantity?.toString() ?? "1"}
+                      />
+                    )}
+                    {meta.inputs.includes("width") && (
+                      <Field
+                        label="Width (ft)"
+                        name="width"
+                        type="number"
+                        step="0.01"
+                        min="0"
+                        defaultValue={item.width?.toString() ?? ""}
+                      />
+                    )}
+                    {meta.inputs.includes("height") && (
+                      <Field
+                        label="Height (ft)"
+                        name="height"
+                        type="number"
+                        step="0.01"
+                        min="0"
+                        defaultValue={item.height?.toString() ?? ""}
+                      />
+                    )}
+                    {meta.inputs.includes("length") && (
+                      <Field
+                        label="Length (ft)"
+                        name="length"
+                        type="number"
+                        step="0.01"
+                        min="0"
+                        defaultValue={item.length?.toString() ?? ""}
+                      />
+                    )}
+                    {meta.inputs.includes("hours") && (
+                      <Field
+                        label="Hours"
+                        name="hours"
+                        type="number"
+                        step="0.25"
+                        min="0"
+                        defaultValue={item.hours?.toString() ?? ""}
+                      />
+                    )}
+                    {item.pricingModel === "CUSTOM_QUOTE" && (
+                      <Field
+                        label="Price (manual)"
+                        name="manualPrice"
+                        type="number"
+                        step="0.01"
+                        min="0"
+                        defaultValue={item.manualPrice?.toString() ?? ""}
+                      />
                     )}
                   </div>
-                )}
 
-                <div className="flex items-center justify-between">
-                  <Checkbox label="Taxable" name="taxable" defaultChecked={item.taxable} />
-                  {editable && (
-                    <div className="flex gap-2">
-                      <Button type="submit" variant="secondary">Save row</Button>
-                    </div>
-                  )}
-                </div>
-              </form>
+                  {/* Collapsible details — description, options, tier info, tax */}
+                  <details
+                    style={{ borderTop: "1px solid var(--border-subtle)" }}
+                  >
+                    <summary
+                      className="cursor-pointer select-none px-4 py-2 text-xs font-medium"
+                      style={{ color: "var(--text-muted)" }}
+                    >
+                      {detailsSummary}
+                    </summary>
+                    <div className="space-y-3 px-4 pb-4 pt-2">
+                      <TextArea
+                        label="Description"
+                        name="description"
+                        rows={2}
+                        defaultValue={item.description ?? ""}
+                      />
 
-              {/* Phase 9 — per-line controls: move to section, optional toggle, remove. */}
-              {editable && (
-                <div
-                  className="mt-3 flex flex-wrap items-end gap-3 rounded-md px-3 py-2"
-                  style={{
-                    background: "var(--surface-2)",
-                    border: "1px dashed var(--border-subtle)",
-                  }}
-                >
-                  <form action={moveItem} className="flex items-end gap-2">
-                    <div className="min-w-[200px]">
-                      <SelectField
-                        label="Section"
-                        name="sectionId"
-                        defaultValue={item.sectionId ?? ""}
-                        options={sectionOptions}
+                      {hasOptionGroups && (
+                        <div className="grid grid-cols-1 gap-3 sm:grid-cols-3">
+                          {item.product!.optionGroups.map((g) => {
+                            const currentLabel = selectedByGroup.get(g.name);
+                            const currentId = g.options.find((o) => o.label === currentLabel)?.id ?? "";
+                            return (
+                              <SelectField
+                                key={g.id}
+                                label={`${g.name}${g.required ? " *" : ""}`}
+                                name={`option_${g.id}`}
+                                defaultValue={currentId}
+                                options={[
+                                  { value: "", label: g.required ? "— select —" : "— none —" },
+                                  ...g.options.map((o) => ({
+                                    value: o.id,
+                                    label: Number(o.priceAdjustment) === 0
+                                      ? o.label
+                                      : `${o.label} (${Number(o.priceAdjustment) > 0 ? "+" : ""}${formatMoney(o.priceAdjustment.toString(), ctx.tenant.currency)})`,
+                                  })),
+                                ]}
+                              />
+                            );
+                          })}
+                        </div>
+                      )}
+
+                      {!item.product && selected.length > 0 && (
+                        <div className="text-xs" style={{ color: "var(--text-muted)" }}>
+                          Options: {selected.map((o) => `${o.groupName}: ${o.label}`).join(" · ")}
+                        </div>
+                      )}
+
+                      {hasTierInfo && (
+                        <div
+                          className="rounded-md px-3 py-2 text-xs"
+                          style={{
+                            background: "var(--surface-1)",
+                            border: "1px solid var(--border-subtle)",
+                            color: "var(--text-muted)",
+                          }}
+                        >
+                          {activeTierPrice != null ? (
+                            <>Tier price applied: {formatMoney(activeTierPrice, ctx.tenant.currency)} / unit.</>
+                          ) : (
+                            <>Base price in effect.</>
+                          )}
+                          {nextTier && (
+                            <>
+                              {" · "}Next break at {nextTier.minQuantity}+ units:{" "}
+                              {formatMoney(nextTier.pricePerUnit, ctx.tenant.currency)} / unit.
+                            </>
+                          )}
+                        </div>
+                      )}
+
+                      <Checkbox
+                        label="Taxable"
+                        name="taxable"
+                        defaultChecked={item.taxable}
                       />
                     </div>
-                    <Button type="submit" variant="secondary">Move</Button>
-                  </form>
+                  </details>
 
-                  <form action={toggleOptional} className="ml-auto flex items-center gap-2">
-                    <Button type="submit" variant="secondary">
-                      {item.isOptional ? "Make required" : "Mark as optional"}
-                    </Button>
-                  </form>
-
-                  <form action={remove}>
-                    <button
-                      type="submit"
-                      className="text-xs underline"
-                      style={{ color: "var(--danger-fg)" }}
+                  {/* Footer: save button */}
+                  {editable && (
+                    <div
+                      className="flex items-center justify-between gap-3 px-4 py-2"
+                      style={{
+                        borderTop: "1px solid var(--border-subtle)",
+                        background: "var(--surface-1)",
+                      }}
                     >
-                      Remove line
-                    </button>
-                  </form>
-                </div>
-              )}
+                      <div className="text-[11px]" style={{ color: "var(--text-muted)" }}>
+                        Edits stay pending until you save this row.
+                      </div>
+                      <Button type="submit" variant="secondary">
+                        Save row
+                      </Button>
+                    </div>
+                  )}
+                </form>
+
+                {/* Sibling forms: move / optional / remove. Separate forms so
+                    they don't accidentally submit the save form's fields. */}
+                {editable && (
+                  <div
+                    className="flex flex-wrap items-end gap-3 px-4 py-2"
+                    style={{
+                      borderTop: "1px solid var(--border-subtle)",
+                      background: "var(--surface-0)",
+                    }}
+                  >
+                    <form action={moveItem} className="flex items-end gap-2">
+                      <div className="min-w-[180px]">
+                        <SelectField
+                          label="Move to section"
+                          name="sectionId"
+                          defaultValue={item.sectionId ?? ""}
+                          options={sectionOptions}
+                        />
+                      </div>
+                      <Button type="submit" variant="secondary">
+                        Move
+                      </Button>
+                    </form>
+                    <div className="ml-auto flex items-center gap-4 pb-1">
+                      <form action={toggleOptional}>
+                        <button
+                          type="submit"
+                          className="text-xs underline"
+                          style={{ color: "var(--text-muted)" }}
+                        >
+                          {item.isOptional ? "Make required" : "Mark as optional"}
+                        </button>
+                      </form>
+                      <form action={remove}>
+                        <button
+                          type="submit"
+                          className="text-xs underline"
+                          style={{ color: "var(--danger-fg)" }}
+                        >
+                          Remove line
+                        </button>
+                      </form>
+                    </div>
+                  </div>
+                )}
+              </div>
             </li>
           );
         })}
@@ -1471,6 +1594,50 @@ export default async function QuoteDetailPage({
       />
     </div>
   );
+}
+
+// Render a short human-readable formula beneath each line's total so the
+// rep can see at a glance how the number was built. Returns null for
+// models that have no meaningful formula (e.g. FIXED with no qty field,
+// or CUSTOM_QUOTE where the price is typed verbatim).
+type LineItemForFormula = {
+  pricingModel: string;
+  basePrice: { toString(): string } | number;
+  manualPrice?: { toString(): string } | number | null;
+  quantity?: { toString(): string } | number | null;
+  width?: { toString(): string } | number | null;
+  height?: { toString(): string } | number | null;
+  length?: { toString(): string } | number | null;
+  hours?: { toString(): string } | number | null;
+};
+function formulaForItem(item: LineItemForFormula, currency: string): string | null {
+  const price = Number(item.basePrice);
+  const qty = item.quantity != null ? Number(item.quantity) : null;
+  const w = item.width != null ? Number(item.width) : null;
+  const h = item.height != null ? Number(item.height) : null;
+  const l = item.length != null ? Number(item.length) : null;
+  const hrs = item.hours != null ? Number(item.hours) : null;
+  const fmt = (n: number) => formatMoney(n, currency);
+  switch (item.pricingModel) {
+    case "FIXED":
+      return "Flat fee";
+    case "PER_UNIT":
+      return qty != null ? `${qty} × ${fmt(price)}` : null;
+    case "PER_SQFT":
+      return w != null && h != null
+        ? `${w} × ${h} ft² × ${qty ?? 1} × ${fmt(price)}/sqft`
+        : null;
+    case "PER_LINEAR_FT":
+      return l != null
+        ? `${l} ft × ${qty ?? 1} × ${fmt(price)}/ft`
+        : null;
+    case "LABOR_HOURLY":
+      return hrs != null ? `${hrs} hrs × ${fmt(price)}/hr` : null;
+    case "CUSTOM_QUOTE":
+      return "Manual price";
+    default:
+      return null;
+  }
 }
 
 function Row({ label, value, muted, bold }: { label: string; value: string; muted?: boolean; bold?: boolean }) {
