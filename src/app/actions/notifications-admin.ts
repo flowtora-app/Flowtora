@@ -28,6 +28,7 @@ import { requirePlatformAdmin, logPlatformAudit } from "@/lib/platform";
 import {
   getRegistration,
   invalidateBrandCache,
+  listRegistrations,
   renderTemplate,
   loadBrand,
 } from "@/lib/notifications";
@@ -419,6 +420,70 @@ export async function initializeTemplateFromDefault(kind: string) {
   redirect(
     `/platform/notifications/${encodeURIComponent(kind)}?ok=${encodeURIComponent(
       "Copied built-in default into an editable draft.",
+    )}`,
+  );
+}
+
+// ────────────────────────────────────────────────────────────
+// Seed all — one-shot initializer for a fresh production DB. Creates a
+// DRAFT row from the compile-time default for every registered kind
+// that doesn't already have one. Idempotent: pre-existing rows are
+// left alone, not overwritten. Safe to call repeatedly after a new
+// registration lands.
+// ────────────────────────────────────────────────────────────
+
+export async function seedAllTemplatesFromDefaults() {
+  const ctx = await requirePlatformAdmin();
+
+  const channel: NotificationChannel = "EMAIL";
+  const locale = "en";
+
+  const existing = await db.notificationTemplate.findMany({
+    where: { channel, locale },
+    select: { kind: true },
+  });
+  const have = new Set(existing.map((r) => r.kind));
+
+  let created = 0;
+  for (const reg of listRegistrations()) {
+    if (have.has(reg.kind)) continue;
+    const def = reg.defaultContent[channel];
+    if (!def) continue;
+    await db.notificationTemplate.create({
+      data: {
+        kind: reg.kind,
+        channel,
+        locale,
+        status: "DRAFT",
+        category: reg.category,
+        sortOrder: reg.sortOrder,
+        subject: def.subject,
+        preheader: def.preheader,
+        headline: def.headline,
+        subheading: def.subheading,
+        body: def.body,
+        ctaLabel: def.ctaLabel,
+        ctaUrlToken: def.ctaUrlToken,
+        footerNote: def.footerNote,
+        enabled: true,
+        isCritical: reg.isCritical ?? false,
+        tokenSchema: reg.tokens as never,
+        updatedById: ctx.userId,
+      },
+    });
+    created += 1;
+  }
+
+  await logPlatformAudit({
+    userId: ctx.userId,
+    action: "platform.notification_templates_seeded",
+    metadata: { created, actor: ctx.email },
+  });
+
+  revalidatePath("/platform/notifications");
+  redirect(
+    `/platform/notifications?ok=${encodeURIComponent(
+      created === 0 ? "All kinds already initialized." : `Seeded ${created} template${created === 1 ? "" : "s"} as drafts.`,
     )}`,
   );
 }

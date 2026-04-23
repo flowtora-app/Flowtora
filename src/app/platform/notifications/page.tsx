@@ -4,6 +4,7 @@ import { requirePlatformStaff } from "@/lib/platform";
 import { Card, CardHeader } from "@/components/Card";
 import { listRegistrations } from "@/lib/notifications";
 import type { NotificationCategory, NotificationRegistration } from "@/lib/notifications";
+import { seedAllTemplatesFromDefaults } from "@/app/actions/notifications-admin";
 
 // /platform/notifications — catalog of every transactional kind.
 //
@@ -38,8 +39,9 @@ export default async function PlatformNotificationsPage({
 }: {
   searchParams: Promise<SP>;
 }) {
-  await requirePlatformStaff();
+  const ctx = await requirePlatformStaff();
   const sp = await searchParams;
+  const canWrite = ctx.canWrite;
 
   const rows = await db.notificationTemplate.findMany({
     where: { channel: "EMAIL", locale: "en" },
@@ -78,17 +80,35 @@ export default async function PlatformNotificationsPage({
             default — unpublished rows never affect live users.
           </p>
         </div>
-        <Link
-          href="/platform/notifications/brand"
-          className="rounded-md px-3 py-2 text-xs font-medium"
-          style={{
-            background: "var(--surface-2)",
-            color: "var(--text-default)",
-            border: "1px solid var(--border-subtle)",
-          }}
-        >
-          Brand settings →
-        </Link>
+        <div className="flex flex-wrap items-center gap-2">
+          {canWrite && rows.length < registrations.length && (
+            <form action={seedAllTemplatesFromDefaults}>
+              <button
+                type="submit"
+                className="rounded-md px-3 py-2 text-xs font-medium"
+                style={{
+                  background: "var(--surface-2)",
+                  color: "var(--text-default)",
+                  border: "1px solid var(--border-subtle)",
+                }}
+                title="Create a DRAFT row for every kind not yet in the DB. Idempotent."
+              >
+                Seed missing from defaults
+              </button>
+            </form>
+          )}
+          <Link
+            href="/platform/notifications/brand"
+            className="rounded-md px-3 py-2 text-xs font-medium"
+            style={{
+              background: "var(--surface-2)",
+              color: "var(--text-default)",
+              border: "1px solid var(--border-subtle)",
+            }}
+          >
+            Brand settings →
+          </Link>
+        </div>
       </div>
 
       {sp.ok && <Banner tone="ok">{sp.ok}</Banner>}
