@@ -42,7 +42,23 @@ import { SendMessageWidget } from "@/components/SendMessageWidget";
 import { loadSendContext } from "@/app/actions/message-templates";
 import { getGroupContext } from "@/lib/franchise";
 import { QuotePortalPreview } from "@/components/quotes/QuotePortalPreview";
-import { QuoteDetailTabs, parseQuoteDetailTab } from "@/components/quotes/QuoteDetailTabs";
+import { QuoteDetailTabs, type QuoteDetailTab } from "@/components/quotes/QuoteDetailTabs";
+
+// Inlined rather than imported from the client component — a value exported
+// from a "use client" module is a client reference and can't be called from
+// the server, even when it's pure. Keep the tab type in sync with
+// QuoteDetailTabs.tsx.
+function parseQuoteDetailTab(raw: string | undefined): QuoteDetailTab {
+  switch (raw) {
+    case "pricing":
+    case "notes":
+    case "sharing":
+    case "activity":
+      return raw;
+    default:
+      return "details";
+  }
+}
 
 export async function generateMetadata(
   { params }: { params: Promise<{ slug: string; id: string }> },

@@ -18,18 +18,6 @@ export const QUOTE_DETAIL_TABS: { value: QuoteDetailTab; label: string }[] = [
   { value: "activity", label: "Activity" },
 ];
 
-export function parseQuoteDetailTab(raw: string | undefined): QuoteDetailTab {
-  switch (raw) {
-    case "pricing":
-    case "notes":
-    case "sharing":
-    case "activity":
-      return raw;
-    default:
-      return "details";
-  }
-}
-
 interface QuoteDetailTabsProps {
   active: QuoteDetailTab;
 }
