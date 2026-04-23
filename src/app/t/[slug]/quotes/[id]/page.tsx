@@ -949,6 +949,12 @@ export default async function QuoteDetailPage({
         </Card>
       )}
 
+      {/* Phase 4 — Line items + Quote settings sit in the main column while
+          the Totals card pins to a sticky right rail on desktop, so the
+          rep can watch the total move as they edit lines or bump the
+          discount. Falls back to a single column on mobile. */}
+      <div className="grid gap-6 lg:grid-cols-[minmax(0,1fr)_320px]">
+        <div className="min-w-0 space-y-6">
       {/* Line items */}
       <Card>
         <CardHeader
@@ -1174,9 +1180,8 @@ export default async function QuoteDetailPage({
         )}
       </Card>
 
-      {/* Totals + meta grid */}
-      <div className="grid grid-cols-3 gap-4">
-        <Card className="col-span-2">
+      {/* Quote settings */}
+      <Card>
           <CardHeader title="Quote settings" />
           <form action={saveMeta} className="grid grid-cols-2 gap-4 px-5 py-4">
             <Field
@@ -1238,7 +1243,9 @@ export default async function QuoteDetailPage({
             )}
           </form>
         </Card>
+        </div>
 
+        <aside className="space-y-4 lg:sticky lg:top-4 lg:self-start">
         <Card>
           <CardHeader title="Totals" />
           <div className="space-y-2 px-5 py-4 text-sm">
@@ -1373,6 +1380,7 @@ export default async function QuoteDetailPage({
             )}
           </div>
         </Card>
+        </aside>
       </div>
 
       {/* Phase 9 — Deposit + share link */}
