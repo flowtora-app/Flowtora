@@ -122,12 +122,15 @@ export function OrderSplitShell({
         {list}
       </div>
 
-      {/* RIGHT: panel — desktop inline, mobile overlay */}
+      {/* RIGHT: panel — desktop inline grid cell, mobile fullscreen overlay.
+           The `lg:` prefixed utilities reset the mobile-only `fixed inset-0`
+           classes on desktop so the panel sits inside the grid column rather
+           than overlaying the whole screen. */}
       <div
         ref={panelScrollRef}
         className={[
           "min-h-0 overflow-y-auto",
-          "lg:block",
+          "lg:static lg:inset-auto lg:z-auto lg:block",
           mobilePanelOpen ? "fixed inset-0 z-40 block" : "hidden",
         ].join(" ")}
         style={{ background: "var(--surface-0)" }}
