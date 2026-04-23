@@ -167,41 +167,59 @@ export default async function TenantLayout({
 
   const collapsedInitial = jar.get("ts_shell_collapsed")?.value === "1";
 
-  // Build sidebar sections. Three clusters; Slice B's grouping:
-  //   Work      — the day-to-day shop cadence
-  //   Revenue   — customers, leads, and money surfaces
-  //   Back office — reports / support / settings
+  // Sidebar structured around the sales-to-cash lifecycle — five
+  // clusters that mirror how a shop actually moves through a job:
+  //   Inbox    — what needs me today
+  //   Sell     — pre-commitment: lead → customer → quote
+  //   Produce  — the work: order → proofs → shop floor → install
+  //   Collect  — invoices & cash
+  //   Manage   — catalog, costs, reporting, admin
+  //
+  // Rationale: Quotes sit with Customers (pre-sale funnel), Orders lead
+  // Produce (pivot from sales to execution), Payments gets its own line
+  // in Collect (A/R is a daily concern), Proofs is promoted out of the
+  // order-detail nesting because design approval is a frequent task.
   const base = `/t/${slug}`;
   const sections: SidebarSection[] = [
     {
-      label: "Work",
+      label: "Inbox",
       items: [
         { href: `${base}/dashboard`, label: "Dashboard", icon: "Dashboard" },
         { href: `${base}/attention`, label: "Needs attention", icon: "Attention", badge: attentionCount },
-        { href: `${base}/tasks`, label: "Tasks", icon: "Tasks" },
-        // Phase 22 Slice A — approvers get a badge; non-approvers still see
-        // the link so they can check on their own pending requests.
         { href: `${base}/approvals`, label: "Approvals", icon: "Approvals", badge: approvalsPending },
-        { href: `${base}/orders`, label: "Orders", icon: "Orders" },
-        { href: `${base}/production`, label: "Production", icon: "Production" },
-        { href: `${base}/installs`, label: "Installs", icon: "Installs" },
+        { href: `${base}/tasks`,     label: "Tasks",     icon: "Tasks" },
       ],
     },
     {
-      label: "Revenue",
+      label: "Sell",
       items: [
-        { href: `${base}/leads`, label: "Pipeline", icon: "Pipeline" },
+        { href: `${base}/leads`,     label: "Pipeline",  icon: "Pipeline"  },
         { href: `${base}/customers`, label: "Customers", icon: "Customers" },
-        { href: `${base}/quotes`, label: "Quotes", icon: "Quotes" },
-        { href: `${base}/invoices`, label: "Invoices", icon: "Invoices" },
-        { href: `${base}/products`, label: "Products", icon: "Products" },
+        { href: `${base}/quotes`,    label: "Quotes",    icon: "Quotes"    },
       ],
     },
     {
-      label: "Office",
+      label: "Produce",
       items: [
-        { href: `${base}/expenses`, label: "Expenses", icon: "Expenses" },
+        { href: `${base}/orders`,     label: "Orders",     icon: "Orders"     },
+        { href: `${base}/proofs`,     label: "Proofs",     icon: "Proofs"     },
+        { href: `${base}/production`, label: "Production", icon: "Production" },
+        { href: `${base}/installs`,   label: "Installs",   icon: "Installs"   },
+      ],
+    },
+    {
+      label: "Collect",
+      items: [
+        { href: `${base}/invoices`, label: "Invoices", icon: "Invoices" },
+        { href: `${base}/payments`, label: "Payments", icon: "Payments" },
+      ],
+    },
+    {
+      label: "Manage",
+      items: [
+        { href: `${base}/products`, label: "Products", icon: "Products" },
         { href: `${base}/vendors`,  label: "Vendors",  icon: "Vendors"  },
+        { href: `${base}/expenses`, label: "Expenses", icon: "Expenses" },
         { href: `${base}/reports`,  label: "Reports",  icon: "Reports"  },
         { href: `${base}/support`,  label: "Support",  icon: "Support"  },
         { href: `${base}/settings`, label: "Settings", icon: "Settings" },

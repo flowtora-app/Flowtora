@@ -353,6 +353,25 @@ export const Icon = {
       <path d="M7 4L3 8l4 4" />
     </Svg>
   ),
+  // Proofs — design doc with a check (approval). Groups with Orders
+  // and Installs visually in the sidebar.
+  Proofs: (p: IconProps) => (
+    <Svg {...p}>
+      <path d="M3.5 2h6l3 3v9h-9z" />
+      <path d="M9.5 2v3h3" />
+      <path d="M5.5 9.5l1.5 1.5 3-3" />
+    </Svg>
+  ),
+  // Payments — a card with a dollar mark. Differentiates from Invoices
+  // (document glyph) at nav glance.
+  Payments: (p: IconProps) => (
+    <Svg {...p}>
+      <rect x="1.5" y="4" width="13" height="9" rx="1.5" />
+      <path d="M1.5 7h13" />
+      <path d="M8 10h1.5a1 1 0 100-2h-1a1 1 0 110-2H11" />
+      <path d="M9 5v6" />
+    </Svg>
+  ),
 };
 
 export type IconName = keyof typeof Icon;

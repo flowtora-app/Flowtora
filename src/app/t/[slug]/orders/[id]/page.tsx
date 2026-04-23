@@ -457,6 +457,133 @@ export default async function OrderDetailPage({
         </div>
       )}
 
+      {/* Phase A Slice 2 — Order summary strip. Keeps the money snapshot and
+          the "next action" hint directly under the header so staff don't have
+          to scroll to the invoices card to know what to do next. The invoice
+          CTAs here are state-aware (Deposit shown when deposit is outstanding
+          and there's no DEPOSIT invoice yet; Balance shown once the job is
+          READY/COMPLETED with a balance remaining). */}
+      {(() => {
+        const balanceInvoice = order.invoices.find((inv) => inv.kind === "BALANCE");
+        const showDepositCTA = canInvoice && depositOutstanding && !depositInvoice;
+        const showBalanceCTA =
+          canInvoice &&
+          balance > 0.005 &&
+          !balanceInvoice &&
+          (order.status === "READY" || order.status === "OUT_FOR_INSTALL" || order.status === "COMPLETED");
+        let nextAction = "";
+        if (order.status === "CANCELED") {
+          nextAction = "Order canceled.";
+        } else if (depositGateActive) {
+          nextAction = `Collect ${formatMoney(depositOwed, ctx.tenant.currency)} deposit to unlock production.`;
+        } else if (activeBlockers.length > 0) {
+          nextAction = "Clear blockers before advancing.";
+        } else if (order.status === "NEW") {
+          nextAction = depositOutstanding
+            ? `Deposit of ${formatMoney(depositOwed, ctx.tenant.currency)} is still owed — send or record payment.`
+            : "Ready to start production.";
+        } else if (order.status === "IN_PRODUCTION") {
+          nextAction = `Production in progress · ${producedCount}/${order.items.length} items produced.`;
+        } else if (order.status === "READY") {
+          nextAction = balance > 0.005
+            ? `Send balance invoice for ${formatMoney(balance, ctx.tenant.currency)}, then deliver/install.`
+            : "Paid in full — schedule delivery or install.";
+        } else if (order.status === "OUT_FOR_INSTALL") {
+          nextAction = balance > 0.005
+            ? `Out for install · collect ${formatMoney(balance, ctx.tenant.currency)} on completion.`
+            : "Out for install.";
+        } else if (order.status === "COMPLETED") {
+          nextAction = balance > 0.005
+            ? `Completed — ${formatMoney(balance, ctx.tenant.currency)} still outstanding.`
+            : "Completed and paid in full.";
+        }
+        return (
+          <Card>
+            <div
+              className="grid gap-3 px-5 py-4 md:grid-cols-[1fr_1fr_1fr_2fr] md:items-center"
+            >
+              <div>
+                <div className="text-[10px] font-semibold uppercase tracking-wider" style={{ color: "var(--text-muted)" }}>
+                  Total
+                </div>
+                <div className="mt-0.5 text-lg font-semibold tabular-nums">
+                  {formatMoney(order.total.toString(), ctx.tenant.currency)}
+                </div>
+              </div>
+              <div>
+                <div className="text-[10px] font-semibold uppercase tracking-wider" style={{ color: "var(--text-muted)" }}>
+                  Paid
+                </div>
+                <div className="mt-0.5 text-lg font-semibold tabular-nums">
+                  {formatMoney(order.paidAmount.toString(), ctx.tenant.currency)}
+                </div>
+              </div>
+              <div>
+                <div className="text-[10px] font-semibold uppercase tracking-wider" style={{ color: "var(--text-muted)" }}>
+                  Balance
+                </div>
+                <div
+                  className="mt-0.5 text-lg font-semibold tabular-nums"
+                  style={{ color: balance > 0.005 ? "var(--danger-fg)" : "var(--text-default)" }}
+                >
+                  {formatMoney(balance, ctx.tenant.currency)}
+                </div>
+              </div>
+              <div className="flex flex-col gap-2 md:items-end">
+                {nextAction && (
+                  <div className="text-sm md:text-right" style={{ color: "var(--text-muted)" }}>
+                    <span className="text-[10px] font-semibold uppercase tracking-wider" style={{ color: "var(--text-faint)" }}>
+                      Next ·{" "}
+                    </span>
+                    <span style={{ color: "var(--text-default)" }}>{nextAction}</span>
+                  </div>
+                )}
+                {(showDepositCTA || showBalanceCTA || depositInvoice || balanceInvoice) && (
+                  <div className="flex flex-wrap gap-2 md:justify-end">
+                    {showDepositCTA && (
+                      <Link
+                        href={`/t/${slug}/invoices/new?customerId=${order.customer.id}&orderId=${order.id}&kind=DEPOSIT`}
+                        className="rounded-md px-3 py-1.5 text-xs font-medium"
+                        style={{ background: "var(--accent-primary)", color: "var(--accent-fg)" }}
+                      >
+                        Send deposit invoice
+                      </Link>
+                    )}
+                    {depositInvoice && (
+                      <Link
+                        href={`/t/${slug}/invoices/${depositInvoice.id}`}
+                        className="rounded-md px-3 py-1.5 text-xs font-medium"
+                        style={{ background: "var(--surface-2)", border: "1px solid var(--border-subtle)", color: "var(--text-default)" }}
+                      >
+                        Deposit inv {depositInvoice.number}
+                      </Link>
+                    )}
+                    {showBalanceCTA && (
+                      <Link
+                        href={`/t/${slug}/invoices/new?customerId=${order.customer.id}&orderId=${order.id}&kind=BALANCE`}
+                        className="rounded-md px-3 py-1.5 text-xs font-medium"
+                        style={{ background: "var(--accent-primary)", color: "var(--accent-fg)" }}
+                      >
+                        Send balance invoice
+                      </Link>
+                    )}
+                    {balanceInvoice && (
+                      <Link
+                        href={`/t/${slug}/invoices/${balanceInvoice.id}`}
+                        className="rounded-md px-3 py-1.5 text-xs font-medium"
+                        style={{ background: "var(--surface-2)", border: "1px solid var(--border-subtle)", color: "var(--text-default)" }}
+                      >
+                        Balance inv {balanceInvoice.number}
+                      </Link>
+                    )}
+                  </div>
+                )}
+              </div>
+            </div>
+          </Card>
+        );
+      })()}
+
       {/* Status actions */}
       {canManage && transitions.length > 0 && (
         <Card>

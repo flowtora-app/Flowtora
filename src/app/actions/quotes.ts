@@ -476,6 +476,10 @@ const ALLOWED_TRANSITIONS: Record<QuoteStatus, QuoteStatus[]> = {
 
 const statusSchema = z.object({
   status: z.enum(["DRAFT", "SENT", "VIEWED", "APPROVED", "DECLINED", "EXPIRED"]),
+  declinedReason: z
+    .enum(["PRICE", "COMPETITOR", "TIMING", "NO_RESPONSE", "SCOPE_CHANGE", "OTHER"])
+    .optional(),
+  declinedNote: z.string().trim().max(500).optional(),
 });
 
 export async function changeQuoteStatus(slug: string, quoteId: string, formData: FormData) {
@@ -576,12 +580,18 @@ export async function changeQuoteStatus(slug: string, quoteId: string, formData:
   if (next === "SENT") patch.sentAt = now;
   if (next === "VIEWED") patch.viewedAt = now;
   if (next === "APPROVED") patch.approvedAt = now;
-  if (next === "DECLINED") patch.declinedAt = now;
+  if (next === "DECLINED") {
+    patch.declinedAt = now;
+    patch.declinedReason = parsed.data.declinedReason ?? null;
+    patch.declinedNote = parsed.data.declinedNote?.length ? parsed.data.declinedNote : null;
+  }
   if (next === "DRAFT") {
     patch.sentAt = null;
     patch.viewedAt = null;
     patch.approvedAt = null;
     patch.declinedAt = null;
+    patch.declinedReason = null;
+    patch.declinedNote = null;
   }
 
   await db.quote.update({ where: { id: quoteId }, data: patch });

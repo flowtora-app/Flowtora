@@ -1011,12 +1011,17 @@ model Quote {
   number     String // e.g. "Q-1001" — unique within tenant
   status     QuoteStatus @default(DRAFT)
 
-  issuedAt   DateTime?
-  expiresAt  DateTime?
-  sentAt     DateTime?
-  viewedAt   DateTime?
-  approvedAt DateTime?
-  declinedAt DateTime?
+  issuedAt       DateTime?
+  expiresAt      DateTime?
+  sentAt         DateTime?
+  viewedAt       DateTime?
+  approvedAt     DateTime?
+  declinedAt     DateTime?
+  // Phase A Slice 3 — structured decline reason for win/loss analytics. The
+  // free-text `declinedNote` captures the "why" for sales follow-up; the enum
+  // lets us roll up loss buckets in reports without parsing notes.
+  declinedReason DeclinedReason?
+  declinedNote   String?
 
   // Stored totals (recomputed whenever items/meta change).
   subtotal       Decimal      @default(0) @db.Decimal(12, 2)
@@ -1218,6 +1223,19 @@ enum QuoteStatus {
   APPROVED
   DECLINED
   EXPIRED
+}
+
+// Phase A Slice 3 — buckets for why a quote was declined. Mirrors the
+// common win/loss categories shops actually act on: price too high, lost
+// to a competitor, timing (customer isn't ready), no response, or "other"
+// with a free-text note.
+enum DeclinedReason {
+  PRICE
+  COMPETITOR
+  TIMING
+  NO_RESPONSE
+  SCOPE_CHANGE
+  OTHER
 }
 
 enum DiscountType {

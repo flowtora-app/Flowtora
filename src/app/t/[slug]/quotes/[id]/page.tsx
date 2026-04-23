@@ -56,6 +56,21 @@ export async function generateMetadata(
   return { title: q?.number ? `Quote ${q.number}` : "Quote" };
 }
 
+// Phase A Slice 3 — human labels for the DeclinedReason enum. Lives in the
+// page component because the quote-detail banner is the only UI that currently
+// renders it; promote to lib/quotes if another surface needs it.
+function declinedReasonLabel(reason: string): string {
+  switch (reason) {
+    case "PRICE":        return "Price too high";
+    case "COMPETITOR":   return "Went with competitor";
+    case "TIMING":       return "Timing / not ready";
+    case "NO_RESPONSE":  return "No response";
+    case "SCOPE_CHANGE": return "Scope changed";
+    case "OTHER":        return "Other";
+    default:             return humanize(reason);
+  }
+}
+
 // Status transitions exposed as buttons for each current status.
 const STATUS_BUTTONS: Record<string, { to: string; label: string; variant?: "primary" | "secondary" | "danger" }[]> = {
   DRAFT:    [{ to: "SENT", label: "Mark as sent" }],
@@ -733,6 +748,81 @@ export default async function QuoteDetailPage({
         </div>
       )}
 
+      {/* Approved-quote banner. Visible shout at the top so a rep landing
+          on an approved quote sees "order was created" before reading
+          anything else. Detailed handoff card with deposit + totals
+          lives lower on the page. */}
+      {quote.status === "APPROVED" && (
+        <div
+          className="flex items-center gap-3 rounded-md px-4 py-3"
+          style={{
+            background: "color-mix(in oklab, #10b981 12%, var(--surface-0))",
+            border: "1px solid color-mix(in oklab, #10b981 45%, var(--border-default))",
+          }}
+        >
+          <span
+            aria-hidden
+            className="flex h-7 w-7 shrink-0 items-center justify-center rounded-full text-[13px] font-bold"
+            style={{ background: "#10b981", color: "white" }}
+          >
+            ✓
+          </span>
+          <div className="min-w-0 flex-1 text-sm" style={{ color: "var(--text-default)" }}>
+            {quote.order ? (
+              <>
+                <span className="font-medium">Order {quote.order.number} created</span>
+                <span style={{ color: "var(--text-muted)" }}>
+                  {" "}— line items, customer, and totals are locked for production.
+                </span>
+              </>
+            ) : (
+              <>
+                <span className="font-medium">Order creation in progress…</span>
+                <span style={{ color: "var(--text-muted)" }}>
+                  {" "}This page will reflect the order once it finishes. Reload if it persists.
+                </span>
+              </>
+            )}
+          </div>
+          {quote.order && (
+            <Link
+              href={`/t/${slug}/orders/${quote.order.id}`}
+              className="ts-focus inline-flex shrink-0 items-center gap-1.5 rounded-md px-3 py-1.5 text-sm font-medium transition-colors"
+              style={{
+                background: "#10b981",
+                color: "white",
+                border: "1px solid #0ea371",
+              }}
+            >
+              Open order →
+            </Link>
+          )}
+        </div>
+      )}
+
+      {/* Phase A Slice 3 — declined banner surfaces the loss reason right at
+          the top of the page so a rep following up with the customer has the
+          "why" in front of them without hunting through comments. */}
+      {quote.status === "DECLINED" && (
+        <div
+          className="rounded-md px-4 py-3 text-sm"
+          style={{
+            background: "color-mix(in oklab, #ef4444 10%, var(--surface-0))",
+            border: "1px solid color-mix(in oklab, #ef4444 40%, var(--border-default))",
+          }}
+        >
+          <div className="font-medium">
+            Declined{quote.declinedAt ? <> on {formatDate(quote.declinedAt)}</> : null}
+            {quote.declinedReason ? <> · {declinedReasonLabel(quote.declinedReason)}</> : null}
+          </div>
+          {quote.declinedNote && (
+            <div className="mt-1 whitespace-pre-wrap text-xs" style={{ color: "var(--text-muted)" }}>
+              {quote.declinedNote}
+            </div>
+          )}
+        </div>
+      )}
+
       {/* Header */}
       <div className="flex items-start justify-between">
         <div>
@@ -971,6 +1061,43 @@ export default async function QuoteDetailPage({
             <span className="text-xs" style={{ color: "var(--text-muted)" }}>Actions:</span>
             {buttons.map((b) => {
               const action = changeQuoteStatus.bind(null, slug, quote.id);
+              if (b.to === "DECLINED") {
+                return (
+                  <form key={b.to} action={action} className="flex flex-wrap items-center gap-2">
+                    <input type="hidden" name="status" value="DECLINED" />
+                    <select
+                      name="declinedReason"
+                      defaultValue=""
+                      className="rounded-md px-2 py-1.5 text-sm outline-none"
+                      style={{
+                        background: "var(--surface-1)",
+                        border: "1px solid var(--border-subtle)",
+                        color: "var(--text-default)",
+                      }}
+                    >
+                      <option value="">Reason (optional)…</option>
+                      <option value="PRICE">Price too high</option>
+                      <option value="COMPETITOR">Went with competitor</option>
+                      <option value="TIMING">Timing / not ready</option>
+                      <option value="NO_RESPONSE">No response</option>
+                      <option value="SCOPE_CHANGE">Scope changed</option>
+                      <option value="OTHER">Other</option>
+                    </select>
+                    <input
+                      name="declinedNote"
+                      placeholder="Note (optional)"
+                      maxLength={500}
+                      className="w-48 rounded-md px-2 py-1.5 text-sm outline-none"
+                      style={{
+                        background: "var(--surface-1)",
+                        border: "1px solid var(--border-subtle)",
+                        color: "var(--text-default)",
+                      }}
+                    />
+                    <Button type="submit" variant={b.variant ?? "danger"}>{b.label}</Button>
+                  </form>
+                );
+              }
               return (
                 <form key={b.to} action={action}>
                   <input type="hidden" name="status" value={b.to} />
