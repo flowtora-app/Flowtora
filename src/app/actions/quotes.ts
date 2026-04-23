@@ -226,37 +226,48 @@ export async function updateQuoteMeta(slug: string, quoteId: string, formData: F
   const existing = await assertQuoteInTenant(ctx.tenant.id, quoteId);
   if (!existing) redirect(`/t/${slug}/quotes`);
 
-  const parsed = metaSchema.safeParse(Object.fromEntries(formData.entries()));
+  // Partial-update tolerant: only apply fields that the submitted form
+  // actually carries. Lets the detail page split meta across tabbed forms
+  // (Details / Pricing / Notes) without each tab clobbering the others.
+  const parsed = metaSchema.partial().safeParse(Object.fromEntries(formData.entries()));
   if (!parsed.success) redirect(`/t/${slug}/quotes/${quoteId}?error=${encodeURIComponent("Invalid input")}`);
 
   const d = parsed.data;
-  let salesRepId: string | null = null;
-  const repId = empty(d.salesRepId);
-  if (repId) {
-    const m = await db.membership.findFirst({
-      where: { tenantId: ctx.tenant.id, userId: repId, status: "ACTIVE" },
-    });
-    if (m) salesRepId = repId;
+  const data: Prisma.QuoteUpdateInput = {};
+
+  if (formData.has("expiresAt")) {
+    data.expiresAt = d.expiresAt ? new Date(d.expiresAt) : null;
   }
+  if (formData.has("salesRepId")) {
+    const repId = empty(d.salesRepId);
+    let salesRepId: string | null = null;
+    if (repId) {
+      const m = await db.membership.findFirst({
+        where: { tenantId: ctx.tenant.id, userId: repId, status: "ACTIVE" },
+      });
+      if (m) salesRepId = repId;
+    }
+    data.salesRepId = salesRepId;
+  }
+  if (formData.has("discountType")) {
+    data.discountType = d.discountType ?? "NONE";
+  }
+  if (formData.has("discountValue") || formData.has("discountType")) {
+    const effectiveType = (formData.get("discountType") as string | null) ?? existing.discountType;
+    const discountValue = effectiveType === "NONE" ? 0 : (emptyNum(d.discountValue) ?? 0);
+    data.discountValue = discountValue as never;
+  }
+  if (formData.has("taxRatePercent")) {
+    const taxRate = d.taxRatePercent && d.taxRatePercent.length > 0
+      ? Math.max(0, Number(d.taxRatePercent)) / 100
+      : 0;
+    data.taxRate = (Number.isFinite(taxRate) ? taxRate : 0) as never;
+  }
+  if (formData.has("notes")) data.notes = empty(d.notes);
+  if (formData.has("customerNote")) data.customerNote = empty(d.customerNote);
+  if (formData.has("terms")) data.terms = empty(d.terms);
 
-  const discountValue = d.discountType === "NONE" ? 0 : (emptyNum(d.discountValue) ?? 0);
-  const taxRate = d.taxRatePercent && d.taxRatePercent.length > 0
-    ? Math.max(0, Number(d.taxRatePercent)) / 100
-    : 0;
-
-  await db.quote.update({
-    where: { id: quoteId },
-    data: {
-      expiresAt: d.expiresAt ? new Date(d.expiresAt) : null,
-      salesRepId,
-      discountType: d.discountType,
-      discountValue: discountValue as never,
-      taxRate: (Number.isFinite(taxRate) ? taxRate : 0) as never,
-      notes: empty(d.notes),
-      customerNote: empty(d.customerNote),
-      terms: empty(d.terms),
-    },
-  });
+  await db.quote.update({ where: { id: quoteId }, data });
 
   await recomputeQuoteTotals(quoteId);
   revalidatePath(`/t/${slug}/quotes/${quoteId}`);

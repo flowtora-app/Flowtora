@@ -42,9 +42,8 @@ import { SendMessageWidget } from "@/components/SendMessageWidget";
 import { loadSendContext } from "@/app/actions/message-templates";
 import { getGroupContext } from "@/lib/franchise";
 import { QuotePortalPreview } from "@/components/quotes/QuotePortalPreview";
+import { QuoteDetailTabs, parseQuoteDetailTab } from "@/components/quotes/QuoteDetailTabs";
 
-// Phase 23 — browser tab title resolves to the quote number so teammates
-// juggling multiple tabs ("which quote was that again?") can tell them apart.
 export async function generateMetadata(
   { params }: { params: Promise<{ slug: string; id: string }> },
 ) {
@@ -56,9 +55,6 @@ export async function generateMetadata(
   return { title: q?.number ? `Quote ${q.number}` : "Quote" };
 }
 
-// Phase A Slice 3 — human labels for the DeclinedReason enum. Lives in the
-// page component because the quote-detail banner is the only UI that currently
-// renders it; promote to lib/quotes if another surface needs it.
 function declinedReasonLabel(reason: string): string {
   switch (reason) {
     case "PRICE":        return "Price too high";
@@ -71,23 +67,23 @@ function declinedReasonLabel(reason: string): string {
   }
 }
 
-// Status transitions exposed as buttons for each current status.
-const STATUS_BUTTONS: Record<string, { to: string; label: string; variant?: "primary" | "secondary" | "danger" }[]> = {
-  DRAFT:    [{ to: "SENT", label: "Mark as sent" }],
+// Non-primary status transitions surfaced in the actions row. The primary
+// transition for each status (e.g. DRAFT → SENT, SENT → APPROVED) is promoted
+// to the sticky header's primary CTA, so it's filtered out of this table.
+const SECONDARY_STATUS_BUTTONS: Record<string, { to: string; label: string; variant?: "primary" | "secondary" | "danger" }[]> = {
+  DRAFT:    [],
   SENT:     [
-    { to: "VIEWED", label: "Mark as viewed", variant: "secondary" },
-    { to: "APPROVED", label: "Mark as approved" },
-    { to: "DECLINED", label: "Mark as declined", variant: "danger" },
-    { to: "DRAFT", label: "Back to draft", variant: "secondary" },
+    { to: "VIEWED",   label: "Mark as viewed",    variant: "secondary" },
+    { to: "DECLINED", label: "Mark as declined",  variant: "danger" },
+    { to: "DRAFT",    label: "Back to draft",     variant: "secondary" },
   ],
   VIEWED: [
-    { to: "APPROVED", label: "Mark as approved" },
-    { to: "DECLINED", label: "Mark as declined", variant: "danger" },
-    { to: "DRAFT", label: "Back to draft", variant: "secondary" },
+    { to: "DECLINED", label: "Mark as declined",  variant: "danger" },
+    { to: "DRAFT",    label: "Back to draft",     variant: "secondary" },
   ],
   APPROVED: [],
-  DECLINED: [{ to: "DRAFT", label: "Revert to draft", variant: "secondary" }],
-  EXPIRED:  [{ to: "DRAFT", label: "Revert to draft", variant: "secondary" }],
+  DECLINED: [],
+  EXPIRED:  [],
 };
 
 export default async function QuoteDetailPage({
@@ -95,12 +91,13 @@ export default async function QuoteDetailPage({
   searchParams,
 }: {
   params: Promise<{ slug: string; id: string }>;
-  searchParams: Promise<{ error?: string; notice?: string; preview?: string }>;
+  searchParams: Promise<{ error?: string; notice?: string; preview?: string; tab?: string }>;
 }) {
   const { slug, id } = await params;
   const sp = await searchParams;
   const ctx = await requirePermission(slug, "quotes:view");
   const canManage = ctx.can("quotes:manage");
+  const activeTab = parseQuoteDetailTab(sp.tab);
 
   const quote = await db.quote.findFirst({
     where: { id, tenantId: ctx.tenant.id },
@@ -120,17 +117,13 @@ export default async function QuoteDetailPage({
           },
         },
       },
-      // Phase 9 — sections group line items under headings.
       sections: { orderBy: { sortOrder: "asc" } },
-      // Phase 14 — internal quote conversation.
       comments: { orderBy: { createdAt: "asc" }, take: 200 },
     },
   });
   if (!quote) notFound();
   ctx.assertBranchAccess(quote.locationId);
 
-  // Phase 15 Slice D — also surface inherited shared products from the
-  // parent group root so franchisees can quote against the canonical catalog.
   const groupCtx = await getGroupContext(ctx.tenant.id);
   const productSelect = {
     id: true, name: true, pricingModel: true, basePrice: true, unit: true, category: true,
@@ -156,10 +149,6 @@ export default async function QuoteDetailPage({
       quoteId:      quote.id,
       senderUserId: ctx.userId,
     }),
-    // Phase 8 — active packages for the "Add package" picker. We only need
-    // id + name + a component count so the rep sees what they're about to
-    // drop in. The expansion itself re-reads components server-side so the
-    // numbers stay fresh.
     db.productPackage.findMany({
       where: { tenantId: ctx.tenant.id, active: true },
       orderBy: { name: "asc" },
@@ -172,12 +161,8 @@ export default async function QuoteDetailPage({
   ];
 
   const editable = canManage && quote.status !== "APPROVED";
-  const buttons = STATUS_BUTTONS[quote.status] ?? [];
 
-  // Phase 18 Slice F — gross margin panel. Each line contributes its snapshot
-  // cost extended by the same dimensions that drove its subtotal; lines
-  // without a cost snapshot are excluded from the cost base and flagged so
-  // the number can't be misread as "all lines covered".
+  // Margin computation (staff-only; rendered in the Pricing tab).
   let costBase = 0;
   let linesWithCost = 0;
   for (const it of quote.items) {
@@ -205,9 +190,6 @@ export default async function QuoteDetailPage({
       ? `${linesWithCost} of ${quote.items.length} line items have a cost — margin reflects only those.`
       : null;
 
-  // Phase 13 — compute approval state for this quote. We surface this on any
-  // pre-SENT quote so the sales rep isn't surprised by a redirect-with-error
-  // when they try to send. Post-SENT quotes don't need the banner.
   const showApprovalBanner = quote.status === "DRAFT";
   const blockers = showApprovalBanner
     ? quoteSendBlockers(
@@ -222,9 +204,6 @@ export default async function QuoteDetailPage({
     : [];
   const approveAction = approveQuoteForSending.bind(null, slug, quote.id);
 
-  // Phase 22 Slice A — pending ApprovalRequest for this quote, if any.
-  // Surfaced on the banner so the rep can see "waiting on manager" instead
-  // of re-clicking send.
   const pendingApproval = showApprovalBanner
     ? await db.approvalRequest.findFirst({
         where: {
@@ -249,14 +228,9 @@ export default async function QuoteDetailPage({
   const saveDeposit = saveQuoteDeposit.bind(null, slug, quote.id);
   const mintShare = mintQuoteShareToken.bind(null, slug, quote.id);
   const revokeShare = revokeQuoteShareToken.bind(null, slug, quote.id);
-  // Phase 9 Slice D — one-click "save this quote as a template" so reps
-  // don't have to rebuild recurring shapes by hand.
   const saveAsTpl = saveQuoteAsTemplate.bind(null, slug, quote.id);
+  const setStatus = changeQuoteStatus.bind(null, slug, quote.id);
 
-  // Phase 9 Slice E — load the full revision chain so staff can see every
-  // prior version and jump between them. Root is either this quote (if it's
-  // the original) or its parent. We pull ALL quotes whose parentQuoteId is
-  // the root, plus the root itself.
   const rootId = quote.parentQuoteId ?? quote.id;
   const revisionChain = await db.quote.findMany({
     where: {
@@ -276,8 +250,6 @@ export default async function QuoteDetailPage({
   });
   const hasRevisions = revisionChain.length > 1;
 
-  // Phase 9 — group items by section (null bucket = un-grouped band at top).
-  // We render the un-grouped bucket first, then each section in sortOrder.
   const sectionById = new Map(quote.sections.map((s) => [s.id, s]));
   const ungrouped = quote.items.filter((it) => !it.sectionId || !sectionById.has(it.sectionId));
   const bySection = new Map<string, typeof quote.items>();
@@ -288,15 +260,11 @@ export default async function QuoteDetailPage({
     }
   }
 
-  // Options available in the "move to section" dropdown.
   const sectionOptions = [
     { value: "", label: "— un-grouped —" },
     ...quote.sections.map((s) => ({ value: s.id, label: s.title })),
   ];
 
-  // Phase 9 — per-item render. Extracted as a nested component so we can
-  // reuse it inside the un-grouped band and each section's list. Nested
-  // component closures are fine in an RSC — this only runs on the server.
   type LineItem = (typeof quote.items)[number];
   function ItemsUL({ items }: { items: LineItem[] }) {
     if (items.length === 0) return null;
@@ -368,7 +336,6 @@ export default async function QuoteDetailPage({
                 }}
               >
                 <form action={save} className="contents">
-                  {/* Header: name on left, big total on right */}
                   <div className="flex items-start gap-4 p-4">
                     <div className="min-w-0 flex-1 space-y-2">
                       <Field
@@ -463,7 +430,6 @@ export default async function QuoteDetailPage({
                     </div>
                   </div>
 
-                  {/* Pricing inputs */}
                   <div className="grid grid-cols-2 gap-3 px-4 pb-4 md:grid-cols-4">
                     {item.pricingModel !== "CUSTOM_QUOTE" && (
                       <Field
@@ -537,7 +503,6 @@ export default async function QuoteDetailPage({
                     )}
                   </div>
 
-                  {/* Collapsible details — description, options, tier info, tax */}
                   <details
                     style={{ borderTop: "1px solid var(--border-subtle)" }}
                   >
@@ -618,7 +583,6 @@ export default async function QuoteDetailPage({
                     </div>
                   </details>
 
-                  {/* Footer: save button */}
                   {editable && (
                     <div
                       className="flex items-center justify-between gap-3 px-4 py-2"
@@ -637,8 +601,6 @@ export default async function QuoteDetailPage({
                   )}
                 </form>
 
-                {/* Sibling forms: move / optional / remove. Separate forms so
-                    they don't accidentally submit the save form's fields. */}
                 {editable && (
                   <div
                     className="flex flex-wrap items-end gap-3 px-4 py-2"
@@ -690,9 +652,6 @@ export default async function QuoteDetailPage({
     );
   }
 
-  // Phase 13 — rush fee. Only offered while the quote is still editable and
-  // the tenant has actually configured a rush %. Shows a preview so the rep
-  // can decide before clicking.
   const rushPct = ctx.tenant.rushFeePercent;
   const currentSubtotal = Number(quote.subtotal);
   const rushPreview = rushPct > 0 && currentSubtotal > 0
@@ -700,13 +659,9 @@ export default async function QuoteDetailPage({
     : 0;
   const canApplyRush = editable && rushPct > 0 && currentSubtotal > 0;
 
-  // Phase 5 — portal-style preview. URL-driven (?preview=1) so a refresh
-  // keeps the panel open and there's no client state to manage. Close
-  // href drops the preview param (error/notice params are one-shot so
-  // dropping them is fine).
   const previewOpen = sp.preview === "1";
   const previewCloseHref = `/t/${slug}/quotes/${quote.id}`;
-  const previewOpenHref = `/t/${slug}/quotes/${quote.id}?preview=1`;
+  const previewOpenHref = `/t/${slug}/quotes/${quote.id}?preview=1${sp.tab ? `&tab=${encodeURIComponent(sp.tab)}` : ""}`;
   const previewItems = quote.items.map((it) => {
     const opts = parseSelectedOptions(it.selectedOptions as unknown);
     return {
@@ -727,8 +682,59 @@ export default async function QuoteDetailPage({
     description: s.description,
   }));
 
+  // Header primary CTA — the single most important action for this status.
+  // Rendered right of the total in the sticky header; other transitions live
+  // in the compact actions row below.
+  let primaryCta: React.ReactNode = null;
+  if (canManage) {
+    if (quote.status === "DRAFT") {
+      primaryCta = (
+        <form action={setStatus}>
+          <input type="hidden" name="status" value="SENT" />
+          <Button type="submit">Send quote</Button>
+        </form>
+      );
+    } else if (quote.status === "SENT" || quote.status === "VIEWED") {
+      primaryCta = (
+        <form action={setStatus}>
+          <input type="hidden" name="status" value="APPROVED" />
+          <Button type="submit">Convert to order</Button>
+        </form>
+      );
+    } else if (quote.status === "APPROVED" && quote.order) {
+      primaryCta = (
+        <Link
+          href={`/t/${slug}/orders/${quote.order.id}`}
+          className="ts-focus inline-flex items-center gap-1.5 rounded-md px-4 py-2 text-sm font-medium transition-colors"
+          style={{
+            background: "var(--accent)",
+            color: "white",
+          }}
+        >
+          Open order →
+        </Link>
+      );
+    } else if (quote.status === "DECLINED" || quote.status === "EXPIRED") {
+      primaryCta = (
+        <form action={setStatus}>
+          <input type="hidden" name="status" value="DRAFT" />
+          <Button type="submit" variant="secondary">Revert to draft</Button>
+        </form>
+      );
+    }
+  }
+
+  const secondaryTransitions = SECONDARY_STATUS_BUTTONS[quote.status] ?? [];
+
+  const expiryDaysLeft = quote.expiresAt
+    ? Math.ceil((quote.expiresAt.getTime() - Date.now()) / 86_400_000)
+    : null;
+  const expiringSoon =
+    expiryDaysLeft != null && expiryDaysLeft >= 0 && expiryDaysLeft <= 3 &&
+    (quote.status === "SENT" || quote.status === "VIEWED");
+
   return (
-    <div className="space-y-6">
+    <div className="space-y-5">
       <div className="text-sm">
         <Link href={`/t/${slug}/quotes`} className="underline" style={{ color: "var(--text-muted)" }}>
           ← Quotes
@@ -747,62 +753,17 @@ export default async function QuoteDetailPage({
           {sp.error}
         </div>
       )}
-
-      {/* Approved-quote banner. Visible shout at the top so a rep landing
-          on an approved quote sees "order was created" before reading
-          anything else. Detailed handoff card with deposit + totals
-          lives lower on the page. */}
-      {quote.status === "APPROVED" && (
+      {sp.notice && (
         <div
-          className="flex items-center gap-3 rounded-md px-4 py-3"
-          style={{
-            background: "color-mix(in oklab, #10b981 12%, var(--surface-0))",
-            border: "1px solid color-mix(in oklab, #10b981 45%, var(--border-default))",
-          }}
+          className="rounded-md px-4 py-2 text-sm"
+          style={{ background: "var(--success-surface)", color: "var(--success-fg)", border: "1px solid var(--success-fg)" }}
         >
-          <span
-            aria-hidden
-            className="flex h-7 w-7 shrink-0 items-center justify-center rounded-full text-[13px] font-bold"
-            style={{ background: "#10b981", color: "white" }}
-          >
-            ✓
-          </span>
-          <div className="min-w-0 flex-1 text-sm" style={{ color: "var(--text-default)" }}>
-            {quote.order ? (
-              <>
-                <span className="font-medium">Order {quote.order.number} created</span>
-                <span style={{ color: "var(--text-muted)" }}>
-                  {" "}— line items, customer, and totals are locked for production.
-                </span>
-              </>
-            ) : (
-              <>
-                <span className="font-medium">Order creation in progress…</span>
-                <span style={{ color: "var(--text-muted)" }}>
-                  {" "}This page will reflect the order once it finishes. Reload if it persists.
-                </span>
-              </>
-            )}
-          </div>
-          {quote.order && (
-            <Link
-              href={`/t/${slug}/orders/${quote.order.id}`}
-              className="ts-focus inline-flex shrink-0 items-center gap-1.5 rounded-md px-3 py-1.5 text-sm font-medium transition-colors"
-              style={{
-                background: "#10b981",
-                color: "white",
-                border: "1px solid #0ea371",
-              }}
-            >
-              Open order →
-            </Link>
-          )}
+          {sp.notice}
         </div>
       )}
 
-      {/* Phase A Slice 3 — declined banner surfaces the loss reason right at
-          the top of the page so a rep following up with the customer has the
-          "why" in front of them without hunting through comments. */}
+      {/* Status-specific banners — conditional, above the sticky header so
+          they scroll away on long pages. */}
       {quote.status === "DECLINED" && (
         <div
           className="rounded-md px-4 py-3 text-sm"
@@ -823,55 +784,247 @@ export default async function QuoteDetailPage({
         </div>
       )}
 
-      {/* Header */}
-      <div className="flex items-start justify-between">
-        <div>
-          <div className="flex items-center gap-3">
-            <h1 className="text-2xl font-semibold">{quote.number}</h1>
-            <span className="rounded-full px-2 py-0.5 text-xs" style={{ background: statusColor(quote.status), color: "white" }}>
-              {statusLabel(quote.status)}
-            </span>
-            {hasRevisions && (
-              <span
-                className="rounded-full px-2 py-0.5 text-xs"
-                style={{
-                  background: "var(--surface-1)",
-                  border: "1px solid var(--border-subtle)",
-                  color: "var(--text-muted)",
-                }}
-                title="Part of a revision chain"
-              >
-                Rev {quote.revisionNumber} of {revisionChain.length}
-              </span>
-            )}
+      {quote.supersededAt && (
+        <div
+          className="rounded-md px-4 py-3 text-sm"
+          style={{
+            background: "var(--warning-surface, #3a2e15)",
+            color: "var(--warning-fg, #ffd27a)",
+            border: "1px solid var(--warning-fg, #a97a1d)",
+          }}
+        >
+          This quote was superseded by a newer revision on {formatDate(quote.supersededAt)}.
+          {" "}
+          {(() => {
+            const newest = [...revisionChain]
+              .filter((r) => !r.supersededAt && r.id !== quote.id)
+              .sort((a, b) => b.revisionNumber - a.revisionNumber)[0];
+            return newest ? (
+              <Link href={`/t/${slug}/quotes/${newest.id}`} className="underline">
+                Open rev {newest.revisionNumber} ({newest.number}) →
+              </Link>
+            ) : null;
+          })()}
+        </div>
+      )}
+
+      {showApprovalBanner && blockers.length > 0 && !quote.approvedToSendAt && (
+        <div
+          className="rounded-md px-4 py-3 text-sm"
+          style={{
+            background: "var(--warning-surface, #3a2e15)",
+            color: "var(--warning-fg, #ffd27a)",
+            border: "1px solid var(--warning-fg, #5b4620)",
+          }}
+        >
+          <div className="font-medium">
+            {pendingApproval ? "Approval pending" : "Needs approval before sending"}
           </div>
-          <div className="mt-1 text-sm" style={{ color: "var(--text-muted)" }}>
-            For <Link href={`/t/${slug}/customers/${quote.customer.id}`} className="underline">{quote.customer.name}</Link>
-            {" · "}Sales rep: {quote.salesRepId ? (memberMap.get(quote.salesRepId)?.name ?? "—") : "—"}
-            {quote.expiresAt && <>{" · "}Expires {formatDate(quote.expiresAt)}</>}
-            {quote.order && (
-              <>{" · "}Order <Link href={`/t/${slug}/orders/${quote.order.id}`} className="underline">{quote.order.number}</Link></>
+          <ul className="mt-1 list-disc pl-5">
+            {blockers.map((b) => (
+              <li key={b}>{b}</li>
+            ))}
+          </ul>
+          {pendingApproval ? (
+            <div className="mt-2 text-xs" style={{ color: "var(--text-muted)" }}>
+              Requested on {formatDate(pendingApproval.createdAt)}
+              {pendingApproval.requestedById && (
+                <> by {memberMap.get(pendingApproval.requestedById)?.name ?? "a team member"}</>
+              )}.{" "}
+              <Link href={`/t/${slug}/approvals`} className="underline">Open approvals inbox</Link>
+            </div>
+          ) : ctx.can("quotes:approve_exceptions") ? (
+            <form action={approveAction} className="mt-3">
+              <Button type="submit" variant="secondary">Approve this quote for sending</Button>
+            </form>
+          ) : (
+            <div className="mt-2 text-xs" style={{ color: "var(--text-muted)" }}>
+              Click &ldquo;Send quote&rdquo; to request manager approval, or adjust the discount / total until both rules are satisfied.
+            </div>
+          )}
+        </div>
+      )}
+
+      {showApprovalBanner && quote.approvedToSendAt && (
+        <div
+          className="rounded-md px-4 py-2 text-sm"
+          style={{
+            background: "var(--success-surface)",
+            color: "var(--success-fg)",
+            border: "1px solid var(--success-fg)",
+          }}
+        >
+          Approved to send
+          {quote.approvedToSendById && (
+            <> by {memberMap.get(quote.approvedToSendById)?.name ?? "a manager"}</>
+          )}
+          {" on "}{formatDate(quote.approvedToSendAt)}.
+        </div>
+      )}
+
+      {/* STICKY HEADER — ID + status + customer/rep/expiry + total + primary actions. */}
+      <header
+        className="sticky top-0 z-10 rounded-lg"
+        style={{
+          background: "var(--surface-0)",
+          border: "1px solid var(--border-subtle)",
+          boxShadow: "0 1px 2px rgb(0 0 0 / 0.04)",
+        }}
+      >
+        <div className="flex flex-wrap items-start justify-between gap-4 px-5 py-4">
+          <div className="min-w-0 flex-1">
+            <div className="flex flex-wrap items-center gap-2.5">
+              <h1 className="text-xl font-semibold" style={{ color: "var(--text-default)" }}>
+                {quote.number}
+              </h1>
+              <span
+                className="rounded-full px-2 py-0.5 text-[11px] font-medium"
+                style={{ background: statusColor(quote.status), color: "white" }}
+              >
+                {statusLabel(quote.status)}
+              </span>
+              {hasRevisions && (
+                <span
+                  className="rounded-full px-2 py-0.5 text-[11px]"
+                  style={{
+                    background: "var(--surface-1)",
+                    border: "1px solid var(--border-subtle)",
+                    color: "var(--text-muted)",
+                  }}
+                  title="Part of a revision chain"
+                >
+                  Rev {quote.revisionNumber} of {revisionChain.length}
+                </span>
+              )}
+              {expiringSoon && (
+                <span
+                  className="rounded-full px-2 py-0.5 text-[11px] font-medium"
+                  style={{
+                    background: "var(--warning-surface, #3a2e15)",
+                    color: "var(--warning-fg, #ffd27a)",
+                  }}
+                  title={`Expires in ${expiryDaysLeft} day${expiryDaysLeft === 1 ? "" : "s"}`}
+                >
+                  ⌛ Expires in {expiryDaysLeft}d
+                </span>
+              )}
+            </div>
+            <div className="mt-1 text-sm" style={{ color: "var(--text-muted)" }}>
+              For{" "}
+              <Link
+                href={`/t/${slug}/customers/${quote.customer.id}`}
+                className="underline"
+                style={{ color: "var(--text-default)" }}
+              >
+                {quote.customer.name}
+              </Link>
+              {" · "}Rep {quote.salesRepId ? (memberMap.get(quote.salesRepId)?.name ?? "—") : "—"}
+              {" · "}Expires {quote.expiresAt ? formatDate(quote.expiresAt) : "—"}
+              {quote.order && (
+                <>
+                  {" · "}Order{" "}
+                  <Link href={`/t/${slug}/orders/${quote.order.id}`} className="underline">
+                    {quote.order.number}
+                  </Link>
+                </>
+              )}
+            </div>
+          </div>
+          <div className="flex items-center gap-5 shrink-0">
+            <div className="text-right">
+              <div
+                className="text-[10px] uppercase tracking-wide"
+                style={{ color: "var(--text-muted)" }}
+              >
+                Total
+              </div>
+              <div
+                className="text-2xl font-bold tabular-nums leading-tight"
+                style={{ color: "var(--text-default)" }}
+              >
+                {formatMoney(quote.total.toString(), ctx.tenant.currency)}
+              </div>
+            </div>
+            {canManage && (
+              <div className="flex items-center gap-2">
+                <Link
+                  href={previewOpenHref}
+                  className="ts-focus inline-flex items-center gap-1.5 rounded-md px-4 py-2 text-sm font-medium transition-colors"
+                  style={{
+                    background: "var(--surface-1)",
+                    border: "1px solid var(--border-default)",
+                    color: "var(--text-default)",
+                  }}
+                  title="Portal-style preview of this quote"
+                >
+                  Preview
+                </Link>
+                {primaryCta}
+              </div>
             )}
           </div>
         </div>
-        {canManage && (
+      </header>
+
+      {/* Compact actions row — remaining transitions, rush fee, revise, duplicate, delete.
+          Deliberately not sticky; keep the header light. */}
+      {canManage &&
+        (secondaryTransitions.length > 0 ||
+          canApplyRush ||
+          quote.status !== "APPROVED") && (
           <div className="flex flex-wrap items-center gap-2">
-            <Link
-              href={previewOpenHref}
-              className="ts-focus inline-flex items-center gap-1.5 rounded-md px-3 py-1.5 text-sm"
-              style={{
-                background: "var(--surface-1)",
-                border: "1px solid var(--border-default)",
-                color: "var(--text-default)",
-              }}
-              title="See a read-only portal-style preview of this quote — what the customer sees when they open the share link."
-            >
-              Preview as customer
-            </Link>
-            {/* Revise is the right action when a live quote needs pricing
-                or scope changes — it keeps the chain intact. Duplicate
-                stays available for starting a fully unrelated quote from
-                this one as a template-in-disguise. */}
+            {secondaryTransitions.map((b) => {
+              if (b.to === "DECLINED") {
+                return (
+                  <form key={b.to} action={setStatus} className="flex flex-wrap items-center gap-2">
+                    <input type="hidden" name="status" value="DECLINED" />
+                    <select
+                      name="declinedReason"
+                      defaultValue=""
+                      className="rounded-md px-2 py-1.5 text-sm outline-none"
+                      style={{
+                        background: "var(--surface-1)",
+                        border: "1px solid var(--border-subtle)",
+                        color: "var(--text-default)",
+                      }}
+                    >
+                      <option value="">Reason (optional)…</option>
+                      <option value="PRICE">Price too high</option>
+                      <option value="COMPETITOR">Went with competitor</option>
+                      <option value="TIMING">Timing / not ready</option>
+                      <option value="NO_RESPONSE">No response</option>
+                      <option value="SCOPE_CHANGE">Scope changed</option>
+                      <option value="OTHER">Other</option>
+                    </select>
+                    <input
+                      name="declinedNote"
+                      placeholder="Note (optional)"
+                      maxLength={500}
+                      className="w-48 rounded-md px-2 py-1.5 text-sm outline-none"
+                      style={{
+                        background: "var(--surface-1)",
+                        border: "1px solid var(--border-subtle)",
+                        color: "var(--text-default)",
+                      }}
+                    />
+                    <Button type="submit" variant={b.variant ?? "danger"}>{b.label}</Button>
+                  </form>
+                );
+              }
+              return (
+                <form key={b.to} action={setStatus}>
+                  <input type="hidden" name="status" value={b.to} />
+                  <Button type="submit" variant={b.variant ?? "secondary"}>{b.label}</Button>
+                </form>
+              );
+            })}
+            {canApplyRush && (
+              <form action={rush}>
+                <Button type="submit" variant="secondary">
+                  Add rush fee ({rushPct}% = {formatMoney(rushPreview, ctx.tenant.currency)})
+                </Button>
+              </form>
+            )}
             {quote.status !== "APPROVED" && (
               <form action={revise}>
                 <Button type="submit" variant="secondary">Revise</Button>
@@ -887,41 +1040,8 @@ export default async function QuoteDetailPage({
             )}
           </div>
         )}
-      </div>
 
-      {/* Phase 9 Slice E — superseded banner. A newer revision exists, so
-          anything in this quote is stale. Don't hide the quote — staff may
-          still need to reference it — but make the state unmistakable. */}
-      {quote.supersededAt && (
-        <div
-          className="rounded-md px-4 py-3 text-sm"
-          style={{
-            background: "var(--warning-surface, #3a2e15)",
-            color: "var(--warning-fg, #ffd27a)",
-            border: "1px solid var(--warning-fg, #a97a1d)",
-          }}
-        >
-          This quote was superseded by a newer revision on {formatDate(quote.supersededAt)}.
-          {" "}
-          {(() => {
-            // Link to the newest live revision in the chain, if any.
-            const newest = [...revisionChain]
-              .filter((r) => !r.supersededAt && r.id !== quote.id)
-              .sort((a, b) => b.revisionNumber - a.revisionNumber)[0];
-            return newest ? (
-              <Link href={`/t/${slug}/quotes/${newest.id}`} className="underline">
-                Open rev {newest.revisionNumber} ({newest.number}) →
-              </Link>
-            ) : null;
-          })()}
-        </div>
-      )}
-
-      {/* Phase 9 Slice E — approved-quote handoff card. Once a quote is
-          APPROVED, the sales conversation is done and the operational
-          conversation starts. We pull the important next-step links into
-          a single panel so a rep doesn't have to go hunting for the order
-          or the deposit invoice after a win. */}
+      {/* Approved-handoff tiles — only when the quote has been converted. */}
       {quote.status === "APPROVED" && (
         <Card>
           <CardHeader
@@ -974,804 +1094,713 @@ export default async function QuoteDetailPage({
                 hint="Final agreed total, including tax and discounts."
               />
             </div>
-            {quote.order && (
-              <div className="flex gap-2">
-                <Link href={`/t/${slug}/orders/${quote.order.id}`}>
-                  <Button type="button">Open order</Button>
-                </Link>
-                <Link href={`/t/${slug}/orders/${quote.order.id}#payments`}>
-                  <Button type="button" variant="secondary">Record payment</Button>
-                </Link>
-                <Link href={`/t/${slug}/customers/${quote.customerId}`}>
-                  <Button type="button" variant="secondary">Customer page</Button>
-                </Link>
-              </div>
-            )}
           </div>
         </Card>
       )}
 
-      {/* Phase 13 — approval banner. Only relevant while the quote is a DRAFT. */}
-      {showApprovalBanner && blockers.length > 0 && !quote.approvedToSendAt && (
-        <div
-          className="rounded-md px-4 py-3 text-sm"
-          style={{
-            background: "var(--warning-surface, #3a2e15)",
-            color: "var(--warning-fg, #ffd27a)",
-            border: "1px solid var(--warning-fg, #5b4620)",
-          }}
-        >
-          <div className="font-medium">
-            {pendingApproval ? "Approval pending" : "Needs approval before sending"}
-          </div>
-          <ul className="mt-1 list-disc pl-5">
-            {blockers.map((b) => (
-              <li key={b}>{b}</li>
-            ))}
-          </ul>
-          {pendingApproval ? (
-            <div className="mt-2 text-xs" style={{ color: "var(--text-muted)" }}>
-              Requested on {formatDate(pendingApproval.createdAt)}
-              {pendingApproval.requestedById && (
-                <> by {memberMap.get(pendingApproval.requestedById)?.name ?? "a team member"}</>
-              )}.{" "}
-              <Link href={`/t/${slug}/approvals`} className="underline">Open approvals inbox</Link>
-            </div>
-          ) : ctx.can("quotes:approve_exceptions") ? (
-            <form action={approveAction} className="mt-3">
-              <Button type="submit" variant="secondary">Approve this quote for sending</Button>
-            </form>
-          ) : (
-            <div className="mt-2 text-xs" style={{ color: "var(--text-muted)" }}>
-              Click &ldquo;Mark as sent&rdquo; to request manager approval, or adjust the discount / total until both rules are satisfied.
-            </div>
-          )}
-        </div>
-      )}
-      {/* Phase 22 Slice A — surface notice/error params from approval flow. */}
-      {sp.notice && (
-        <div
-          className="rounded-md px-4 py-2 text-sm"
-          style={{ background: "var(--success-surface)", color: "var(--success-fg)", border: "1px solid var(--success-fg)" }}
-        >
-          {sp.notice}
-        </div>
-      )}
-      {showApprovalBanner && quote.approvedToSendAt && (
-        <div
-          className="rounded-md px-4 py-2 text-sm"
-          style={{
-            background: "var(--success-surface)",
-            color: "var(--success-fg)",
-            border: "1px solid var(--success-fg)",
-          }}
-        >
-          Approved to send
-          {quote.approvedToSendById && (
-            <> by {memberMap.get(quote.approvedToSendById)?.name ?? "a manager"}</>
-          )}
-          {" on "}{formatDate(quote.approvedToSendAt)}.
-        </div>
-      )}
-
-      {/* Status transitions + Phase 13 rush fee */}
-      {canManage && (buttons.length > 0 || canApplyRush) && (
-        <Card>
-          <div className="flex flex-wrap items-center gap-2 px-5 py-3">
-            <span className="text-xs" style={{ color: "var(--text-muted)" }}>Actions:</span>
-            {buttons.map((b) => {
-              const action = changeQuoteStatus.bind(null, slug, quote.id);
-              if (b.to === "DECLINED") {
-                return (
-                  <form key={b.to} action={action} className="flex flex-wrap items-center gap-2">
-                    <input type="hidden" name="status" value="DECLINED" />
-                    <select
-                      name="declinedReason"
-                      defaultValue=""
-                      className="rounded-md px-2 py-1.5 text-sm outline-none"
-                      style={{
-                        background: "var(--surface-1)",
-                        border: "1px solid var(--border-subtle)",
-                        color: "var(--text-default)",
-                      }}
-                    >
-                      <option value="">Reason (optional)…</option>
-                      <option value="PRICE">Price too high</option>
-                      <option value="COMPETITOR">Went with competitor</option>
-                      <option value="TIMING">Timing / not ready</option>
-                      <option value="NO_RESPONSE">No response</option>
-                      <option value="SCOPE_CHANGE">Scope changed</option>
-                      <option value="OTHER">Other</option>
-                    </select>
-                    <input
-                      name="declinedNote"
-                      placeholder="Note (optional)"
-                      maxLength={500}
-                      className="w-48 rounded-md px-2 py-1.5 text-sm outline-none"
-                      style={{
-                        background: "var(--surface-1)",
-                        border: "1px solid var(--border-subtle)",
-                        color: "var(--text-default)",
-                      }}
-                    />
-                    <Button type="submit" variant={b.variant ?? "danger"}>{b.label}</Button>
-                  </form>
-                );
-              }
-              return (
-                <form key={b.to} action={action}>
-                  <input type="hidden" name="status" value={b.to} />
-                  <Button type="submit" variant={b.variant ?? "primary"}>{b.label}</Button>
-                </form>
-              );
-            })}
-            {canApplyRush && (
-              <form action={rush}>
-                <Button type="submit" variant="secondary">
-                  Add rush fee ({rushPct}% = {formatMoney(rushPreview, ctx.tenant.currency)})
-                </Button>
-              </form>
-            )}
-          </div>
-        </Card>
-      )}
-
-      {/* Phase 4 — Line items + Quote settings sit in the main column while
-          the Totals card pins to a sticky right rail on desktop, so the
-          rep can watch the total move as they edit lines or bump the
-          discount. Falls back to a single column on mobile. */}
+      {/* MAIN WORKSPACE — line items (card-based editor) + sticky totals rail. */}
       <div className="grid gap-6 lg:grid-cols-[minmax(0,1fr)_320px]">
         <div className="min-w-0 space-y-6">
-      {/* Line items */}
-      <Card>
-        <CardHeader
-          title="Line items"
-          description={
-            quote.items.length === 0
-              ? "Add products below to get started."
-              : "Group lines into sections (Signage, Install, Optional upgrades…) to make the customer proposal easier to read."
-          }
-        />
+          <Card>
+            <CardHeader
+              title="Line items"
+              description={
+                quote.items.length === 0
+                  ? "Add products below to get started."
+                  : "Group lines into sections (Signage, Install, Optional upgrades…) to make the customer proposal easier to read."
+              }
+            />
 
-        {/* Un-grouped band */}
-        {(ungrouped.length > 0 || quote.sections.length === 0) && (
-          <div>
-            {quote.sections.length > 0 && ungrouped.length > 0 && (
-              <div
-                className="px-5 py-2 text-xs uppercase tracking-wide"
-                style={{
-                  color: "var(--text-muted)",
-                  background: "var(--surface-1)",
-                  borderTop: "1px solid var(--border-subtle)",
-                }}
-              >
-                Un-grouped
-              </div>
-            )}
-            <ItemsUL items={ungrouped} />
-          </div>
-        )}
-
-        {/* Sections */}
-        {quote.sections.map((section) => {
-          const sectionItems = bySection.get(section.id) ?? [];
-          const saveSection = updateQuoteSection.bind(null, slug, section.id);
-          const removeSection = deleteQuoteSection.bind(null, slug, section.id);
-          const sectionTotal = sectionItems
-            .filter((it) => !it.isOptional)
-            .reduce((sum, it) => sum + Number(it.subtotal), 0);
-          const sectionOptionalTotal = sectionItems
-            .filter((it) => it.isOptional)
-            .reduce((sum, it) => sum + Number(it.subtotal), 0);
-
-          return (
-            <div key={section.id}>
-              <div
-                className="flex flex-col gap-2 px-5 py-3"
-                style={{
-                  background: "var(--surface-1)",
-                  borderTop: "1px solid var(--border-subtle)",
-                }}
-              >
-                {editable ? (
-                  <form action={saveSection} className="flex flex-wrap items-end gap-2">
-                    <div className="flex-1 min-w-[220px]">
-                      <Field
-                        label="Section"
-                        name="title"
-                        required
-                        defaultValue={section.title}
-                      />
-                    </div>
-                    <div className="flex-[2] min-w-[260px]">
-                      <Field
-                        label="Description (optional)"
-                        name="description"
-                        defaultValue={section.description ?? ""}
-                      />
-                    </div>
-                    <div className="flex gap-2">
-                      <Button type="submit" variant="secondary">
-                        Save
-                      </Button>
-                    </div>
-                  </form>
-                ) : (
-                  <div>
-                    <div className="text-sm font-semibold">{section.title}</div>
-                    {section.description && (
-                      <div className="text-xs" style={{ color: "var(--text-muted)" }}>
-                        {section.description}
-                      </div>
-                    )}
+            {(ungrouped.length > 0 || quote.sections.length === 0) && (
+              <div>
+                {quote.sections.length > 0 && ungrouped.length > 0 && (
+                  <div
+                    className="px-5 py-2 text-xs uppercase tracking-wide"
+                    style={{
+                      color: "var(--text-muted)",
+                      background: "var(--surface-1)",
+                      borderTop: "1px solid var(--border-subtle)",
+                    }}
+                  >
+                    Un-grouped
                   </div>
                 )}
-                <div className="flex items-center justify-between text-xs" style={{ color: "var(--text-muted)" }}>
-                  <span>
-                    {sectionItems.length} {sectionItems.length === 1 ? "line" : "lines"}
-                    {" · "}Subtotal {formatMoney(sectionTotal, ctx.tenant.currency)}
-                    {sectionOptionalTotal > 0 && (
-                      <>
-                        {" · "}Optional {formatMoney(sectionOptionalTotal, ctx.tenant.currency)}
-                      </>
+                <ItemsUL items={ungrouped} />
+              </div>
+            )}
+
+            {quote.sections.map((section) => {
+              const sectionItems = bySection.get(section.id) ?? [];
+              const saveSection = updateQuoteSection.bind(null, slug, section.id);
+              const removeSection = deleteQuoteSection.bind(null, slug, section.id);
+              const sectionTotal = sectionItems
+                .filter((it) => !it.isOptional)
+                .reduce((sum, it) => sum + Number(it.subtotal), 0);
+              const sectionOptionalTotal = sectionItems
+                .filter((it) => it.isOptional)
+                .reduce((sum, it) => sum + Number(it.subtotal), 0);
+
+              return (
+                <div key={section.id}>
+                  <div
+                    className="flex flex-col gap-2 px-5 py-3"
+                    style={{
+                      background: "var(--surface-1)",
+                      borderTop: "1px solid var(--border-subtle)",
+                    }}
+                  >
+                    {editable ? (
+                      <form action={saveSection} className="flex flex-wrap items-end gap-2">
+                        <div className="flex-1 min-w-[220px]">
+                          <Field
+                            label="Section"
+                            name="title"
+                            required
+                            defaultValue={section.title}
+                          />
+                        </div>
+                        <div className="flex-[2] min-w-[260px]">
+                          <Field
+                            label="Description (optional)"
+                            name="description"
+                            defaultValue={section.description ?? ""}
+                          />
+                        </div>
+                        <div className="flex gap-2">
+                          <Button type="submit" variant="secondary">
+                            Save
+                          </Button>
+                        </div>
+                      </form>
+                    ) : (
+                      <div>
+                        <div className="text-sm font-semibold">{section.title}</div>
+                        {section.description && (
+                          <div className="text-xs" style={{ color: "var(--text-muted)" }}>
+                            {section.description}
+                          </div>
+                        )}
+                      </div>
                     )}
-                  </span>
-                  {editable && (
-                    <form action={removeSection}>
-                      <button
-                        type="submit"
-                        className="text-xs underline"
-                        style={{ color: "var(--danger-fg)" }}
-                        title="Deleting a section leaves its lines on the quote — they fall into the un-grouped band."
-                      >
-                        Delete section
-                      </button>
-                    </form>
+                    <div className="flex items-center justify-between text-xs" style={{ color: "var(--text-muted)" }}>
+                      <span>
+                        {sectionItems.length} {sectionItems.length === 1 ? "line" : "lines"}
+                        {" · "}Subtotal {formatMoney(sectionTotal, ctx.tenant.currency)}
+                        {sectionOptionalTotal > 0 && (
+                          <>
+                            {" · "}Optional {formatMoney(sectionOptionalTotal, ctx.tenant.currency)}
+                          </>
+                        )}
+                      </span>
+                      {editable && (
+                        <form action={removeSection}>
+                          <button
+                            type="submit"
+                            className="text-xs underline"
+                            style={{ color: "var(--danger-fg)" }}
+                            title="Deleting a section leaves its lines on the quote — they fall into the un-grouped band."
+                          >
+                            Delete section
+                          </button>
+                        </form>
+                      )}
+                    </div>
+                  </div>
+                  {sectionItems.length > 0 ? (
+                    <ItemsUL items={sectionItems} />
+                  ) : (
+                    <div
+                      className="px-5 py-4 text-sm"
+                      style={{
+                        color: "var(--text-muted)",
+                        borderTop: "1px solid var(--border-subtle)",
+                      }}
+                    >
+                      No lines in this section yet. Move a line here from the dropdown on each line below, or add a new line and assign it.
+                    </div>
                   )}
                 </div>
+              );
+            })}
+
+            {editable && (
+              <form
+                action={addSection}
+                className="flex flex-wrap items-end gap-2 px-5 py-3"
+                style={{
+                  borderTop: "1px solid var(--border-subtle)",
+                  background: "var(--surface-1)",
+                }}
+              >
+                <div className="flex-1 min-w-[220px]">
+                  <Field label="New section title" name="title" placeholder="e.g. Installation" required />
+                </div>
+                <div className="flex-[2] min-w-[260px]">
+                  <Field
+                    label="Description (optional)"
+                    name="description"
+                    placeholder="e.g. Performed on-site after signage delivery."
+                  />
+                </div>
+                <Button type="submit" variant="secondary">Add section</Button>
+              </form>
+            )}
+
+            {editable && (
+              <div className="px-5 py-4" style={{ borderTop: "1px solid var(--border-subtle)" }}>
+                {packages.length > 0 && (
+                  <form
+                    action={addPkg}
+                    className="mb-4 grid grid-cols-5 items-end gap-3 rounded-md px-3 py-3"
+                    style={{
+                      background: "var(--surface-1)",
+                      border: "1px dashed var(--border-subtle)",
+                    }}
+                  >
+                    <div className="col-span-4">
+                      <SelectField
+                        label="Add package (expands into multiple lines)"
+                        name="packageId"
+                        defaultValue=""
+                        options={[
+                          { value: "", label: "— pick a template —" },
+                          ...packages.map((p) => ({
+                            value: p.id,
+                            label: `${p.name} · ${p._count.components} component${p._count.components === 1 ? "" : "s"}`,
+                          })),
+                        ]}
+                      />
+                    </div>
+                    <Button type="submit" variant="secondary">
+                      Expand
+                    </Button>
+                  </form>
+                )}
+
+                <div className="text-sm font-medium">Add line item</div>
+
+                <form action={addItem} className="mt-3 grid grid-cols-4 items-end gap-3">
+                  <div className="col-span-3">
+                    <SelectField
+                      label="From catalog"
+                      name="productId"
+                      defaultValue=""
+                      options={[
+                        { value: "", label: "— pick a product —" },
+                        ...products.map((p) => ({
+                          value: p.id,
+                          label: `${p.name}${p.category ? ` — ${p.category}` : ""} — ${pricingMeta(p.pricingModel).label}`,
+                        })),
+                      ]}
+                    />
+                  </div>
+                  <Button type="submit" variant="secondary">Add</Button>
+                </form>
+
+                <form action={addItem} className="mt-3 grid grid-cols-6 items-end gap-3">
+                  <div className="col-span-2">
+                    <Field label="Or ad-hoc — name" name="name" placeholder="e.g. Rush surcharge" />
+                  </div>
+                  <div className="col-span-2">
+                    <SelectField
+                      label="Pricing model"
+                      name="pricingModel"
+                      defaultValue="FIXED"
+                      options={PRICING_MODELS.map((m) => ({ value: m.value, label: m.label }))}
+                    />
+                  </div>
+                  <Field label="Base price" name="basePrice" type="number" step="0.01" min="0" defaultValue="0" />
+                  <Button type="submit" variant="secondary">Add</Button>
+                </form>
               </div>
-              {sectionItems.length > 0 ? (
-                <ItemsUL items={sectionItems} />
-              ) : (
+            )}
+          </Card>
+        </div>
+
+        <aside className="space-y-4 lg:sticky lg:top-24 lg:self-start">
+          <Card>
+            <CardHeader title="Pricing summary" />
+            <div className="space-y-2 px-5 py-4 text-sm">
+              <Row label="Subtotal" value={formatMoney(quote.subtotal.toString(), ctx.tenant.currency)} />
+              {Number(quote.discountAmount) > 0 && (
+                <Row
+                  label={`Discount (${quote.discountType === "PERCENT" ? `${Number(quote.discountValue)}%` : humanize(quote.discountType)})`}
+                  value={`− ${formatMoney(quote.discountAmount.toString(), ctx.tenant.currency)}`}
+                  muted
+                />
+              )}
+              <Row
+                label={`Tax (${(Number(quote.taxRate) * 100).toFixed(Number(quote.taxRate) * 100 < 1 ? 3 : 2)}%)`}
+                value={formatMoney(quote.taxAmount.toString(), ctx.tenant.currency)}
+                muted
+              />
+              <div style={{ borderTop: "1px solid var(--border-subtle)" }} className="pt-2">
+                <Row
+                  label="Total"
+                  value={formatMoney(quote.total.toString(), ctx.tenant.currency)}
+                  bold
+                />
+              </div>
+
+              {Number(quote.optionalSubtotal) > 0 && (
                 <div
-                  className="px-5 py-4 text-sm"
+                  className="mt-3 rounded-md px-3 py-2"
                   style={{
-                    color: "var(--text-muted)",
-                    borderTop: "1px solid var(--border-subtle)",
+                    background: "var(--accent-surface)",
+                    border: "1px solid var(--border-subtle)",
                   }}
                 >
-                  No lines in this section yet. Move a line here from the dropdown on each line below, or add a new line and assign it.
+                  <div
+                    className="text-xs font-medium uppercase tracking-wide"
+                    style={{ color: "var(--accent-primary)" }}
+                  >
+                    Optional add-ons (not included)
+                  </div>
+                  <Row
+                    label="Optional subtotal"
+                    value={formatMoney(quote.optionalSubtotal.toString(), ctx.tenant.currency)}
+                  />
+                  <div className="mt-1 text-xs" style={{ color: "var(--text-muted)" }}>
+                    Customers can accept any of these from the share link. Accepted lines flip to required and the total re-computes.
+                  </div>
+                </div>
+              )}
+
+              {quote.depositType !== "NONE" && Number(quote.depositAmount) > 0 && (
+                <div
+                  className="mt-3 rounded-md px-3 py-2"
+                  style={{
+                    background: "var(--surface-1)",
+                    border: "1px solid var(--border-subtle)",
+                  }}
+                >
+                  <div
+                    className="text-xs font-medium uppercase tracking-wide"
+                    style={{ color: "var(--text-muted)" }}
+                  >
+                    Deposit required
+                  </div>
+                  <Row
+                    label={
+                      quote.depositType === "PERCENT"
+                        ? `Deposit (${Number(quote.depositValue)}% of total)`
+                        : "Deposit (flat)"
+                    }
+                    value={formatMoney(quote.depositAmount.toString(), ctx.tenant.currency)}
+                    bold
+                  />
+                  <Row
+                    label="Balance on completion"
+                    value={formatMoney(
+                      Math.max(0, Number(quote.total) - Number(quote.depositAmount)),
+                      ctx.tenant.currency,
+                    )}
+                    muted
+                  />
                 </div>
               )}
             </div>
-          );
-        })}
-
-        {/* Add section */}
-        {editable && (
-          <form
-            action={addSection}
-            className="flex flex-wrap items-end gap-2 px-5 py-3"
-            style={{
-              borderTop: "1px solid var(--border-subtle)",
-              background: "var(--surface-1)",
-            }}
-          >
-            <div className="flex-1 min-w-[220px]">
-              <Field label="New section title" name="title" placeholder="e.g. Installation" required />
-            </div>
-            <div className="flex-[2] min-w-[260px]">
-              <Field
-                label="Description (optional)"
-                name="description"
-                placeholder="e.g. Performed on-site after signage delivery."
-              />
-            </div>
-            <Button type="submit" variant="secondary">Add section</Button>
-          </form>
-        )}
-
-        {/* Add item */}
-        {editable && (
-          <div className="px-5 py-4" style={{ borderTop: "1px solid var(--border-subtle)" }}>
-            {/* Phase 8 — package expansion. Only shown if the shop has at
-                least one active template; otherwise the UI just skips to
-                the per-line adds below so newcomers aren't shown an empty
-                picker. Each expansion is one server round-trip and ends
-                with a revalidate of this page. */}
-            {packages.length > 0 && (
-              <form
-                action={addPkg}
-                className="mb-4 grid grid-cols-5 items-end gap-3 rounded-md px-3 py-3"
-                style={{
-                  background: "var(--surface-1)",
-                  border: "1px dashed var(--border-subtle)",
-                }}
-              >
-                <div className="col-span-4">
-                  <SelectField
-                    label="Add package (expands into multiple lines)"
-                    name="packageId"
-                    defaultValue=""
-                    options={[
-                      { value: "", label: "— pick a template —" },
-                      ...packages.map((p) => ({
-                        value: p.id,
-                        label: `${p.name} · ${p._count.components} component${p._count.components === 1 ? "" : "s"}`,
-                      })),
-                    ]}
-                  />
-                </div>
-                <Button type="submit" variant="secondary">
-                  Expand
-                </Button>
-              </form>
-            )}
-
-            <div className="text-sm font-medium">Add line item</div>
-
-            <form action={addItem} className="mt-3 grid grid-cols-4 items-end gap-3">
-              <div className="col-span-3">
-                <SelectField
-                  label="From catalog"
-                  name="productId"
-                  defaultValue=""
-                  options={[
-                    { value: "", label: "— pick a product —" },
-                    ...products.map((p) => ({
-                      value: p.id,
-                      label: `${p.name}${p.category ? ` — ${p.category}` : ""} — ${pricingMeta(p.pricingModel).label}`,
-                    })),
-                  ]}
-                />
-              </div>
-              <Button type="submit" variant="secondary">Add</Button>
-            </form>
-
-            <form action={addItem} className="mt-3 grid grid-cols-6 items-end gap-3">
-              <div className="col-span-2">
-                <Field label="Or ad-hoc — name" name="name" placeholder="e.g. Rush surcharge" />
-              </div>
-              <div className="col-span-2">
-                <SelectField
-                  label="Pricing model"
-                  name="pricingModel"
-                  defaultValue="FIXED"
-                  options={PRICING_MODELS.map((m) => ({ value: m.value, label: m.label }))}
-                />
-              </div>
-              <Field label="Base price" name="basePrice" type="number" step="0.01" min="0" defaultValue="0" />
-              <Button type="submit" variant="secondary">Add</Button>
-            </form>
-          </div>
-        )}
-      </Card>
-
-      {/* Quote settings */}
-      <Card>
-          <CardHeader title="Quote settings" />
-          <form action={saveMeta} className="grid grid-cols-2 gap-4 px-5 py-4">
-            <Field
-              label="Expires on"
-              name="expiresAt"
-              type="date"
-              defaultValue={quote.expiresAt ? formatDate(quote.expiresAt) : ""}
-            />
-            <SelectField
-              label="Sales rep"
-              name="salesRepId"
-              defaultValue={quote.salesRepId ?? ""}
-              options={[
-                { value: "", label: "Unassigned" },
-                ...members.map((m) => ({ value: m.userId, label: m.name })),
-              ]}
-            />
-            <SelectField
-              label="Discount"
-              name="discountType"
-              defaultValue={quote.discountType}
-              options={[
-                { value: "NONE", label: "No discount" },
-                { value: "FIXED", label: "Flat amount" },
-                { value: "PERCENT", label: "Percent" },
-              ]}
-            />
-            <Field
-              label="Discount value"
-              name="discountValue"
-              type="number"
-              step="0.01"
-              min="0"
-              defaultValue={quote.discountValue.toString()}
-              hint="Flat currency or 0–100 for %."
-            />
-            <Field
-              label="Tax rate (%)"
-              name="taxRatePercent"
-              type="number"
-              step="0.0001"
-              min="0"
-              defaultValue={(Number(quote.taxRate) * 100).toString()}
-            />
-            <div /> {/* spacer */}
-            <div className="col-span-2">
-              <TextArea label="Customer-facing note" name="customerNote" rows={2} defaultValue={quote.customerNote ?? ""} />
-            </div>
-            <div className="col-span-2">
-              <TextArea label="Terms" name="terms" rows={2} defaultValue={quote.terms ?? ""} />
-            </div>
-            <div className="col-span-2">
-              <TextArea label="Internal notes" name="notes" rows={2} defaultValue={quote.notes ?? ""} />
-            </div>
-            {editable && (
-              <div className="col-span-2">
-                <Button type="submit">Save settings</Button>
-              </div>
-            )}
-          </form>
-        </Card>
-        </div>
-
-        <aside className="space-y-4 lg:sticky lg:top-4 lg:self-start">
-        <Card>
-          <CardHeader title="Totals" />
-          <div className="space-y-2 px-5 py-4 text-sm">
-            <Row label="Subtotal" value={formatMoney(quote.subtotal.toString(), ctx.tenant.currency)} />
-            {Number(quote.discountAmount) > 0 && (
-              <Row
-                label={`Discount (${quote.discountType === "PERCENT" ? `${Number(quote.discountValue)}%` : humanize(quote.discountType)})`}
-                value={`− ${formatMoney(quote.discountAmount.toString(), ctx.tenant.currency)}`}
-                muted
-              />
-            )}
-            <Row
-              label={`Tax (${(Number(quote.taxRate) * 100).toFixed(Number(quote.taxRate) * 100 < 1 ? 3 : 2)}%)`}
-              value={formatMoney(quote.taxAmount.toString(), ctx.tenant.currency)}
-              muted
-            />
-            <div style={{ borderTop: "1px solid var(--border-subtle)" }} className="pt-2">
-              <Row
-                label="Total"
-                value={formatMoney(quote.total.toString(), ctx.tenant.currency)}
-                bold
-              />
-            </div>
-
-            {/* Phase 9 — optional rollup. Only shown when at least one line
-                is marked optional. Separated visually so no one reads it as
-                part of the committed total. */}
-            {Number(quote.optionalSubtotal) > 0 && (
-              <div
-                className="mt-3 rounded-md px-3 py-2"
-                style={{
-                  background: "var(--accent-surface)",
-                  border: "1px solid var(--border-subtle)",
-                }}
-              >
-                <div
-                  className="text-xs font-medium uppercase tracking-wide"
-                  style={{ color: "var(--accent-primary)" }}
-                >
-                  Optional add-ons (not included)
-                </div>
-                <Row
-                  label="Optional subtotal"
-                  value={formatMoney(quote.optionalSubtotal.toString(), ctx.tenant.currency)}
-                />
-                <div className="mt-1 text-xs" style={{ color: "var(--text-muted)" }}>
-                  Customers can accept any of these from the share link. Accepted lines flip to required and the total re-computes.
-                </div>
-              </div>
-            )}
-
-            {/* Phase 9 — deposit rollup. Only shown when a deposit is configured. */}
-            {quote.depositType !== "NONE" && Number(quote.depositAmount) > 0 && (
-              <div
-                className="mt-3 rounded-md px-3 py-2"
-                style={{
-                  background: "var(--surface-1)",
-                  border: "1px solid var(--border-subtle)",
-                }}
-              >
-                <div
-                  className="text-xs font-medium uppercase tracking-wide"
-                  style={{ color: "var(--text-muted)" }}
-                >
-                  Deposit required
-                </div>
-                <Row
-                  label={
-                    quote.depositType === "PERCENT"
-                      ? `Deposit (${Number(quote.depositValue)}% of total)`
-                      : "Deposit (flat)"
-                  }
-                  value={formatMoney(quote.depositAmount.toString(), ctx.tenant.currency)}
-                  bold
-                />
-                <Row
-                  label="Balance on completion"
-                  value={formatMoney(
-                    Math.max(0, Number(quote.total) - Number(quote.depositAmount)),
-                    ctx.tenant.currency,
-                  )}
-                  muted
-                />
-              </div>
-            )}
-
-            {/* Phase 18 Slice F — gross margin (staff-only; this card is only
-                rendered on the internal quote editor). Computed from cost
-                snapshots on each line so historical quotes stay stable. */}
-            {canManage && (
-              <div
-                className="mt-3 rounded-md px-3 py-2"
-                style={{
-                  background: "var(--accent-surface)",
-                  border: "1px solid var(--border-subtle)",
-                }}
-              >
-                <div
-                  className="text-xs font-medium uppercase tracking-wide"
-                  style={{ color: "var(--accent-primary)" }}
-                >
-                  Internal — margin
-                </div>
-                <div className="mt-1.5 flex items-center justify-between text-sm">
-                  <span style={{ color: "var(--text-muted)" }}>Cost</span>
-                  <span className="tabular-nums">
-                    {linesWithCost > 0
-                      ? formatMoney(costBase, ctx.tenant.currency)
-                      : "—"}
-                  </span>
-                </div>
-                <div className="mt-1 flex items-center justify-between text-sm">
-                  <span style={{ color: "var(--text-muted)" }}>Gross profit</span>
-                  <span className="tabular-nums">
-                    {grossProfit != null
-                      ? formatMoney(grossProfit, ctx.tenant.currency)
-                      : "—"}
-                  </span>
-                </div>
-                <div className="mt-1 flex items-center justify-between text-sm font-semibold">
-                  <span style={{ color: "var(--text-default)" }}>Margin</span>
-                  <span className="tabular-nums">
-                    {margin != null ? `${margin.toFixed(1)}%` : "—"}
-                  </span>
-                </div>
-                {marginCoverageNote && (
-                  <div className="mt-2 text-xs" style={{ color: "var(--text-muted)" }}>
-                    {marginCoverageNote}
-                  </div>
-                )}
-              </div>
-            )}
-          </div>
-        </Card>
+          </Card>
         </aside>
       </div>
 
-      {/* Phase 9 — Deposit + share link */}
-      {canManage && (
-        <div className="grid grid-cols-2 gap-4">
+      {/* SECONDARY TABS — progressive disclosure for everything that isn't the
+          primary editing workflow. Tab state lives in ?tab= so refresh and
+          deep links are stable. */}
+      <div className="space-y-5 pt-2">
+        <QuoteDetailTabs active={activeTab} />
+
+        {activeTab === "details" && (
           <Card>
-            <CardHeader
-              title="Deposit"
-              description="Amount required from the customer before production starts. Deposit flows into the order when this quote is approved."
-            />
-            <form action={saveDeposit} className="grid grid-cols-2 gap-3 px-5 py-4">
+            <CardHeader title="Details" description="Expiration and sales rep assignment." />
+            <form action={saveMeta} className="grid grid-cols-1 gap-4 px-5 py-4 md:grid-cols-2">
+              <Field
+                label="Expires on"
+                name="expiresAt"
+                type="date"
+                defaultValue={quote.expiresAt ? formatDate(quote.expiresAt) : ""}
+              />
               <SelectField
-                label="Deposit type"
-                name="depositType"
-                defaultValue={quote.depositType}
+                label="Sales rep"
+                name="salesRepId"
+                defaultValue={quote.salesRepId ?? ""}
                 options={[
-                  { value: "NONE", label: "No deposit" },
-                  { value: "FIXED", label: "Flat amount" },
-                  { value: "PERCENT", label: "Percent of total" },
+                  { value: "", label: "Unassigned" },
+                  ...members.map((m) => ({ value: m.userId, label: m.name })),
                 ]}
               />
-              <Field
-                label="Deposit value"
-                name="depositValue"
-                type="number"
-                step="0.01"
-                min="0"
-                defaultValue={quote.depositValue.toString()}
-                hint="Flat currency or 0–100 for %."
-              />
               {editable && (
-                <div className="col-span-2">
-                  <Button type="submit" variant="secondary">Save deposit</Button>
+                <div className="md:col-span-2">
+                  <Button type="submit">Save details</Button>
                 </div>
               )}
             </form>
           </Card>
+        )}
 
-          <Card>
-            <CardHeader
-              title="Public share link"
-              description="One-click URL for the customer — they can toggle optional add-ons and approve without logging in."
-            />
-            <div className="px-5 py-4 space-y-3">
-              {quote.shareToken ? (
-                <>
+        {activeTab === "pricing" && (
+          <div className="space-y-5">
+            <Card>
+              <CardHeader title="Discount & tax" description="Applied to every non-optional line." />
+              <form action={saveMeta} className="grid grid-cols-1 gap-4 px-5 py-4 md:grid-cols-3">
+                <SelectField
+                  label="Discount"
+                  name="discountType"
+                  defaultValue={quote.discountType}
+                  options={[
+                    { value: "NONE", label: "No discount" },
+                    { value: "FIXED", label: "Flat amount" },
+                    { value: "PERCENT", label: "Percent" },
+                  ]}
+                />
+                <Field
+                  label="Discount value"
+                  name="discountValue"
+                  type="number"
+                  step="0.01"
+                  min="0"
+                  defaultValue={quote.discountValue.toString()}
+                  hint="Flat currency or 0–100 for %."
+                />
+                <Field
+                  label="Tax rate (%)"
+                  name="taxRatePercent"
+                  type="number"
+                  step="0.0001"
+                  min="0"
+                  defaultValue={(Number(quote.taxRate) * 100).toString()}
+                />
+                {editable && (
+                  <div className="md:col-span-3">
+                    <Button type="submit">Save pricing</Button>
+                  </div>
+                )}
+              </form>
+            </Card>
+
+            {canManage && (
+              <Card>
+                <CardHeader
+                  title="Deposit"
+                  description="Amount required from the customer before production starts. Deposit flows into the order when this quote is approved."
+                />
+                <form action={saveDeposit} className="grid grid-cols-1 gap-3 px-5 py-4 md:grid-cols-2">
+                  <SelectField
+                    label="Deposit type"
+                    name="depositType"
+                    defaultValue={quote.depositType}
+                    options={[
+                      { value: "NONE", label: "No deposit" },
+                      { value: "FIXED", label: "Flat amount" },
+                      { value: "PERCENT", label: "Percent of total" },
+                    ]}
+                  />
+                  <Field
+                    label="Deposit value"
+                    name="depositValue"
+                    type="number"
+                    step="0.01"
+                    min="0"
+                    defaultValue={quote.depositValue.toString()}
+                    hint="Flat currency or 0–100 for %."
+                  />
+                  {editable && (
+                    <div className="md:col-span-2">
+                      <Button type="submit" variant="secondary">Save deposit</Button>
+                    </div>
+                  )}
+                </form>
+              </Card>
+            )}
+
+            {canManage && (
+              <Card>
+                <CardHeader
+                  title="Margin"
+                  description="Staff-only. Based on cost snapshots taken when each line was added — historical quotes stay stable even if catalog costs change later."
+                />
+                <div className="grid grid-cols-1 gap-3 px-5 py-4 text-sm md:grid-cols-3">
                   <div
-                    className="rounded-md px-3 py-2 text-xs font-mono break-all"
+                    className="rounded-md px-3 py-2"
                     style={{
                       background: "var(--surface-1)",
                       border: "1px solid var(--border-subtle)",
-                      color: "var(--text-default)",
                     }}
                   >
-                    /q/{quote.shareToken}
+                    <div className="text-xs uppercase tracking-wide" style={{ color: "var(--text-muted)" }}>Cost</div>
+                    <div className="mt-1 text-lg font-semibold tabular-nums">
+                      {linesWithCost > 0 ? formatMoney(costBase, ctx.tenant.currency) : "—"}
+                    </div>
                   </div>
-                  <div className="text-xs" style={{ color: "var(--text-muted)" }}>
-                    Paste the URL above into your outreach email. Revoking disables the link immediately.
+                  <div
+                    className="rounded-md px-3 py-2"
+                    style={{
+                      background: "var(--surface-1)",
+                      border: "1px solid var(--border-subtle)",
+                    }}
+                  >
+                    <div className="text-xs uppercase tracking-wide" style={{ color: "var(--text-muted)" }}>Gross profit</div>
+                    <div className="mt-1 text-lg font-semibold tabular-nums">
+                      {grossProfit != null ? formatMoney(grossProfit, ctx.tenant.currency) : "—"}
+                    </div>
                   </div>
-                  <div className="flex gap-2">
-                    <form action={mintShare}>
-                      <Button type="submit" variant="secondary">Rotate token</Button>
-                    </form>
-                    <form action={revokeShare}>
-                      <Button type="submit" variant="danger">Revoke link</Button>
-                    </form>
+                  <div
+                    className="rounded-md px-3 py-2"
+                    style={{
+                      background: "var(--accent-surface)",
+                      border: "1px solid var(--border-subtle)",
+                    }}
+                  >
+                    <div className="text-xs uppercase tracking-wide" style={{ color: "var(--accent-primary)" }}>Margin</div>
+                    <div className="mt-1 text-lg font-semibold tabular-nums" style={{ color: "var(--accent-primary)" }}>
+                      {margin != null ? `${margin.toFixed(1)}%` : "—"}
+                    </div>
                   </div>
-                </>
-              ) : (
-                <>
-                  <div className="text-xs" style={{ color: "var(--text-muted)" }}>
-                    No public link minted yet. Generate one when you&apos;re ready to share.
-                  </div>
-                  <form action={mintShare}>
-                    <Button type="submit">Generate share link</Button>
-                  </form>
-                </>
-              )}
-            </div>
-          </Card>
-        </div>
-      )}
+                  {marginCoverageNote && (
+                    <div className="md:col-span-3 text-xs" style={{ color: "var(--text-muted)" }}>
+                      {marginCoverageNote}
+                    </div>
+                  )}
+                </div>
+              </Card>
+            )}
 
-      {/* Phase 9 Slice D — Save as template */}
-      {canManage && (
-        <Card>
-          <CardHeader
-            title="Save as template"
-            description="Snapshot this quote's sections and line items into a reusable template. Future quotes created from the template are fully decoupled — they won't change if you later edit this quote."
-          />
-          <form action={saveAsTpl} className="grid grid-cols-3 items-end gap-3 px-5 py-4">
-            <div className="col-span-1">
-              <Field label="Template name" name="name" required placeholder="e.g. Standard vehicle wrap" />
-            </div>
-            <div className="col-span-2">
-              <Field
-                label="Internal description (optional)"
-                name="description"
-                placeholder="Who this template is for, when to pick it."
+            {canManage && (
+              <Card>
+                <CardHeader
+                  title="Save as template"
+                  description="Snapshot this quote's sections and line items into a reusable template. Future quotes created from the template are fully decoupled."
+                />
+                <form action={saveAsTpl} className="grid grid-cols-1 items-end gap-3 px-5 py-4 md:grid-cols-3">
+                  <div className="md:col-span-1">
+                    <Field label="Template name" name="name" required placeholder="e.g. Standard vehicle wrap" />
+                  </div>
+                  <div className="md:col-span-2">
+                    <Field
+                      label="Internal description (optional)"
+                      name="description"
+                      placeholder="Who this template is for, when to pick it."
+                    />
+                  </div>
+                  <div className="md:col-span-3">
+                    <Button type="submit" variant="secondary">Save as template</Button>
+                  </div>
+                </form>
+              </Card>
+            )}
+          </div>
+        )}
+
+        {activeTab === "notes" && (
+          <Card>
+            <CardHeader
+              title="Notes"
+              description="Customer-facing copy and internal context. Customer note and terms are shown on the share link; internal notes are staff-only."
+            />
+            <form action={saveMeta} className="space-y-4 px-5 py-4">
+              <TextArea
+                label="Customer-facing note"
+                name="customerNote"
+                rows={3}
+                defaultValue={quote.customerNote ?? ""}
               />
-            </div>
-            <div className="col-span-3">
-              <Button type="submit" variant="secondary">Save as template</Button>
-            </div>
-          </form>
-        </Card>
-      )}
+              <TextArea
+                label="Terms"
+                name="terms"
+                rows={3}
+                defaultValue={quote.terms ?? ""}
+              />
+              <TextArea
+                label="Internal notes"
+                name="notes"
+                rows={3}
+                defaultValue={quote.notes ?? ""}
+              />
+              {editable && (
+                <div>
+                  <Button type="submit">Save notes</Button>
+                </div>
+              )}
+            </form>
+          </Card>
+        )}
 
-      {/* Phase 9 Slice E — revision history. Only render if there's more
-          than one entry in the chain, otherwise it's just noise. */}
-      {hasRevisions && (
-        <Card>
-          <CardHeader
-            title="Revisions"
-            description="Every revision made to this quote. The most recent live revision is highlighted."
-          />
-          <ul className="divide-y" style={{ borderColor: "var(--border-subtle)" }}>
-            {revisionChain.map((rev) => {
-              const isCurrent = rev.id === quote.id;
-              const isLive = !rev.supersededAt;
-              return (
-                <li key={rev.id} className="flex items-center justify-between gap-3 px-5 py-3">
-                  <div className="flex items-center gap-3 text-sm">
-                    <span
-                      className="rounded-full px-2 py-0.5 text-xs"
+        {activeTab === "sharing" && (
+          <div className="space-y-5">
+            {canManage && (
+              <Card>
+                <CardHeader
+                  title="Public share link"
+                  description="One-click URL for the customer — they can toggle optional add-ons and approve without logging in."
+                />
+                <div className="px-5 py-4 space-y-3">
+                  {quote.shareToken ? (
+                    <>
+                      <div
+                        className="rounded-md px-3 py-2 text-xs font-mono break-all"
+                        style={{
+                          background: "var(--surface-1)",
+                          border: "1px solid var(--border-subtle)",
+                          color: "var(--text-default)",
+                        }}
+                      >
+                        /q/{quote.shareToken}
+                      </div>
+                      <div className="text-xs" style={{ color: "var(--text-muted)" }}>
+                        Paste the URL above into your outreach email. Revoking disables the link immediately.
+                      </div>
+                      <div className="flex gap-2">
+                        <form action={mintShare}>
+                          <Button type="submit" variant="secondary">Rotate token</Button>
+                        </form>
+                        <form action={revokeShare}>
+                          <Button type="submit" variant="danger">Revoke link</Button>
+                        </form>
+                      </div>
+                    </>
+                  ) : (
+                    <>
+                      <div className="text-xs" style={{ color: "var(--text-muted)" }}>
+                        No public link minted yet. Generate one when you&apos;re ready to share.
+                      </div>
+                      <form action={mintShare}>
+                        <Button type="submit">Generate share link</Button>
+                      </form>
+                    </>
+                  )}
+                </div>
+              </Card>
+            )}
+
+            {canManage && (
+              <Card>
+                <CardHeader
+                  title="Send update"
+                  description="Share this quote status with the customer. The send is logged on their timeline."
+                />
+                <SendMessageWidget
+                  slug={slug}
+                  customerId={quote.customerId}
+                  customerEmail={quote.customer.email}
+                  quoteId={quote.id}
+                  returnTo={`/t/${slug}/quotes/${quote.id}?tab=sharing`}
+                  templates={sendCtx.templates}
+                  bag={sendCtx.bag}
+                />
+              </Card>
+            )}
+          </div>
+        )}
+
+        {activeTab === "activity" && (
+          <div className="space-y-5">
+            <Card>
+              <CardHeader title="Timeline" description="Status milestones for this quote." />
+              <div className="grid grid-cols-2 gap-3 px-5 py-4 text-xs sm:grid-cols-3 md:grid-cols-6">
+                {QUOTE_STATUSES.map((s) => {
+                  const stamp =
+                    s.value === "SENT" ? quote.sentAt
+                    : s.value === "VIEWED" ? quote.viewedAt
+                    : s.value === "APPROVED" ? quote.approvedAt
+                    : s.value === "DECLINED" ? quote.declinedAt
+                    : s.value === "DRAFT" ? quote.createdAt
+                    : s.value === "EXPIRED" ? quote.expiresAt
+                    : null;
+                  const isActive = quote.status === s.value;
+                  return (
+                    <div
+                      key={s.value}
+                      className="rounded-md px-3 py-2"
                       style={{
-                        background: isLive ? "#10b981" : "#6b7280",
-                        color: "white",
+                        background: isActive ? "var(--accent-surface)" : "var(--surface-1)",
+                        border: "1px solid var(--border-subtle)",
                       }}
                     >
-                      Rev {rev.revisionNumber}
-                    </span>
-                    {isCurrent ? (
-                      <span className="font-medium">{rev.number}</span>
-                    ) : (
-                      <Link href={`/t/${slug}/quotes/${rev.id}`} className="font-medium underline">
-                        {rev.number}
-                      </Link>
-                    )}
-                    <span
-                      className="rounded-full px-2 py-0.5 text-xs"
-                      style={{ background: statusColor(rev.status), color: "white" }}
-                    >
-                      {statusLabel(rev.status)}
-                    </span>
-                    {isCurrent && (
-                      <span className="text-xs" style={{ color: "var(--text-muted)" }}>
-                        · viewing
-                      </span>
-                    )}
-                    {rev.supersededAt && (
-                      <span className="text-xs" style={{ color: "var(--text-muted)" }}>
-                        · superseded {formatDate(rev.supersededAt)}
-                      </span>
-                    )}
-                  </div>
-                  <div className="text-sm" style={{ color: "var(--text-muted)" }}>
-                    {formatMoney(rev.total.toString(), ctx.tenant.currency)}
-                    {" · "}Updated {formatDate(rev.updatedAt)}
-                  </div>
-                </li>
-              );
-            })}
-          </ul>
-        </Card>
-      )}
-
-      {/* Timeline strip */}
-      <Card>
-        <CardHeader title="Timeline" />
-        <div className="grid grid-cols-6 gap-0 px-5 py-3 text-xs">
-          {QUOTE_STATUSES.map((s) => {
-            const stamp =
-              s.value === "SENT" ? quote.sentAt
-              : s.value === "VIEWED" ? quote.viewedAt
-              : s.value === "APPROVED" ? quote.approvedAt
-              : s.value === "DECLINED" ? quote.declinedAt
-              : s.value === "DRAFT" ? quote.createdAt
-              : s.value === "EXPIRED" ? quote.expiresAt
-              : null;
-            return (
-              <div key={s.value}>
-                <div style={{ color: quote.status === s.value ? s.color : "var(--text-muted)" }}>{s.label}</div>
-                <div style={{ color: "var(--text-muted)" }}>{stamp ? formatDate(stamp) : "—"}</div>
+                      <div
+                        className="text-[11px] font-medium uppercase tracking-wide"
+                        style={{ color: isActive ? s.color : "var(--text-muted)" }}
+                      >
+                        {s.label}
+                      </div>
+                      <div className="mt-1" style={{ color: "var(--text-default)" }}>
+                        {stamp ? formatDate(stamp) : "—"}
+                      </div>
+                    </div>
+                  );
+                })}
               </div>
-            );
-          })}
-        </div>
-      </Card>
+            </Card>
 
-      {/* Phase 14 — customer-facing send. */}
-      {canManage && (
-        <Card>
-          <CardHeader
-            title="Send update"
-            description="Share this quote status with the customer. The send is logged on their timeline."
-          />
-          <SendMessageWidget
-            slug={slug}
-            customerId={quote.customerId}
-            customerEmail={quote.customer.email}
-            quoteId={quote.id}
-            returnTo={`/t/${slug}/quotes/${quote.id}`}
-            templates={sendCtx.templates}
-            bag={sendCtx.bag}
-          />
-        </Card>
-      )}
+            {hasRevisions && (
+              <Card>
+                <CardHeader
+                  title="Revisions"
+                  description="Every revision made to this quote. The most recent live revision is highlighted."
+                />
+                <ul className="divide-y" style={{ borderColor: "var(--border-subtle)" }}>
+                  {revisionChain.map((rev) => {
+                    const isCurrent = rev.id === quote.id;
+                    const isLive = !rev.supersededAt;
+                    return (
+                      <li key={rev.id} className="flex items-center justify-between gap-3 px-5 py-3">
+                        <div className="flex items-center gap-3 text-sm">
+                          <span
+                            className="rounded-full px-2 py-0.5 text-xs"
+                            style={{
+                              background: isLive ? "#10b981" : "#6b7280",
+                              color: "white",
+                            }}
+                          >
+                            Rev {rev.revisionNumber}
+                          </span>
+                          {isCurrent ? (
+                            <span className="font-medium">{rev.number}</span>
+                          ) : (
+                            <Link href={`/t/${slug}/quotes/${rev.id}`} className="font-medium underline">
+                              {rev.number}
+                            </Link>
+                          )}
+                          <span
+                            className="rounded-full px-2 py-0.5 text-xs"
+                            style={{ background: statusColor(rev.status), color: "white" }}
+                          >
+                            {statusLabel(rev.status)}
+                          </span>
+                          {isCurrent && (
+                            <span className="text-xs" style={{ color: "var(--text-muted)" }}>
+                              · viewing
+                            </span>
+                          )}
+                          {rev.supersededAt && (
+                            <span className="text-xs" style={{ color: "var(--text-muted)" }}>
+                              · superseded {formatDate(rev.supersededAt)}
+                            </span>
+                          )}
+                        </div>
+                        <div className="text-sm" style={{ color: "var(--text-muted)" }}>
+                          {formatMoney(rev.total.toString(), ctx.tenant.currency)}
+                          {" · "}Updated {formatDate(rev.updatedAt)}
+                        </div>
+                      </li>
+                    );
+                  })}
+                </ul>
+              </Card>
+            )}
 
-      {/* Phase 14 — quote-level internal discussion. */}
-      <CommentThread
-        slug={slug}
-        parentKind="quote"
-        parentId={quote.id}
-        comments={quote.comments}
-        currentUserId={ctx.userId}
-        memberMap={memberMap}
-        canModerate={ctx.can("staff:manage")}
-      />
+            <CommentThread
+              slug={slug}
+              parentKind="quote"
+              parentId={quote.id}
+              comments={quote.comments}
+              currentUserId={ctx.userId}
+              memberMap={memberMap}
+              canModerate={ctx.can("staff:manage")}
+            />
+          </div>
+        )}
+      </div>
 
-      {/* Phase 5 — live portal-style preview. URL-driven so refresh /
-          deep-link keeps the drawer state, and the drawer re-renders with
-          the latest server totals every time a save triggers a
-          revalidate. */}
       {previewOpen && (
         <QuotePortalPreview
           closeHref={previewCloseHref}
@@ -1802,10 +1831,6 @@ export default async function QuoteDetailPage({
   );
 }
 
-// Render a short human-readable formula beneath each line's total so the
-// rep can see at a glance how the number was built. Returns null for
-// models that have no meaningful formula (e.g. FIXED with no qty field,
-// or CUSTOM_QUOTE where the price is typed verbatim).
 type LineItemForFormula = {
   pricingModel: string;
   basePrice: { toString(): string } | number;
@@ -1855,10 +1880,6 @@ function Row({ label, value, muted, bold }: { label: string; value: string; mute
   );
 }
 
-// Phase 9 Slice E — tile used inside the approved-handoff card. The value
-// is the primary number; status is a small qualifier underneath; hint is
-// the "why this matters" text. If `href` is provided, the whole tile is
-// clickable so the rep doesn't have to aim for tiny links.
 function HandoffTile({
   label,
   value,
