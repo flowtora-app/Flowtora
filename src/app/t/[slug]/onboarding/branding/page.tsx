@@ -2,6 +2,7 @@ import { requirePermission } from "@/lib/tenant";
 import { saveBrandingStep } from "@/app/actions/onboarding";
 import { Button, Field, SelectField } from "@/components/Field";
 import { Card, CardHeader } from "@/components/Card";
+import { LogoUploader } from "@/components/onboarding/LogoUploader";
 
 const TIMEZONES = [
   "UTC", "America/New_York", "America/Chicago", "America/Denver",
@@ -24,7 +25,7 @@ export default async function BrandingStep({
     <Card>
       <CardHeader title="Branding & contact" description="What customers will see on quotes, invoices, and your portal." />
       <form action={action} className="space-y-4 px-5 py-5">
-        <Field label="Logo URL" name="logoUrl" type="url" defaultValue={tenant.logoUrl ?? ""} hint="Direct uploads come in Phase 14. Paste a hosted URL for now." />
+        <LogoUploader slug={slug} initialUrl={tenant.logoUrl} />
         <div className="grid grid-cols-2 gap-3">
           <Field label="Phone" name="phone" defaultValue={tenant.phone ?? ""} />
           <Field label="Website" name="website" type="url" defaultValue={tenant.website ?? ""} />
