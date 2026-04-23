@@ -1,4 +1,5 @@
 import Link from "next/link";
+import { BrandLockup } from "@/components/brand/BrandMark";
 
 // Phase 2 — email verification shares the same sparse centered layout
 // as `/reset`. We deliberately don't nest under (auth) because the flow
@@ -12,27 +13,14 @@ export default function VerifyLayout({ children }: { children: React.ReactNode }
       style={{ background: "var(--surface-0)" }}
     >
       <Link href="/" className="mb-8 inline-flex items-center gap-2">
-        <span
-          className="flex h-8 w-8 items-center justify-center rounded-md text-xs font-bold"
-          style={{
-            background: "var(--accent-primary)",
-            color: "var(--accent-fg)",
-          }}
-        >
-          T
-        </span>
-        <span
-          className="text-base font-semibold tracking-tight"
-          style={{ color: "var(--text-default)" }}
-        >
-          Flowtora
-        </span>
+        <BrandLockup size={32} />
       </Link>
       <div
         className="w-full max-w-md rounded-xl p-8"
         style={{
           background: "var(--surface-1)",
           border: "1px solid var(--border-subtle)",
+          boxShadow: "0 1px 2px rgba(15,23,42,0.04)",
         }}
       >
         {children}

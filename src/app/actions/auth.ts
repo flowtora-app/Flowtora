@@ -106,6 +106,7 @@ export async function signupAction(formData: FormData) {
       ...emailVerificationEmail({
         verifyUrl: `${base}/verify/${raw}`,
         isChange: false,
+        userName: user.name,
       }),
     });
   } catch {

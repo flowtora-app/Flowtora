@@ -179,7 +179,7 @@ export async function sendInitialVerification() {
   if (!session?.user?.id) redirect("/login");
   const user = await db.user.findUnique({
     where: { id: session.user.id },
-    select: { id: true, email: true, emailVerified: true },
+    select: { id: true, email: true, name: true, emailVerified: true },
   });
   if (!user || user.emailVerified) return;
 
@@ -196,7 +196,7 @@ export async function sendInitialVerification() {
   const verifyUrl = appUrl(`/verify/${raw}`);
   await sendEmail({
     to: user.email,
-    ...emailVerificationEmail({ verifyUrl, isChange: false }),
+    ...emailVerificationEmail({ verifyUrl, isChange: false, userName: user.name }),
   });
 }
 
@@ -347,7 +347,7 @@ export async function requestEmailChange(backTo: string, formData: FormData) {
   const verifyUrl = appUrl(`/verify/${raw}`);
   await sendEmail({
     to: newEmail,
-    ...emailVerificationEmail({ verifyUrl, isChange: true }),
+    ...emailVerificationEmail({ verifyUrl, isChange: true, userName: user.name }),
   });
   // Notify the OLD address too, so a takeover attempt is loud.
   const meta = await requestMeta();
