@@ -1,3 +1,4 @@
+import * as React from "react";
 import Link from "next/link";
 import { requirePermission } from "@/lib/tenant";
 import { db } from "@/lib/db";
@@ -25,20 +26,22 @@ export default async function QuotesPage({
   const ctx = await requirePermission(slug, "quotes:view");
   const canManage = ctx.can("quotes:manage");
 
-  let where: Prisma.QuoteWhereInput = { tenantId: ctx.tenant.id };
-  if (sp.status) where.status = sp.status as never;
+  // Base where — all non-status filters applied. We compute per-status
+  // counts against this so the chips always show "flipping me would
+  // reveal N quotes" rather than "I match the current status filter".
+  let baseWhere: Prisma.QuoteWhereInput = { tenantId: ctx.tenant.id };
   if (sp.q) {
-    where.OR = [
+    baseWhere.OR = [
       { number: { contains: sp.q, mode: "insensitive" } },
       { customer: { name: { contains: sp.q, mode: "insensitive" } } },
     ];
   }
-  where = applyBranchScope(where, ctx.branchScope);
+  baseWhere = applyBranchScope(baseWhere, ctx.branchScope);
   const branches = await listActiveLocations(ctx.tenant.id);
   const branchChoices =
     ctx.branchScope === null ? branches : branches.filter((b) => ctx.branchScope!.includes(b.id));
   if (sp.branch && branchChoices.some((b) => b.id === sp.branch)) {
-    where.locationId = sp.branch;
+    baseWhere.locationId = sp.branch;
   }
 
   // Phase 9 Slice E — hide superseded quotes by default. Staff can still
@@ -46,7 +49,7 @@ export default async function QuotesPage({
   // clicking a link from a revision-chain card.
   const includeSuperseded = sp.superseded === "1";
   if (!includeSuperseded) {
-    where.supersededAt = null;
+    baseWhere.supersededAt = null;
   }
 
   // Phase 9 Slice E — "Needs attention" filter. A quote needs attention when
@@ -59,8 +62,8 @@ export default async function QuotesPage({
   const expiringSoonCutoff = new Date(now.getTime() + ATTN_EXPIRY_DAYS * 24 * 60 * 60 * 1000);
   const attnActive = sp.attn === "1";
   if (attnActive) {
-    where.AND = [
-      ...(Array.isArray(where.AND) ? where.AND : where.AND ? [where.AND] : []),
+    baseWhere.AND = [
+      ...(Array.isArray(baseWhere.AND) ? baseWhere.AND : baseWhere.AND ? [baseWhere.AND] : []),
       {
         OR: [
           { status: "SENT",   sentAt:    { lte: sentStaleCutoff } },
@@ -74,7 +77,12 @@ export default async function QuotesPage({
     ];
   }
 
-  const [quotes, members, savedViews] = await Promise.all([
+  // Build the findMany where by layering the (optional) status filter on
+  // top of baseWhere. Chips above use baseWhere for their counts.
+  const where: Prisma.QuoteWhereInput = { ...baseWhere };
+  if (sp.status) where.status = sp.status as never;
+
+  const [quotes, members, savedViews, statusCountsRaw] = await Promise.all([
     db.quote.findMany({
       where,
       orderBy: { updatedAt: "desc" },
@@ -83,7 +91,34 @@ export default async function QuotesPage({
     }),
     memberLookup(ctx.tenant.id),
     listSavedViews(slug, "quotes"),
+    db.quote.groupBy({
+      by: ["status"],
+      where: baseWhere,
+      _count: { _all: true },
+    }),
   ]);
+
+  // Chip counts — `null` key is the "All" chip. We compute the total
+  // from the groupBy rather than re-querying because the counts already
+  // partition the baseWhere space cleanly.
+  const statusCounts: Record<string, number> = {};
+  let totalCount = 0;
+  for (const row of statusCountsRaw) {
+    statusCounts[row.status] = row._count._all;
+    totalCount += row._count._all;
+  }
+
+  // Preserve every other filter when a chip flips the status param.
+  const chipHref = (status: string | null): string => {
+    const params = new URLSearchParams();
+    if (sp.q) params.set("q", sp.q);
+    if (sp.branch) params.set("branch", sp.branch);
+    if (sp.attn === "1") params.set("attn", "1");
+    if (sp.superseded === "1") params.set("superseded", "1");
+    if (status) params.set("status", status);
+    const qs = params.toString();
+    return `/t/${slug}/quotes${qs ? `?${qs}` : ""}`;
+  };
 
   function ageFor(q: (typeof quotes)[number]): { days: number; color: string; label: string } | null {
     let anchor: Date | null = null;
@@ -162,15 +197,12 @@ export default async function QuotesPage({
           className="flex-1 min-w-[220px] rounded-md px-3 py-2 outline-none"
           style={{ background: "var(--panel)", border: "1px solid var(--border)", color: "var(--text)" }}
         />
-        <select
-          name="status"
-          defaultValue={sp.status ?? ""}
-          className="rounded-md px-3 py-2"
-          style={{ background: "var(--panel)", border: "1px solid var(--border)", color: "var(--text)" }}
-        >
-          <option value="">All statuses</option>
-          {QUOTE_STATUSES.map((s) => <option key={s.value} value={s.value}>{s.label}</option>)}
-        </select>
+        {/* Preserve status + non-form filters across a Search submit. */}
+        {sp.status && <input type="hidden" name="status" value={sp.status} />}
+        {sp.attn === "1" && <input type="hidden" name="attn" value="1" />}
+        {sp.superseded === "1" && (
+          <input type="hidden" name="superseded" value="1" />
+        )}
         {branchChoices.length > 1 && (
           <select name="branch" defaultValue={sp.branch ?? ""} className="rounded-md px-3 py-2"
             style={{ background: "var(--panel)", border: "1px solid var(--border)", color: "var(--text)" }}>
@@ -186,6 +218,26 @@ export default async function QuotesPage({
         </label>
         <Button type="submit" variant="secondary">Filter</Button>
       </form>
+
+      {/* Status filter chips. Counts reflect everything else the user has
+          filtered by (search, branch, attention), so flipping chips is a
+          well-defined "scope + this status" scan. */}
+      <div className="mt-4 flex flex-wrap items-center gap-2">
+        <StatusChip href={chipHref(null)} active={!sp.status} count={totalCount}>
+          All
+        </StatusChip>
+        {QUOTE_STATUSES.map((s) => (
+          <StatusChip
+            key={s.value}
+            href={chipHref(s.value)}
+            active={sp.status === s.value}
+            count={statusCounts[s.value] ?? 0}
+            color={s.color}
+          >
+            {s.label}
+          </StatusChip>
+        ))}
+      </div>
 
       {attnActive && (
         <div
@@ -264,5 +316,53 @@ export default async function QuotesPage({
         </div>
       )}
     </div>
+  );
+}
+
+function StatusChip({
+  href,
+  active,
+  count,
+  color,
+  children,
+}: {
+  href: string;
+  active: boolean;
+  count: number;
+  color?: string;
+  children: React.ReactNode;
+}) {
+  const dotColor = color ?? "var(--text-muted)";
+  return (
+    <Link
+      href={href}
+      aria-pressed={active}
+      className="ts-focus inline-flex items-center gap-1.5 rounded-full px-3 py-1 text-xs font-medium transition-colors"
+      style={{
+        background: active ? "var(--accent-primary)" : "var(--surface-1)",
+        color: active ? "var(--accent-fg)" : "var(--text-default)",
+        border: `1px solid ${active ? "var(--accent-primary)" : "var(--border-subtle)"}`,
+      }}
+    >
+      {color && (
+        <span
+          aria-hidden
+          className="inline-block h-1.5 w-1.5 rounded-full"
+          style={{ background: active ? "var(--accent-fg)" : dotColor }}
+        />
+      )}
+      <span>{children}</span>
+      <span
+        className="rounded-full px-1.5 text-[10px] font-semibold tabular-nums"
+        style={{
+          background: active
+            ? "rgba(255,255,255,0.2)"
+            : "var(--surface-2)",
+          color: active ? "var(--accent-fg)" : "var(--text-muted)",
+        }}
+      >
+        {count}
+      </span>
+    </Link>
   );
 }

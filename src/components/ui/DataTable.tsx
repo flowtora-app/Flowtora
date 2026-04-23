@@ -42,6 +42,13 @@ export interface DataTableProps<T extends { id: string }> {
   columns: DataTableColumn<T>[];
   /** Optional link per-row — wraps the first cell in a Link. */
   rowHref?: (row: T) => string;
+  /** Optional click-anywhere-on-row handler — opens a preview drawer etc.
+      When both rowHref and onRowClick are set, the row click opens the
+      drawer and the Link in the first cell still navigates (its click is
+      stop-propagated). */
+  onRowClick?: (row: T) => void;
+  /** Mark the currently-active row (e.g. preview drawer is open for it). */
+  isRowActive?: (row: T) => boolean;
   /** Optional row-level actions rendered as a ⋯ overflow menu. */
   rowActions?: (row: T) => DropdownItem[];
   /** Hide selection UI when true (read-only listings). */
@@ -68,6 +75,8 @@ export function DataTable<T extends { id: string }>({
   rows,
   columns,
   rowHref,
+  onRowClick,
+  isRowActive,
   rowActions,
   selectable = false,
   bulkActions,
@@ -264,15 +273,44 @@ export function DataTable<T extends { id: string }>({
               ) : (
                 rows.map((row) => {
                   const isSelected = selected.has(row.id);
+                  const isActive = isRowActive?.(row) ?? false;
+                  const clickable = !!onRowClick;
                   return (
                     <tr
                       key={row.id}
+                      onClick={
+                        clickable
+                          ? (e) => {
+                              // Ignore clicks that originated inside interactive
+                              // elements (links, buttons, form controls) — the
+                              // first-cell Link still navigates, row menu still
+                              // opens its dropdown.
+                              const target = e.target as HTMLElement;
+                              if (
+                                target.closest(
+                                  'a, button, input, label, [role="menuitem"]',
+                                )
+                              ) {
+                                return;
+                              }
+                              onRowClick?.(row);
+                            }
+                          : undefined
+                      }
+                      aria-selected={clickable ? isActive : undefined}
                       className={cn(
                         "transition-colors",
                         "hover:bg-[color:var(--surface-2)]",
                         isSelected && "bg-[color:var(--accent-surface)]",
+                        isActive && !isSelected && "bg-[color:var(--surface-2)]",
+                        clickable && "cursor-pointer",
                       )}
-                      style={{ borderTop: "1px solid var(--border-subtle)" }}
+                      style={{
+                        borderTop: "1px solid var(--border-subtle)",
+                        boxShadow: isActive
+                          ? "inset 3px 0 0 0 var(--accent-primary)"
+                          : undefined,
+                      }}
                     >
                       {selectable && (
                         <td className={cn(cellPadX, cellPadY)} style={{ width: 36 }}>

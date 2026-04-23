@@ -3,7 +3,9 @@
 import * as React from "react";
 import Link from "next/link";
 import { DataTable, type DataTableColumn } from "@/components/ui/DataTable";
-import { bulkChangeQuoteStatus, deleteQuote } from "@/app/actions/quotes";
+import type { DropdownItem } from "@/components/ui/DropdownMenu";
+import { bulkChangeQuoteStatus, deleteQuote, duplicateQuote } from "@/app/actions/quotes";
+import { QuotePreviewDrawer } from "./QuotePreviewDrawer";
 
 export type QuotesTableRow = {
   id: string;
@@ -31,6 +33,23 @@ interface QuotesTableProps {
 }
 
 export function QuotesTable({ slug, rows, empty, canEdit }: QuotesTableProps) {
+  // Drawer preview state. `activeId` drives the drawer; `activeRow` stays
+  // in sync so the header band renders instantly without waiting for the
+  // lazy getQuotePreview() call.
+  const [activeId, setActiveId] = React.useState<string | null>(null);
+  const activeRow = React.useMemo(
+    () => rows.find((r) => r.id === activeId) ?? null,
+    [rows, activeId],
+  );
+
+  // If the active quote disappears from the list (filter change, delete),
+  // close the drawer rather than stranding it on a stale header.
+  React.useEffect(() => {
+    if (activeId && !rows.some((r) => r.id === activeId)) {
+      setActiveId(null);
+    }
+  }, [rows, activeId]);
+
   const columns: DataTableColumn<QuotesTableRow>[] = [
     {
       key: "number",
@@ -129,49 +148,89 @@ export function QuotesTable({ slug, rows, empty, canEdit }: QuotesTableProps) {
   ];
 
   return (
-    <DataTable
-      rows={rows}
-      columns={columns}
-      rowHref={(q) => `/t/${slug}/quotes/${q.id}`}
-      empty={empty}
-      selectable={canEdit}
-      densityKey="quotes"
-      bulkActions={canEdit ? (ids, clear) => (
-        <QuoteBulkBar slug={slug} ids={ids} onAfter={clear} />
-      ) : undefined}
-      rowActions={
-        canEdit
-          ? (q) => [
-              { label: "Open", href: `/t/${slug}/quotes/${q.id}` },
-              { label: "Customer", href: `/t/${slug}/customers/${q.customerId}` },
-              { type: "separator" as const },
-              {
-                label: "Delete quote",
-                destructive: true,
-                disabled: !q.canDelete,
-                form: (
-                  <form
-                    action={deleteQuote.bind(null, slug, q.id)}
-                    onSubmit={(e) => {
-                      if (!confirm("Delete this quote? This can't be undone.")) {
-                        e.preventDefault();
-                      }
-                    }}
+    <>
+      <DataTable
+        rows={rows}
+        columns={columns}
+        onRowClick={(q) => setActiveId(q.id)}
+        isRowActive={(q) => q.id === activeId}
+        empty={empty}
+        selectable={canEdit}
+        densityKey="quotes"
+        bulkActions={canEdit ? (ids, clear) => (
+          <QuoteBulkBar slug={slug} ids={ids} onAfter={clear} />
+        ) : undefined}
+        rowActions={(q) => {
+          const items: DropdownItem[] = [
+            { label: "Preview", onClick: () => setActiveId(q.id) },
+            { label: "Open full page", href: `/t/${slug}/quotes/${q.id}` },
+            {
+              label: "View customer",
+              href: `/t/${slug}/customers/${q.customerId}`,
+            },
+          ];
+          if (canEdit) {
+            items.push({ type: "separator" });
+            items.push({
+              label: "Duplicate quote",
+              form: (
+                <form action={duplicateQuote.bind(null, slug, q.id)}>
+                  <button
+                    type="submit"
+                    className="w-full px-3 py-2 text-left text-sm"
+                    style={{ color: "var(--text-default)" }}
                   >
-                    <button
-                      type="submit"
-                      className="w-full px-3 py-2 text-left text-sm"
-                      style={{ color: "var(--danger-fg)" }}
-                    >
-                      Delete quote
-                    </button>
-                  </form>
-                ),
-              },
-            ]
-          : undefined
-      }
-    />
+                    Duplicate quote
+                  </button>
+                </form>
+              ),
+            });
+            items.push({
+              label: "Delete quote",
+              destructive: true,
+              disabled: !q.canDelete,
+              form: (
+                <form
+                  action={deleteQuote.bind(null, slug, q.id)}
+                  onSubmit={(e) => {
+                    if (!confirm("Delete this quote? This can't be undone.")) {
+                      e.preventDefault();
+                    }
+                  }}
+                >
+                  <button
+                    type="submit"
+                    className="w-full px-3 py-2 text-left text-sm"
+                    style={{ color: "var(--danger-fg)" }}
+                  >
+                    Delete quote
+                  </button>
+                </form>
+              ),
+            });
+          }
+          return items;
+        }}
+      />
+
+      <QuotePreviewDrawer
+        slug={slug}
+        quoteId={activeId}
+        canEdit={canEdit}
+        onClose={() => setActiveId(null)}
+        header={
+          activeRow
+            ? {
+                number: activeRow.number,
+                statusLabel: activeRow.statusLabel,
+                statusColor: activeRow.statusColor,
+                customerName: activeRow.customerName,
+                total: activeRow.total,
+              }
+            : null
+        }
+      />
+    </>
   );
 }
 

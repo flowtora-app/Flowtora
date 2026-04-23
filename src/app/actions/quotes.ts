@@ -3,7 +3,7 @@
 import { redirect } from "next/navigation";
 import { revalidatePath } from "next/cache";
 import { z } from "zod";
-import type { Prisma, QuoteStatus } from "@prisma/client";
+import type { Prisma, QuoteItem, QuoteStatus } from "@prisma/client";
 import { db } from "@/lib/db";
 import { requirePermission } from "@/lib/tenant";
 import { logAudit } from "@/lib/audit";
@@ -13,7 +13,8 @@ import { logAudit } from "@/lib/audit";
 import { sendCustomerEmail, quoteReadyEmail } from "@/lib/customer-emails";
 import { appOrigin } from "@/lib/share";
 import { formatMoney, formatDate } from "@/lib/format";
-import { computeItemSubtotal, computeQuoteTotals, parseSelectedOptions, type SelectedOption } from "@/lib/quotes";
+import { computeItemSubtotal, computeQuoteTotals, parseSelectedOptions, statusLabel, type SelectedOption } from "@/lib/quotes";
+import { pricingMeta } from "@/lib/pricing";
 import { createOrderFromQuoteInTx } from "@/app/actions/orders";
 import { quoteSendBlockers, loadApprovalRules } from "@/lib/approvals";
 import { notifyApprovers } from "@/lib/approval-requests";
@@ -1372,4 +1373,205 @@ export async function bulkChangeQuoteStatus(slug: string, formData: FormData) {
   );
 
   revalidatePath(`/t/${slug}/quotes`);
+}
+
+// ────────────────────────────────────────────────────────────
+// Preview payload for the list-page side drawer.
+//
+// Lightweight read — returns just enough to render a summary card + line
+// items + totals without the full detail page's editor plumbing. The
+// drawer calls this lazily the first time a row is clicked so the list
+// query stays cheap (we'd otherwise pay to hydrate items for every
+// visible quote just in case the user previews one).
+//
+// Returns null when the quote has been deleted or moved out of the
+// user's branch scope — the caller shows a "Quote is no longer
+// available" state and lets the user close the drawer.
+// ────────────────────────────────────────────────────────────
+
+export type QuotePreviewPayload = {
+  id: string;
+  number: string;
+  status: QuoteStatus;
+  statusLabel: string;
+  customerId: string;
+  customerName: string;
+  expiresLabel: string | null;
+  sentLabel: string | null;
+  notes: string | null;
+  customerNote: string | null;
+  sections: Array<{
+    id: string | null;
+    title: string | null;
+    description: string | null;
+    items: Array<{
+      id: string;
+      name: string;
+      description: string | null;
+      unit: string | null;
+      pricingModelLabel: string;
+      inputsLabel: string | null;
+      subtotal: string;
+      isOptional: boolean;
+    }>;
+  }>;
+  totals: {
+    subtotal: string;
+    discount: string | null;
+    tax: string;
+    taxRatePercent: string;
+    total: string;
+    optionalSubtotal: string | null;
+    deposit: string | null;
+  };
+};
+
+function formatItemInputsLabel(
+  item: Pick<
+    QuoteItem,
+    "pricingModel" | "quantity" | "width" | "height" | "length" | "hours" | "unit"
+  >,
+): string | null {
+  const qty = item.quantity != null ? Number(item.quantity) : null;
+  const w = item.width != null ? Number(item.width) : null;
+  const h = item.height != null ? Number(item.height) : null;
+  const l = item.length != null ? Number(item.length) : null;
+  const hrs = item.hours != null ? Number(item.hours) : null;
+  const unit = item.unit ?? "";
+  switch (item.pricingModel) {
+    case "PER_UNIT":
+      return qty != null ? `${qty} ${unit || "each"}` : null;
+    case "PER_SQFT":
+      if (w != null && h != null) {
+        const base = `${w} × ${h} ft`;
+        return qty && qty !== 1 ? `${base} × ${qty}` : base;
+      }
+      return null;
+    case "PER_LINEAR_FT":
+      if (l != null) {
+        const base = `${l} ft`;
+        return qty && qty !== 1 ? `${base} × ${qty}` : base;
+      }
+      return null;
+    case "LABOR_HOURLY":
+      return hrs != null ? `${hrs} hr` : null;
+    case "FIXED":
+    case "CUSTOM_QUOTE":
+    default:
+      return null;
+  }
+}
+
+export async function getQuotePreview(
+  slug: string,
+  quoteId: string,
+): Promise<QuotePreviewPayload | null> {
+  const ctx = await requirePermission(slug, "quotes:view");
+
+  const quote = await db.quote.findFirst({
+    where: { id: quoteId, tenantId: ctx.tenant.id },
+    include: {
+      customer: { select: { id: true, name: true } },
+      sections: { orderBy: { sortOrder: "asc" } },
+      items: { orderBy: [{ sortOrder: "asc" }, { createdAt: "asc" }] },
+    },
+  });
+  if (!quote) return null;
+  try {
+    ctx.assertBranchAccess(quote.locationId);
+  } catch {
+    return null;
+  }
+
+  const currency = ctx.tenant.currency;
+  const discountType = quote.discountType;
+  const discountAmount = Number(quote.discountAmount);
+  const optionalSubtotal = Number(quote.optionalSubtotal);
+  const deposit = Number(quote.depositAmount);
+
+  const bySection = new Map<string | null, typeof quote.items>();
+  for (const it of quote.items) {
+    const key = it.sectionId ?? null;
+    const bucket = bySection.get(key) ?? [];
+    bucket.push(it);
+    bySection.set(key, bucket);
+  }
+
+  const sections: QuotePreviewPayload["sections"] = [];
+  const ungrouped = bySection.get(null) ?? [];
+  if (ungrouped.length > 0) {
+    sections.push({
+      id: null,
+      title: null,
+      description: null,
+      items: ungrouped.map((it) => ({
+        id: it.id,
+        name: it.name,
+        description: it.description,
+        unit: it.unit,
+        pricingModelLabel: pricingMeta(it.pricingModel).label,
+        inputsLabel: formatItemInputsLabel(it),
+        subtotal: formatMoney(Number(it.subtotal).toString(), currency),
+        isOptional: it.isOptional,
+      })),
+    });
+  }
+  for (const sec of quote.sections) {
+    const items = bySection.get(sec.id) ?? [];
+    if (items.length === 0) continue;
+    sections.push({
+      id: sec.id,
+      title: sec.title,
+      description: sec.description,
+      items: items.map((it) => ({
+        id: it.id,
+        name: it.name,
+        description: it.description,
+        unit: it.unit,
+        pricingModelLabel: pricingMeta(it.pricingModel).label,
+        inputsLabel: formatItemInputsLabel(it),
+        subtotal: formatMoney(Number(it.subtotal).toString(), currency),
+        isOptional: it.isOptional,
+      })),
+    });
+  }
+
+  const pctRaw = Number(quote.taxRate) * 100;
+  const taxRatePct = (pctRaw % 1 === 0 ? pctRaw.toFixed(0) : pctRaw.toFixed(3));
+
+  const discountLabel = (() => {
+    if (discountType === "NONE" || discountAmount === 0) return null;
+    const money = formatMoney(discountAmount.toString(), currency);
+    if (discountType === "PERCENT") {
+      return `-${money} (${Number(quote.discountValue)}% off)`;
+    }
+    return `-${money}`;
+  })();
+
+  return {
+    id: quote.id,
+    number: quote.number,
+    status: quote.status,
+    statusLabel: statusLabel(quote.status),
+    customerId: quote.customer.id,
+    customerName: quote.customer.name,
+    expiresLabel: quote.expiresAt ? formatDate(quote.expiresAt) : null,
+    sentLabel: quote.sentAt ? formatDate(quote.sentAt) : null,
+    notes: quote.notes,
+    customerNote: quote.customerNote,
+    sections,
+    totals: {
+      subtotal: formatMoney(Number(quote.subtotal).toString(), currency),
+      discount: discountLabel,
+      tax: formatMoney(Number(quote.taxAmount).toString(), currency),
+      taxRatePercent: taxRatePct,
+      total: formatMoney(Number(quote.total).toString(), currency),
+      optionalSubtotal:
+        optionalSubtotal > 0
+          ? formatMoney(optionalSubtotal.toString(), currency)
+          : null,
+      deposit:
+        deposit > 0 ? formatMoney(deposit.toString(), currency) : null,
+    },
+  };
 }
