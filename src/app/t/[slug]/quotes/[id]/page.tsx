@@ -10,6 +10,7 @@ import {
   addQuoteItem,
   updateQuoteItem,
   removeQuoteItem,
+  duplicateQuoteItem,
   changeQuoteStatus,
   deleteQuote,
   duplicateQuote,
@@ -35,7 +36,7 @@ import {
   parseSelectedOptions,
   parseQuantityTiers,
 } from "@/lib/quotes";
-import { PRICING_MODELS, pickTierPrice, pricingMeta, computeLineCost, marginPercent } from "@/lib/pricing";
+import { pickTierPrice, pricingMeta, computeLineCost, marginPercent } from "@/lib/pricing";
 import { formatMoney, formatDate, humanize } from "@/lib/format";
 import { listActiveMembers, memberLookup } from "@/lib/members";
 import { SendMessageWidget } from "@/components/SendMessageWidget";
@@ -43,6 +44,8 @@ import { loadSendContext } from "@/app/actions/message-templates";
 import { getGroupContext } from "@/lib/franchise";
 import { QuotePortalPreview } from "@/components/quotes/QuotePortalPreview";
 import { QuoteDetailTabs, type QuoteDetailTab } from "@/components/quotes/QuoteDetailTabs";
+import { AddLineItemBuilder } from "@/components/quotes/AddLineItemBuilder";
+import { Icon } from "@/components/shell/icons";
 
 // Inlined rather than imported from the client component — a value exported
 // from a "use client" module is a client reference and can't be called from
@@ -286,7 +289,7 @@ export default async function QuoteDetailPage({
     if (items.length === 0) return null;
     return (
       <ul
-        className="space-y-3 px-5 py-4"
+        className="space-y-2 px-5 py-4"
         style={{ borderTop: "1px solid var(--border-subtle)" }}
       >
         {items.map((item) => {
@@ -295,6 +298,7 @@ export default async function QuoteDetailPage({
           const selectedByGroup = new Map(selected.map((o) => [o.groupName, o.label]));
           const save = updateQuoteItem.bind(null, slug, item.id);
           const remove = removeQuoteItem.bind(null, slug, item.id);
+          const dup = duplicateQuoteItem.bind(null, slug, item.id);
           const moveItem = moveQuoteItemToSection.bind(null, slug, item.id);
           const toggleOptional = toggleQuoteItemOptional.bind(null, slug, item.id);
 
@@ -330,72 +334,67 @@ export default async function QuoteDetailPage({
           const formula = formulaForItem(item, ctx.tenant.currency);
           const hasOptionGroups = !!item.product && item.product.optionGroups.length > 0;
           const hasTierInfo = tierApplies && tiers.length > 0;
-          const detailsSummary = [
-            "Description",
-            hasOptionGroups ? "options" : null,
-            hasTierInfo ? "tier breaks" : null,
-            "tax",
-          ]
-            .filter(Boolean)
-            .join(" · ");
+
+          const descPreview = item.description
+            ? item.description.length > 90
+              ? `${item.description.slice(0, 87)}…`
+              : item.description
+            : null;
+          const optionSummary = selected.length > 0
+            ? selected.map((o) => `${o.groupName}: ${o.label}`).join(" · ")
+            : null;
 
           return (
             <li key={item.id}>
-              <div
-                className="overflow-hidden rounded-lg"
+              <details
+                className="group overflow-hidden rounded-lg [&>summary]:list-none [&>summary::-webkit-details-marker]:hidden"
                 style={{
                   background: item.isOptional ? "var(--surface-1)" : "var(--surface-0)",
                   border: item.isOptional
                     ? "1px solid var(--accent-primary)"
                     : "1px solid var(--border-subtle)",
-                  boxShadow: "var(--shadow-xs, 0 1px 0 rgb(0 0 0 / 0.02))",
                 }}
               >
-                <form action={save} className="contents">
-                  <div className="flex items-start gap-4 p-4">
-                    <div className="min-w-0 flex-1 space-y-2">
-                      <Field
-                        label="Line name"
-                        name="name"
-                        required
-                        defaultValue={item.name}
-                      />
-                      <div
-                        className="flex flex-wrap items-center gap-1.5 text-[11px]"
-                        style={{ color: "var(--text-muted)" }}
+                <summary
+                  className="flex cursor-pointer items-center gap-4 px-4 py-3 transition-colors hover:bg-[var(--surface-1)]"
+                  aria-label={`${item.name} — click to ${editable ? "edit" : "view details"}`}
+                >
+                  <div className="min-w-0 flex-1">
+                    <div className="flex items-center gap-2">
+                      <span
+                        className="truncate text-sm font-semibold"
+                        style={{ color: "var(--text-default)" }}
                       >
+                        {item.name}
+                      </span>
+                      {item.isOptional && (
                         <span
-                          className="rounded-full px-2 py-0.5"
+                          className="shrink-0 rounded-full px-1.5 py-0.5 text-[10px] font-medium uppercase tracking-wide"
                           style={{
-                            background: "var(--surface-2)",
-                            border: "1px solid var(--border-subtle)",
+                            background: "var(--accent-surface)",
+                            color: "var(--accent-primary)",
                           }}
                         >
-                          {meta.label}
+                          Optional
                         </span>
-                        {item.isOptional && (
+                      )}
+                    </div>
+                    <div
+                      className="mt-0.5 flex flex-wrap items-center gap-x-2 gap-y-0.5 text-[11px] tabular-nums"
+                      style={{ color: "var(--text-muted)" }}
+                    >
+                      <span>{meta.label}</span>
+                      {formula && (
+                        <>
+                          <span aria-hidden>·</span>
+                          <span>{formula}</span>
+                        </>
+                      )}
+                      {canManage && lineMargin != null && (
+                        <>
+                          <span aria-hidden>·</span>
                           <span
-                            className="rounded-full px-2 py-0.5 font-medium"
                             style={{
-                              background: "var(--accent-surface)",
-                              color: "var(--accent-primary)",
-                              border: "1px solid var(--accent-primary)",
-                            }}
-                            title="Optional line — excluded from the main total. Rolled up as 'Optional add-ons' instead."
-                          >
-                            Optional add-on
-                          </span>
-                        )}
-                        {canManage && lineMargin != null && (
-                          <span
-                            className="rounded-full px-2 py-0.5 font-medium"
-                            style={{
-                              background:
-                                lineMargin >= 40
-                                  ? "var(--success-surface)"
-                                  : lineMargin >= 20
-                                    ? "var(--accent-surface)"
-                                    : "var(--danger-surface)",
                               color:
                                 lineMargin >= 40
                                   ? "var(--success-fg)"
@@ -403,132 +402,137 @@ export default async function QuoteDetailPage({
                                     ? "var(--accent-primary)"
                                     : "var(--danger-fg)",
                             }}
-                            title={`Cost ${formatMoney(lineCostExt ?? 0, ctx.tenant.currency)} → ${lineMargin.toFixed(1)}% margin`}
+                            title={`Cost ${formatMoney(lineCostExt ?? 0, ctx.tenant.currency)}`}
                           >
                             {lineMargin.toFixed(1)}% margin
                           </span>
-                        )}
-                        {canManage && lineMargin == null && item.pricingModel !== "CUSTOM_QUOTE" && (
-                          <span
-                            className="rounded-full px-2 py-0.5"
-                            style={{
-                              background: "var(--surface-2)",
-                              color: "var(--text-muted)",
-                            }}
-                            title="No cost snapshotted when this line was added — set a cost on the product to see margin next time."
-                          >
-                            no cost
-                          </span>
-                        )}
-                      </div>
-                    </div>
-                    <div className="shrink-0 text-right">
-                      <div
-                        className="text-[10px] uppercase tracking-wide"
-                        style={{ color: "var(--text-muted)" }}
-                      >
-                        Line total
-                      </div>
-                      <div
-                        className="text-2xl font-semibold tabular-nums leading-tight"
-                        style={{ color: "var(--text-default)" }}
-                      >
-                        {formatMoney(item.subtotal.toString(), ctx.tenant.currency)}
-                      </div>
-                      {formula && (
-                        <div
-                          className="mt-0.5 text-[11px] tabular-nums"
-                          style={{ color: "var(--text-muted)" }}
-                        >
-                          {formula}
-                        </div>
+                        </>
                       )}
                     </div>
-                  </div>
-
-                  <div className="grid grid-cols-2 gap-3 px-4 pb-4 md:grid-cols-4">
-                    {item.pricingModel !== "CUSTOM_QUOTE" && (
-                      <Field
-                        label={`Base${item.unit ? ` / ${item.unit}` : ""}`}
-                        name="basePrice"
-                        type="number"
-                        step="0.01"
-                        min="0"
-                        defaultValue={item.basePrice.toString()}
-                      />
+                    {descPreview && (
+                      <div
+                        className="mt-1 truncate text-xs"
+                        style={{ color: "var(--text-faint, var(--text-muted))" }}
+                      >
+                        {descPreview}
+                      </div>
                     )}
-                    {meta.inputs.includes("quantity") && (
-                      <Field
-                        label="Qty"
-                        name="quantity"
-                        type="number"
-                        step="0.01"
-                        min="0"
-                        defaultValue={item.quantity?.toString() ?? "1"}
-                      />
-                    )}
-                    {meta.inputs.includes("width") && (
-                      <Field
-                        label="Width (ft)"
-                        name="width"
-                        type="number"
-                        step="0.01"
-                        min="0"
-                        defaultValue={item.width?.toString() ?? ""}
-                      />
-                    )}
-                    {meta.inputs.includes("height") && (
-                      <Field
-                        label="Height (ft)"
-                        name="height"
-                        type="number"
-                        step="0.01"
-                        min="0"
-                        defaultValue={item.height?.toString() ?? ""}
-                      />
-                    )}
-                    {meta.inputs.includes("length") && (
-                      <Field
-                        label="Length (ft)"
-                        name="length"
-                        type="number"
-                        step="0.01"
-                        min="0"
-                        defaultValue={item.length?.toString() ?? ""}
-                      />
-                    )}
-                    {meta.inputs.includes("hours") && (
-                      <Field
-                        label="Hours"
-                        name="hours"
-                        type="number"
-                        step="0.25"
-                        min="0"
-                        defaultValue={item.hours?.toString() ?? ""}
-                      />
-                    )}
-                    {item.pricingModel === "CUSTOM_QUOTE" && (
-                      <Field
-                        label="Price (manual)"
-                        name="manualPrice"
-                        type="number"
-                        step="0.01"
-                        min="0"
-                        defaultValue={item.manualPrice?.toString() ?? ""}
-                      />
+                    {optionSummary && (
+                      <div
+                        className="mt-0.5 truncate text-[11px]"
+                        style={{ color: "var(--text-muted)" }}
+                      >
+                        {optionSummary}
+                      </div>
                     )}
                   </div>
-
-                  <details
-                    style={{ borderTop: "1px solid var(--border-subtle)" }}
-                  >
-                    <summary
-                      className="cursor-pointer select-none px-4 py-2 text-xs font-medium"
-                      style={{ color: "var(--text-muted)" }}
+                  <div className="shrink-0 text-right">
+                    <div
+                      className="text-lg font-semibold tabular-nums leading-tight"
+                      style={{ color: "var(--text-default)" }}
                     >
-                      {detailsSummary}
-                    </summary>
-                    <div className="space-y-3 px-4 pb-4 pt-2">
+                      {formatMoney(item.subtotal.toString(), ctx.tenant.currency)}
+                    </div>
+                    {item.quantity != null && item.pricingModel === "PER_UNIT" && (
+                      <div
+                        className="text-[11px] tabular-nums"
+                        style={{ color: "var(--text-muted)" }}
+                      >
+                        Qty {Number(item.quantity)}
+                      </div>
+                    )}
+                  </div>
+                  <div
+                    aria-hidden
+                    className="shrink-0 transition-transform group-open:rotate-180"
+                    style={{ color: "var(--text-muted)" }}
+                  >
+                    <Icon.ChevronDown />
+                  </div>
+                </summary>
+
+                <div style={{ borderTop: "1px solid var(--border-subtle)" }}>
+                  <form action={save}>
+                    <div className="space-y-3 px-4 py-4">
+                      <Field
+                        label="Line name"
+                        name="name"
+                        required
+                        defaultValue={item.name}
+                      />
+                      <div className="grid grid-cols-2 gap-3 md:grid-cols-4">
+                        {item.pricingModel !== "CUSTOM_QUOTE" && (
+                          <Field
+                            label={`Base${item.unit ? ` / ${item.unit}` : ""}`}
+                            name="basePrice"
+                            type="number"
+                            step="0.01"
+                            min="0"
+                            defaultValue={item.basePrice.toString()}
+                          />
+                        )}
+                        {meta.inputs.includes("quantity") && (
+                          <Field
+                            label="Qty"
+                            name="quantity"
+                            type="number"
+                            step="0.01"
+                            min="0"
+                            defaultValue={item.quantity?.toString() ?? "1"}
+                          />
+                        )}
+                        {meta.inputs.includes("width") && (
+                          <Field
+                            label="Width (ft)"
+                            name="width"
+                            type="number"
+                            step="0.01"
+                            min="0"
+                            defaultValue={item.width?.toString() ?? ""}
+                          />
+                        )}
+                        {meta.inputs.includes("height") && (
+                          <Field
+                            label="Height (ft)"
+                            name="height"
+                            type="number"
+                            step="0.01"
+                            min="0"
+                            defaultValue={item.height?.toString() ?? ""}
+                          />
+                        )}
+                        {meta.inputs.includes("length") && (
+                          <Field
+                            label="Length (ft)"
+                            name="length"
+                            type="number"
+                            step="0.01"
+                            min="0"
+                            defaultValue={item.length?.toString() ?? ""}
+                          />
+                        )}
+                        {meta.inputs.includes("hours") && (
+                          <Field
+                            label="Hours"
+                            name="hours"
+                            type="number"
+                            step="0.25"
+                            min="0"
+                            defaultValue={item.hours?.toString() ?? ""}
+                          />
+                        )}
+                        {item.pricingModel === "CUSTOM_QUOTE" && (
+                          <Field
+                            label="Price (manual)"
+                            name="manualPrice"
+                            type="number"
+                            step="0.01"
+                            min="0"
+                            defaultValue={item.manualPrice?.toString() ?? ""}
+                          />
+                        )}
+                      </div>
+
                       <TextArea
                         label="Description"
                         name="description"
@@ -564,7 +568,7 @@ export default async function QuoteDetailPage({
 
                       {!item.product && selected.length > 0 && (
                         <div className="text-xs" style={{ color: "var(--text-muted)" }}>
-                          Options: {selected.map((o) => `${o.groupName}: ${o.label}`).join(" · ")}
+                          Options: {optionSummary}
                         </div>
                       )}
 
@@ -591,76 +595,106 @@ export default async function QuoteDetailPage({
                         </div>
                       )}
 
+                      {canManage && lineMargin == null && item.pricingModel !== "CUSTOM_QUOTE" && (
+                        <div
+                          className="text-[11px]"
+                          style={{ color: "var(--text-muted)" }}
+                        >
+                          No cost snapshotted — set a cost on the product in the catalog to see margin here.
+                        </div>
+                      )}
+
                       <Checkbox
                         label="Taxable"
                         name="taxable"
                         defaultChecked={item.taxable}
                       />
                     </div>
-                  </details>
+
+                    {editable && (
+                      <div
+                        className="flex items-center justify-end gap-2 px-4 py-2"
+                        style={{
+                          borderTop: "1px solid var(--border-subtle)",
+                          background: "var(--surface-1)",
+                        }}
+                      >
+                        <Button type="submit" variant="secondary">
+                          Save changes
+                        </Button>
+                      </div>
+                    )}
+                  </form>
 
                   {editable && (
                     <div
-                      className="flex items-center justify-between gap-3 px-4 py-2"
+                      className="flex flex-wrap items-center gap-2 px-4 py-2"
                       style={{
                         borderTop: "1px solid var(--border-subtle)",
-                        background: "var(--surface-1)",
+                        background: "var(--surface-0)",
                       }}
                     >
-                      <div className="text-[11px]" style={{ color: "var(--text-muted)" }}>
-                        Edits stay pending until you save this row.
+                      {sectionOptions.length > 1 && (
+                        <form action={moveItem} className="flex items-center gap-2">
+                          <label
+                            htmlFor={`move-${item.id}`}
+                            className="text-[11px] uppercase tracking-wide"
+                            style={{ color: "var(--text-muted)" }}
+                          >
+                            Section
+                          </label>
+                          <select
+                            id={`move-${item.id}`}
+                            name="sectionId"
+                            defaultValue={item.sectionId ?? ""}
+                            className="rounded-md px-2 py-1 text-xs"
+                            style={{
+                              background: "var(--panel)",
+                              border: "1px solid var(--border)",
+                              color: "var(--text)",
+                            }}
+                          >
+                            {sectionOptions.map((o) => (
+                              <option key={o.value} value={o.value}>
+                                {o.label}
+                              </option>
+                            ))}
+                          </select>
+                          <button
+                            type="submit"
+                            className="rounded-md px-2 py-1 text-[11px]"
+                            style={{
+                              border: "1px solid var(--border-subtle)",
+                              color: "var(--text-muted)",
+                            }}
+                          >
+                            Move
+                          </button>
+                        </form>
+                      )}
+                      <div className="ml-auto flex items-center gap-1">
+                        <form action={toggleOptional}>
+                          <IconActionButton
+                            label={item.isOptional ? "Make required" : "Mark optional"}
+                          >
+                            <Icon.Bookmark />
+                          </IconActionButton>
+                        </form>
+                        <form action={dup}>
+                          <IconActionButton label="Duplicate line">
+                            <Icon.Products />
+                          </IconActionButton>
+                        </form>
+                        <form action={remove}>
+                          <IconActionButton label="Delete line" danger>
+                            <Icon.X />
+                          </IconActionButton>
+                        </form>
                       </div>
-                      <Button type="submit" variant="secondary">
-                        Save row
-                      </Button>
                     </div>
                   )}
-                </form>
-
-                {editable && (
-                  <div
-                    className="flex flex-wrap items-end gap-3 px-4 py-2"
-                    style={{
-                      borderTop: "1px solid var(--border-subtle)",
-                      background: "var(--surface-0)",
-                    }}
-                  >
-                    <form action={moveItem} className="flex items-end gap-2">
-                      <div className="min-w-[180px]">
-                        <SelectField
-                          label="Move to section"
-                          name="sectionId"
-                          defaultValue={item.sectionId ?? ""}
-                          options={sectionOptions}
-                        />
-                      </div>
-                      <Button type="submit" variant="secondary">
-                        Move
-                      </Button>
-                    </form>
-                    <div className="ml-auto flex items-center gap-4 pb-1">
-                      <form action={toggleOptional}>
-                        <button
-                          type="submit"
-                          className="text-xs underline"
-                          style={{ color: "var(--text-muted)" }}
-                        >
-                          {item.isOptional ? "Make required" : "Mark as optional"}
-                        </button>
-                      </form>
-                      <form action={remove}>
-                        <button
-                          type="submit"
-                          className="text-xs underline"
-                          style={{ color: "var(--danger-fg)" }}
-                        >
-                          Remove line
-                        </button>
-                      </form>
-                    </div>
-                  </div>
-                )}
-              </div>
+                </div>
+              </details>
             </li>
           );
         })}
@@ -1122,16 +1156,51 @@ export default async function QuoteDetailPage({
               title="Line items"
               description={
                 quote.items.length === 0
-                  ? "Add products below to get started."
-                  : "Group lines into sections (Signage, Install, Optional upgrades…) to make the customer proposal easier to read."
+                  ? "Start by adding your first product or service below."
+                  : `${quote.items.length} line${quote.items.length === 1 ? "" : "s"} · click a row to edit. Group related lines into sections for a cleaner proposal.`
               }
             />
 
-            {(ungrouped.length > 0 || quote.sections.length === 0) && (
+            {editable && (
+              <div
+                className="px-5 py-4"
+                style={{ borderTop: "1px solid var(--border-subtle)" }}
+              >
+                <AddLineItemBuilder
+                  addAction={addItem}
+                  addPackageAction={addPkg}
+                  products={products.map((p) => ({
+                    id: p.id,
+                    name: p.name,
+                    category: p.category,
+                    pricingLabel: pricingMeta(p.pricingModel).label,
+                  }))}
+                  packages={packages.map((p) => ({
+                    id: p.id,
+                    name: p.name,
+                    componentCount: p._count.components,
+                  }))}
+                />
+              </div>
+            )}
+
+            {quote.items.length === 0 && !editable && (
+              <div
+                className="px-5 py-8 text-center text-sm"
+                style={{
+                  color: "var(--text-muted)",
+                  borderTop: "1px solid var(--border-subtle)",
+                }}
+              >
+                No line items yet.
+              </div>
+            )}
+
+            {(ungrouped.length > 0 || (quote.sections.length === 0 && quote.items.length > 0)) && (
               <div>
                 {quote.sections.length > 0 && ungrouped.length > 0 && (
                   <div
-                    className="px-5 py-2 text-xs uppercase tracking-wide"
+                    className="px-5 py-2 text-[11px] font-medium uppercase tracking-wide"
                     style={{
                       color: "var(--text-muted)",
                       background: "var(--surface-1)",
@@ -1240,95 +1309,42 @@ export default async function QuoteDetailPage({
             })}
 
             {editable && (
-              <form
-                action={addSection}
-                className="flex flex-wrap items-end gap-2 px-5 py-3"
+              <details
+                className="group [&>summary]:list-none [&>summary::-webkit-details-marker]:hidden"
                 style={{
                   borderTop: "1px solid var(--border-subtle)",
                   background: "var(--surface-1)",
                 }}
               >
-                <div className="flex-1 min-w-[220px]">
-                  <Field label="New section title" name="title" placeholder="e.g. Installation" required />
-                </div>
-                <div className="flex-[2] min-w-[260px]">
-                  <Field
-                    label="Description (optional)"
-                    name="description"
-                    placeholder="e.g. Performed on-site after signage delivery."
-                  />
-                </div>
-                <Button type="submit" variant="secondary">Add section</Button>
-              </form>
-            )}
-
-            {editable && (
-              <div className="px-5 py-4" style={{ borderTop: "1px solid var(--border-subtle)" }}>
-                {packages.length > 0 && (
-                  <form
-                    action={addPkg}
-                    className="mb-4 grid grid-cols-5 items-end gap-3 rounded-md px-3 py-3"
-                    style={{
-                      background: "var(--surface-1)",
-                      border: "1px dashed var(--border-subtle)",
-                    }}
+                <summary
+                  className="flex cursor-pointer items-center justify-between gap-2 px-5 py-2.5 text-xs font-medium"
+                  style={{ color: "var(--text-muted)" }}
+                >
+                  <span>+ New section</span>
+                  <span
+                    aria-hidden
+                    className="transition-transform group-open:rotate-180"
                   >
-                    <div className="col-span-4">
-                      <SelectField
-                        label="Add package (expands into multiple lines)"
-                        name="packageId"
-                        defaultValue=""
-                        options={[
-                          { value: "", label: "— pick a template —" },
-                          ...packages.map((p) => ({
-                            value: p.id,
-                            label: `${p.name} · ${p._count.components} component${p._count.components === 1 ? "" : "s"}`,
-                          })),
-                        ]}
-                      />
-                    </div>
-                    <Button type="submit" variant="secondary">
-                      Expand
-                    </Button>
-                  </form>
-                )}
-
-                <div className="text-sm font-medium">Add line item</div>
-
-                <form action={addItem} className="mt-3 grid grid-cols-4 items-end gap-3">
-                  <div className="col-span-3">
-                    <SelectField
-                      label="From catalog"
-                      name="productId"
-                      defaultValue=""
-                      options={[
-                        { value: "", label: "— pick a product —" },
-                        ...products.map((p) => ({
-                          value: p.id,
-                          label: `${p.name}${p.category ? ` — ${p.category}` : ""} — ${pricingMeta(p.pricingModel).label}`,
-                        })),
-                      ]}
+                    <Icon.ChevronDown size={14} />
+                  </span>
+                </summary>
+                <form
+                  action={addSection}
+                  className="flex flex-wrap items-end gap-2 px-5 pb-3"
+                >
+                  <div className="flex-1 min-w-[220px]">
+                    <Field label="Section title" name="title" placeholder="e.g. Installation" required />
+                  </div>
+                  <div className="flex-[2] min-w-[260px]">
+                    <Field
+                      label="Description (optional)"
+                      name="description"
+                      placeholder="e.g. Performed on-site after signage delivery."
                     />
                   </div>
-                  <Button type="submit" variant="secondary">Add</Button>
+                  <Button type="submit" variant="secondary">Add section</Button>
                 </form>
-
-                <form action={addItem} className="mt-3 grid grid-cols-6 items-end gap-3">
-                  <div className="col-span-2">
-                    <Field label="Or ad-hoc — name" name="name" placeholder="e.g. Rush surcharge" />
-                  </div>
-                  <div className="col-span-2">
-                    <SelectField
-                      label="Pricing model"
-                      name="pricingModel"
-                      defaultValue="FIXED"
-                      options={PRICING_MODELS.map((m) => ({ value: m.value, label: m.label }))}
-                    />
-                  </div>
-                  <Field label="Base price" name="basePrice" type="number" step="0.01" min="0" defaultValue="0" />
-                  <Button type="submit" variant="secondary">Add</Button>
-                </form>
-              </div>
+              </details>
             )}
           </Card>
         </div>
@@ -1893,6 +1909,30 @@ function Row({ label, value, muted, bold }: { label: string; value: string; mute
       <span style={{ color: muted ? "var(--text-muted)" : "var(--text-default)" }}>{label}</span>
       <span className={bold ? "text-lg font-semibold" : ""}>{value}</span>
     </div>
+  );
+}
+
+function IconActionButton({
+  label,
+  danger,
+  children,
+}: {
+  label: string;
+  danger?: boolean;
+  children: React.ReactNode;
+}) {
+  return (
+    <button
+      type="submit"
+      title={label}
+      aria-label={label}
+      className="inline-flex h-7 w-7 items-center justify-center rounded-md transition-colors hover:bg-[var(--surface-2)]"
+      style={{
+        color: danger ? "var(--danger-fg)" : "var(--text-muted)",
+      }}
+    >
+      {children}
+    </button>
   );
 }
 

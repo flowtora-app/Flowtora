@@ -472,6 +472,57 @@ export async function removeQuoteItem(slug: string, itemId: string) {
   revalidatePath(`/t/${slug}/quotes/${item.quoteId}`);
 }
 
+export async function duplicateQuoteItem(slug: string, itemId: string) {
+  const ctx = await requirePermission(slug, "quotes:manage");
+  const item = await db.quoteItem.findFirst({
+    where: { id: itemId, quote: { tenantId: ctx.tenant.id } },
+  });
+  if (!item) return;
+
+  const last = await db.quoteItem.findFirst({
+    where: { quoteId: item.quoteId },
+    orderBy: { sortOrder: "desc" },
+    select: { sortOrder: true },
+  });
+  const sortOrder = (last?.sortOrder ?? 0) + 1;
+
+  const created = await db.quoteItem.create({
+    data: {
+      quoteId:         item.quoteId,
+      productId:       item.productId,
+      name:            item.name,
+      description:     item.description,
+      pricingModel:    item.pricingModel,
+      basePrice:       item.basePrice,
+      unit:            item.unit,
+      taxable:         item.taxable,
+      quantity:        item.quantity,
+      width:           item.width,
+      height:          item.height,
+      length:          item.length,
+      hours:           item.hours,
+      manualPrice:     item.manualPrice,
+      selectedOptions: item.selectedOptions as Prisma.InputJsonValue,
+      quantityTiers:   item.quantityTiers as Prisma.InputJsonValue,
+      wasteFactorPct:  item.wasteFactorPct,
+      costSnapshot:    item.costSnapshot,
+      sectionId:       item.sectionId,
+      isOptional:      item.isOptional,
+      sortOrder,
+      subtotal:        0,
+    },
+  });
+
+  const subtotal = computeItemSubtotal(created);
+  await db.quoteItem.update({
+    where: { id: created.id },
+    data:  { subtotal: subtotal as never },
+  });
+
+  await recomputeQuoteTotals(item.quoteId);
+  revalidatePath(`/t/${slug}/quotes/${item.quoteId}`);
+}
+
 // ────────────────────────────────────────────────────────────
 // Status transitions
 // ────────────────────────────────────────────────────────────
