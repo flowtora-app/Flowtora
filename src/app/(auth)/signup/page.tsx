@@ -3,6 +3,7 @@ import type { Metadata } from "next";
 import { signupAction } from "@/app/actions/auth";
 import { SignupShopFields } from "@/components/auth/SignupShopFields";
 import { PasswordField } from "@/components/auth/PasswordField";
+import { getPublishedPlanBySlug } from "@/lib/plans";
 
 export const metadata: Metadata = {
   title: "Start your trial — Flowtora",
@@ -13,38 +14,22 @@ export const metadata: Metadata = {
 // Signup page — serves two flows from one form:
 //
 //   1. Trial flow (default). The user landed here from "Start free
-//      trial" anywhere on the site. No URL params. Copy sells the
-//      14-day trial; after account creation the auth action
-//      redirects to the onboarding wizard.
+//      trial" anywhere on the site. No URL params (or an unknown
+//      plan param). Copy sells the 14-day trial; after account
+//      creation the auth action redirects to the onboarding wizard.
 //
-//   2. Purchase flow. The user clicked a tier CTA on /pricing (or
-//      the home pricing preview), so the URL carries ?plan=PLAN
-//      &cycle=CYCLE. Copy switches to "Get Starter" / "Get Pro";
-//      the hidden `plan` and `cycle` form inputs get submitted with
-//      the signup, and the action routes the new tenant through
-//      /t/{slug}/checkout-direct → Stripe.
+//   2. Purchase flow. The user clicked a tier CTA on /pricing, so
+//      the URL carries ?plan=<slug>&cycle=<cycle>. We resolve the
+//      slug against the live PricingPlan table; if it's a published,
+//      self-serve, priced plan we render the "Get <plan>" variant
+//      and stamp hidden `plan` + `cycle` inputs that the signup
+//      action uses to route the new tenant through checkout-direct
+//      → Stripe. Any unrecognized or non-purchasable slug falls
+//      through to the trial flow so marketing never lands a user
+//      on a dead CTA.
 //
 // Either way the form fields and validation are identical — the
 // branching is pure presentation + post-signup redirect.
-
-const PLAN_META: Record<string, { label: string; blurb: string }> = {
-  starter: {
-    label: "Starter",
-    blurb:
-      "3 seats, unlimited customers, and the full quote-to-invoice loop. You'll continue to secure checkout after creating your account.",
-  },
-  pro: {
-    label: "Pro",
-    blurb:
-      "15 seats, production boards, install routing, and margin analytics. You'll continue to secure checkout after creating your account.",
-  },
-};
-
-function parsePlan(raw?: string): keyof typeof PLAN_META | null {
-  if (!raw) return null;
-  const k = raw.toLowerCase();
-  return k in PLAN_META ? (k as keyof typeof PLAN_META) : null;
-}
 
 function parseCycle(raw?: string): "monthly" | "annual" {
   return raw === "annual" ? "annual" : "monthly";
@@ -56,10 +41,27 @@ export default async function SignupPage({
   searchParams: Promise<{ error?: string; plan?: string; cycle?: string }>;
 }) {
   const sp = await searchParams;
-  const plan = parsePlan(sp.plan);
+  const rawSlug = (sp.plan ?? "").trim().toLowerCase();
   const cycle = parseCycle(sp.cycle);
-  const isPurchase = plan !== null;
-  const planMeta = plan ? PLAN_META[plan] : null;
+
+  // Resolve the plan against the published catalog. Only plans that
+  // are self-serve purchasable (not contact-sales, have a price,
+  // showOnSignup) qualify for the purchase flow — everything else
+  // falls back to the trial variant.
+  const planRow = rawSlug ? await getPublishedPlanBySlug(rawSlug) : null;
+  const isPurchase =
+    planRow !== null &&
+    planRow.showOnSignup &&
+    !planRow.isContactSales &&
+    (planRow.priceMonthly != null || planRow.priceAnnual != null);
+
+  const plan = isPurchase ? planRow!.slug : null;
+  const planLabel = isPurchase ? planRow!.name : null;
+  const planBlurb = isPurchase
+    ? planRow!.subtitle ??
+      planRow!.description ??
+      `You'll continue to secure checkout after creating your ${planRow!.name} account.`
+    : null;
 
   return (
     <div className="space-y-8">
@@ -73,7 +75,7 @@ export default async function SignupPage({
           }}
         >
           {isPurchase
-            ? `${planMeta?.label} · ${cycle === "annual" ? "Annual billing" : "Monthly billing"}`
+            ? `${planLabel} · ${cycle === "annual" ? "Annual billing" : "Monthly billing"}`
             : "14-day free trial · No credit card"}
         </span>
         <h1
@@ -81,7 +83,7 @@ export default async function SignupPage({
           style={{ color: "var(--text-default)" }}
         >
           {isPurchase
-            ? `Start your ${planMeta?.label} subscription`
+            ? `Start your ${planLabel} subscription`
             : "Spin up your shop"}
         </h1>
         <p
@@ -89,7 +91,7 @@ export default async function SignupPage({
           style={{ color: "var(--text-muted)" }}
         >
           {isPurchase
-            ? planMeta?.blurb
+            ? planBlurb
             : "Import your customers, seed your price book, and send your first quote today."}
         </p>
       </div>

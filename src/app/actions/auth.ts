@@ -15,6 +15,7 @@ import {
   recordSecurityEvent,
 } from "@/lib/security";
 import { sendNotification } from "@/lib/notifications";
+import { getPublishedPlanBySlug } from "@/lib/plans";
 import { LOGIN_ERRORS } from "@/auth";
 
 const PENDING_2FA_COOKIE = "ts_2fa_pending";
@@ -35,8 +36,10 @@ const signupSchema = z.object({
   slug: z.string().min(2).max(40),
   // Optional purchase-intent fields. When present, the new tenant is
   // routed through /t/{slug}/checkout-direct after sign-in so Stripe
-  // checkout opens immediately instead of the trial onboarding.
-  plan: z.enum(["starter", "growth", "pro"]).optional(),
+  // checkout opens immediately instead of the trial onboarding. The
+  // slug is validated against the published plan catalog below — any
+  // unknown / non-purchasable slug falls back to the trial flow.
+  plan: z.string().min(1).max(64).optional(),
   cycle: z.enum(["monthly", "annual"]).optional(),
 });
 
@@ -131,8 +134,22 @@ export async function signupAction(formData: FormData) {
   // where the chained redirect after `signIn` lands on a blank view
   // until the user manually refreshes.
   const resolvedCycle = cycle ?? "annual";
-  const redirectTo = plan
-    ? `/t/${tenant.slug}/checkout-direct?plan=${plan.toUpperCase()}&cycle=${resolvedCycle}`
+
+  // Validate the purchase-intent slug against the live plan catalog.
+  // Any unknown / unpublished / contact-sales / unpriced slug falls
+  // back to onboarding so marketing CTAs can never strand a user on a
+  // broken checkout. `planRow.slug` is authoritative — we echo it
+  // lowercased into the checkout-direct URL.
+  const normalizedPlan = plan?.trim().toLowerCase();
+  const planRow = normalizedPlan ? await getPublishedPlanBySlug(normalizedPlan) : null;
+  const isPurchasable =
+    planRow !== null &&
+    planRow.showOnSignup &&
+    !planRow.isContactSales &&
+    (planRow.priceMonthly != null || planRow.priceAnnual != null);
+
+  const redirectTo = isPurchasable
+    ? `/t/${tenant.slug}/checkout-direct?plan=${planRow!.slug}&cycle=${resolvedCycle}`
     : `/t/${tenant.slug}/onboarding`;
 
   await signIn("credentials", {
