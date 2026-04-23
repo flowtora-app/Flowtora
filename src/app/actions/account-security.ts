@@ -30,12 +30,7 @@ import {
   bumpSessionVersion,
   recordSecurityEvent,
 } from "@/lib/security";
-import {
-  sendEmail,
-  passwordResetEmail,
-  emailVerificationEmail,
-  securityAlertEmail,
-} from "@/lib/email";
+import { sendNotification } from "@/lib/notifications";
 import { passwordSchema } from "@/lib/password";
 import { revalidatePath } from "next/cache";
 
@@ -89,9 +84,15 @@ export async function requestPasswordReset(formData: FormData) {
       },
     });
     const resetUrl = appUrl(`/reset/${raw}`);
-    await sendEmail({
+    await sendNotification({
+      kind: "auth.password_reset",
       to: user.email,
-      ...passwordResetEmail({ resetUrl, expiresInMinutes: PASSWORD_RESET_TTL_MIN }),
+      userId: user.id,
+      tokens: {
+        user_name: user.name ?? "",
+        reset_url: resetUrl,
+        expires_minutes: PASSWORD_RESET_TTL_MIN,
+      },
     });
     await recordSecurityEvent({
       userId: user.id,
@@ -157,14 +158,16 @@ export async function confirmPasswordReset(formData: FormData) {
     userAgent: meta.userAgent,
   });
   if (row.user) {
-    await sendEmail({
+    await sendNotification({
+      kind: "auth.security_alert",
       to: row.user.email,
-      ...securityAlertEmail({
-        eventLabel: "Your password was reset",
-        ip: meta.ip,
-        userAgent: meta.userAgent,
-        when: new Date(),
-      }),
+      userId: row.user.id,
+      tokens: {
+        event_label: "Your password was reset",
+        when: new Date().toISOString(),
+        ip: meta.ip ?? "",
+        user_agent: meta.userAgent ?? "",
+      },
     });
   }
   redirect(`/login?reset=1`);
@@ -194,9 +197,14 @@ export async function sendInitialVerification() {
     },
   });
   const verifyUrl = appUrl(`/verify/${raw}`);
-  await sendEmail({
+  await sendNotification({
+    kind: "auth.email_verification",
     to: user.email,
-    ...emailVerificationEmail({ verifyUrl, isChange: false, userName: user.name }),
+    userId: user.id,
+    tokens: {
+      user_name: user.name ?? "",
+      verification_url: verifyUrl,
+    },
   });
 }
 
@@ -296,12 +304,16 @@ export async function changePassword(backTo: string, formData: FormData) {
 
   const meta = await requestMeta();
   await recordSecurityEvent({ userId: user.id, kind: "PASSWORD_CHANGED", ipAddress: meta.ip, userAgent: meta.userAgent });
-  await sendEmail({
+  await sendNotification({
+    kind: "auth.security_alert",
     to: user.email,
-    ...securityAlertEmail({
-      eventLabel: "Your password was changed",
-      ip: meta.ip, userAgent: meta.userAgent, when: new Date(),
-    }),
+    userId: user.id,
+    tokens: {
+      event_label: "Your password was changed",
+      when: new Date().toISOString(),
+      ip: meta.ip ?? "",
+      user_agent: meta.userAgent ?? "",
+    },
   });
   // Kill the session — user must log back in with the new password.
   await signOut({ redirectTo: "/login?password_changed=1" });
@@ -345,18 +357,27 @@ export async function requestEmailChange(backTo: string, formData: FormData) {
     },
   });
   const verifyUrl = appUrl(`/verify/${raw}`);
-  await sendEmail({
+  await sendNotification({
+    kind: "auth.email_change_confirmation",
     to: newEmail,
-    ...emailVerificationEmail({ verifyUrl, isChange: true, userName: user.name }),
+    userId: user.id,
+    tokens: {
+      user_name: user.name ?? "",
+      verification_url: verifyUrl,
+    },
   });
   // Notify the OLD address too, so a takeover attempt is loud.
   const meta = await requestMeta();
-  await sendEmail({
+  await sendNotification({
+    kind: "auth.security_alert",
     to: user.email,
-    ...securityAlertEmail({
-      eventLabel: `Email change requested to ${newEmail}`,
-      ip: meta.ip, userAgent: meta.userAgent, when: new Date(),
-    }),
+    userId: user.id,
+    tokens: {
+      event_label: `Email change requested to ${newEmail}`,
+      when: new Date().toISOString(),
+      ip: meta.ip ?? "",
+      user_agent: meta.userAgent ?? "",
+    },
   });
   await recordSecurityEvent({
     userId: user.id,
@@ -424,9 +445,16 @@ export async function verify2faSetup(backTo: string, formData: FormData) {
 
   const meta = await requestMeta();
   await recordSecurityEvent({ userId: user.id, kind: "TWO_FACTOR_ENABLED", ipAddress: meta.ip, userAgent: meta.userAgent });
-  await sendEmail({
+  await sendNotification({
+    kind: "auth.security_alert",
     to: user.email,
-    ...securityAlertEmail({ eventLabel: "Two-factor authentication was enabled", ip: meta.ip, userAgent: meta.userAgent, when: new Date() }),
+    userId: user.id,
+    tokens: {
+      event_label: "Two-factor authentication was enabled",
+      when: new Date().toISOString(),
+      ip: meta.ip ?? "",
+      user_agent: meta.userAgent ?? "",
+    },
   });
   redirect(`${backTo}?codes=${encodeURIComponent(plain.join(","))}`);
 }
@@ -451,9 +479,16 @@ export async function disable2fa(backTo: string, formData: FormData) {
   ]);
   const meta = await requestMeta();
   await recordSecurityEvent({ userId: user.id, kind: "TWO_FACTOR_DISABLED", ipAddress: meta.ip, userAgent: meta.userAgent });
-  await sendEmail({
+  await sendNotification({
+    kind: "auth.security_alert",
     to: user.email,
-    ...securityAlertEmail({ eventLabel: "Two-factor authentication was disabled", ip: meta.ip, userAgent: meta.userAgent, when: new Date() }),
+    userId: user.id,
+    tokens: {
+      event_label: "Two-factor authentication was disabled",
+      when: new Date().toISOString(),
+      ip: meta.ip ?? "",
+      user_agent: meta.userAgent ?? "",
+    },
   });
   redirect(`${backTo}?ok=${encodeURIComponent("2FA disabled.")}`);
 }
@@ -477,9 +512,16 @@ export async function revokeAllSessions(backTo: string) {
   await bumpSessionVersion(user.id);
   const meta = await requestMeta();
   await recordSecurityEvent({ userId: user.id, kind: "SESSIONS_REVOKED", ipAddress: meta.ip, userAgent: meta.userAgent });
-  await sendEmail({
+  await sendNotification({
+    kind: "auth.security_alert",
     to: user.email,
-    ...securityAlertEmail({ eventLabel: "All sessions were signed out", ip: meta.ip, userAgent: meta.userAgent, when: new Date() }),
+    userId: user.id,
+    tokens: {
+      event_label: "All sessions were signed out",
+      when: new Date().toISOString(),
+      ip: meta.ip ?? "",
+      user_agent: meta.userAgent ?? "",
+    },
   });
   revalidatePath(backTo);
   // Our own session is also dead now — log out cleanly.

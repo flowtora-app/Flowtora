@@ -14,7 +14,7 @@ import {
   hashToken,
   recordSecurityEvent,
 } from "@/lib/security";
-import { sendEmail, emailVerificationEmail } from "@/lib/email";
+import { sendNotification } from "@/lib/notifications";
 import { LOGIN_ERRORS } from "@/auth";
 
 const PENDING_2FA_COOKIE = "ts_2fa_pending";
@@ -101,13 +101,20 @@ export async function signupAction(formData: FormData) {
       },
     });
     const base = process.env.APP_URL ?? "http://localhost:3000";
-    await sendEmail({
+    // Platform-managed template — content is editable at
+    // /platform/notifications under kind "auth.email_verification".
+    // Caller supplies tokens; the dispatcher renders through the
+    // branded layout and falls back to the compile-time default if
+    // no DB row exists yet.
+    await sendNotification({
+      kind: "auth.email_verification",
       to: user.email,
-      ...emailVerificationEmail({
-        verifyUrl: `${base}/verify/${raw}`,
-        isChange: false,
-        userName: user.name,
-      }),
+      userId: user.id,
+      tenantId: tenant.id,
+      tokens: {
+        user_name: user.name ?? "",
+        verification_url: `${base}/verify/${raw}`,
+      },
     });
   } catch {
     // Swallow — verification can always be re-issued from the workspace banner.

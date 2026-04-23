@@ -114,21 +114,54 @@ export function passwordResetEmail(opts: { resetUrl: string; expiresInMinutes: n
 //
 // New email templates should use this instead of hand-rolling HTML.
 
-type BrandedContentSection =
+export type BrandedContentSection =
   | { kind: "text"; html: string }
   | { kind: "button"; label: string; href: string }
   | { kind: "fallbackLink"; label: string; href: string }
   | { kind: "note"; html: string }
   | { kind: "divider" };
 
-function brandedEmailLayout(opts: {
+// Minimal brand shape consumed by the layout. Mirrors the fields on
+// NotificationBrand but stays a plain interface so callers can pass a
+// compile-time default without hitting the DB (see notifications/brand.ts).
+export interface EmailBrand {
+  productName: string;
+  tagline: string;
+  accentColor: string; // hex
+  buttonRadiusPx: number; // 0–16
+  supportEmail: string | null;
+  footerHtml: string | null;
+}
+
+// Default brand for callers that use the legacy verification template
+// path without threading the brand through. Matches the values in
+// notifications/brand.ts DEFAULT_BRAND so rendered output is
+// byte-identical whether the brand came from DB or code.
+const FALLBACK_BRAND: EmailBrand = {
+  productName: "Flowtora",
+  tagline: "A calm ops platform for sign & print shops.",
+  accentColor: "#4f8cff",
+  buttonRadiusPx: 10,
+  supportEmail: null,
+  footerHtml: null,
+};
+
+export function brandedEmailLayout(opts: {
   previewText: string;
   heading: string;
   subheading?: string;
   sections: BrandedContentSection[];
   footerNote?: string;
+  brand?: EmailBrand;
 }): string {
   const { previewText, heading, subheading, sections, footerNote } = opts;
+  const brand = opts.brand ?? FALLBACK_BRAND;
+  const accent = brand.accentColor;
+  const radius = Math.max(0, Math.min(16, brand.buttonRadiusPx));
+  // Button shadow derived from accent — hand-tuned rgba that matches
+  // the visual weight we shipped with the blue default.
+  const accentShadow = accentRgba(accent, 0.28);
+  const productInitial = (brand.productName.trim()[0] ?? "F").toUpperCase();
 
   const year = new Date().getFullYear();
 
@@ -152,13 +185,13 @@ function brandedEmailLayout(opts: {
           <tr>
             <td align="center" style="padding:8px 40px 28px 40px">
               <!--[if mso]>
-              <v:roundrect xmlns:v="urn:schemas-microsoft-com:vml" xmlns:w="urn:schemas-microsoft-com:office:word" href="${escapeAttr(s.href)}" style="height:52px;v-text-anchor:middle;width:320px;" arcsize="14%" stroke="f" fillcolor="#4f8cff">
+              <v:roundrect xmlns:v="urn:schemas-microsoft-com:vml" xmlns:w="urn:schemas-microsoft-com:office:word" href="${escapeAttr(s.href)}" style="height:52px;v-text-anchor:middle;width:320px;" arcsize="14%" stroke="f" fillcolor="${accent}">
                 <w:anchorlock/>
                 <center style="color:#ffffff;font-family:Arial,sans-serif;font-size:16px;font-weight:600;letter-spacing:0.2px;">${escape(s.label)}</center>
               </v:roundrect>
               <![endif]-->
               <!--[if !mso]> <!-->
-              <a href="${escapeAttr(s.href)}" target="_blank" class="ft-button" style="display:inline-block;background:#4f8cff;color:#ffffff !important;text-decoration:none;font-family:-apple-system,BlinkMacSystemFont,'Segoe UI',Roboto,'Helvetica Neue',Arial,sans-serif;font-size:16px;font-weight:600;letter-spacing:0.2px;line-height:1;padding:18px 40px;border-radius:10px;box-shadow:0 4px 14px rgba(79,140,255,0.28);mso-hide:all">${escape(s.label)}</a>
+              <a href="${escapeAttr(s.href)}" target="_blank" class="ft-button" style="display:inline-block;background:${accent};color:#ffffff !important;text-decoration:none;font-family:-apple-system,BlinkMacSystemFont,'Segoe UI',Roboto,'Helvetica Neue',Arial,sans-serif;font-size:16px;font-weight:600;letter-spacing:0.2px;line-height:1;padding:18px 40px;border-radius:${radius}px;box-shadow:0 4px 14px ${accentShadow};mso-hide:all">${escape(s.label)}</a>
               <!-- <![endif]-->
             </td>
           </tr>`;
@@ -169,7 +202,7 @@ function brandedEmailLayout(opts: {
             <td style="padding:0 40px 24px 40px;font-family:-apple-system,BlinkMacSystemFont,'Segoe UI',Roboto,'Helvetica Neue',Arial,sans-serif;font-size:13px;line-height:1.6;color:#6b7280" class="ft-text-muted">
               <p style="margin:0 0 8px 0">${escape(s.label)}</p>
               <p style="margin:0;word-break:break-all">
-                <a href="${escapeAttr(s.href)}" target="_blank" style="color:#4f8cff;text-decoration:underline" class="ft-link">${escape(s.href)}</a>
+                <a href="${escapeAttr(s.href)}" target="_blank" style="color:${accent};text-decoration:underline" class="ft-link">${escape(s.href)}</a>
               </p>
             </td>
           </tr>`;
@@ -178,7 +211,7 @@ function brandedEmailLayout(opts: {
         return `
           <tr>
             <td style="padding:0 40px 24px 40px">
-              <div style="background:#f3f4f6;border-left:3px solid #4f8cff;border-radius:8px;padding:14px 16px;font-family:-apple-system,BlinkMacSystemFont,'Segoe UI',Roboto,'Helvetica Neue',Arial,sans-serif;font-size:13px;line-height:1.6;color:#4b5563" class="ft-note">
+              <div style="background:#f3f4f6;border-left:3px solid ${accent};border-radius:8px;padding:14px 16px;font-family:-apple-system,BlinkMacSystemFont,'Segoe UI',Roboto,'Helvetica Neue',Arial,sans-serif;font-size:13px;line-height:1.6;color:#4b5563" class="ft-note">
                 ${s.html}
               </div>
             </td>
@@ -280,10 +313,10 @@ function brandedEmailLayout(opts: {
                     <table role="presentation" cellpadding="0" cellspacing="0" border="0">
                       <tr>
                         <td valign="middle" style="padding-right:10px">
-                          <div style="width:32px;height:32px;background:#4f8cff;border-radius:8px;color:#ffffff;font-family:-apple-system,BlinkMacSystemFont,'Segoe UI',Roboto,Arial,sans-serif;font-weight:700;font-size:15px;text-align:center;line-height:32px">F</div>
+                          <div style="width:32px;height:32px;background:${accent};border-radius:8px;color:#ffffff;font-family:-apple-system,BlinkMacSystemFont,'Segoe UI',Roboto,Arial,sans-serif;font-weight:700;font-size:15px;text-align:center;line-height:32px">${escape(productInitial)}</div>
                         </td>
                         <td valign="middle">
-                          <span class="ft-wordmark" style="font-family:-apple-system,BlinkMacSystemFont,'Segoe UI',Roboto,'Helvetica Neue',Arial,sans-serif;font-size:17px;font-weight:600;color:#111827;letter-spacing:-0.2px">Flowtora</span>
+                          <span class="ft-wordmark" style="font-family:-apple-system,BlinkMacSystemFont,'Segoe UI',Roboto,'Helvetica Neue',Arial,sans-serif;font-size:17px;font-weight:600;color:#111827;letter-spacing:-0.2px">${escape(brand.productName)}</span>
                         </td>
                       </tr>
                     </table>
@@ -318,11 +351,16 @@ function brandedEmailLayout(opts: {
                   ? `<p style="margin:0 0 10px 0">${footerNote}</p>`
                   : ""
               }
+              ${brand.footerHtml ? `<p style="margin:0 0 10px 0">${brand.footerHtml}</p>` : ""}
               <p style="margin:0">
-                Flowtora — a calm ops platform for sign &amp; print shops.<br />
-                You're receiving this because an action on your Flowtora account was requested.
+                ${escape(brand.productName)} — ${escape(brand.tagline)}<br />
+                You&apos;re receiving this because an action on your ${escape(brand.productName)} account was requested.${
+                  brand.supportEmail
+                    ? ` Questions? <a href="mailto:${escapeAttr(brand.supportEmail)}" style="color:${accent};text-decoration:none">${escape(brand.supportEmail)}</a>`
+                    : ""
+                }
               </p>
-              <p style="margin:12px 0 0 0;color:#a0a8b8">&copy; ${year} Flowtora. All rights reserved.</p>
+              <p style="margin:12px 0 0 0;color:#a0a8b8">&copy; ${year} ${escape(brand.productName)}. All rights reserved.</p>
             </td>
           </tr>
         </table>
@@ -336,15 +374,17 @@ function brandedEmailLayout(opts: {
 // Plain-text preamble + closer that mirror the HTML shell so the text
 // alternative feels branded too (some recipients — or spam filters —
 // read text/plain first).
-function brandedTextLayout(opts: {
+export function brandedTextLayout(opts: {
   heading: string;
   body: string;
   ctaLabel?: string;
   ctaUrl?: string;
   footerNote?: string;
+  brand?: EmailBrand;
 }): string {
+  const brand = opts.brand ?? FALLBACK_BRAND;
   const lines: string[] = [];
-  lines.push("Flowtora");
+  lines.push(brand.productName);
   lines.push("=".repeat(40));
   lines.push("");
   lines.push(opts.heading);
@@ -361,8 +401,27 @@ function brandedTextLayout(opts: {
   }
   lines.push("");
   lines.push("—");
-  lines.push("Flowtora · A calm ops platform for sign & print shops");
+  lines.push(`${brand.productName} · ${brand.tagline}`);
   return lines.join("\n");
+}
+
+// Convert "#rrggbb" or "#rgb" + alpha into an rgba() string for shadow
+// layers. Falls back to a neutral blue shadow if parsing fails so we
+// never emit invalid CSS.
+function accentRgba(hex: string, alpha: number): string {
+  const m3 = hex.match(/^#([0-9a-fA-F])([0-9a-fA-F])([0-9a-fA-F])$/);
+  const m6 = hex.match(/^#([0-9a-fA-F]{2})([0-9a-fA-F]{2})([0-9a-fA-F]{2})$/);
+  let r = 79, g = 140, b = 255; // default to #4f8cff
+  if (m6) {
+    r = parseInt(m6[1], 16);
+    g = parseInt(m6[2], 16);
+    b = parseInt(m6[3], 16);
+  } else if (m3) {
+    r = parseInt(m3[1] + m3[1], 16);
+    g = parseInt(m3[2] + m3[2], 16);
+    b = parseInt(m3[3] + m3[3], 16);
+  }
+  return `rgba(${r},${g},${b},${alpha})`;
 }
 
 // Used by brandedEmailLayout for any caller-supplied HTML attribute

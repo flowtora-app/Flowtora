@@ -1,10 +1,14 @@
 import { NextResponse } from "next/server";
 import { db } from "@/lib/db";
 import { loadAttention, type AttentionGroups, type AttentionItem, type AttentionKind } from "@/lib/attention";
-import { notifyOnce, notificationLabel, type NotificationType } from "@/lib/notifications";
+import {
+  notifyOnce,
+  notificationLabel,
+  sendNotification,
+  type NotificationType,
+} from "@/lib/notifications";
 import { logAudit } from "@/lib/audit";
 import { resolveEffectivePref, resolvePrefs } from "@/lib/notif-prefs";
-import { sendEmail, reminderEmail } from "@/lib/email";
 import { appOrigin } from "@/lib/share";
 
 // Phase 13 — reminder cron.
@@ -157,27 +161,26 @@ async function runReminders() {
       const pref = resolveEffectivePref(member.prefs, tenantDefaults, type);
       if (!pref.email) continue;
 
-      const tpl = reminderEmail({
-        title:      item.title,
-        detail:     item.detail,
-        kindLabel:  notificationLabel(type),
-        url:        `${origin}${link}`,
-        tenantName: tenant.name,
+      // Dispatch through the templated notification pipeline so admins can
+      // retune the copy from /platform/notifications without a deploy. The
+      // dispatcher swallows provider errors into a DispatchResult — we count
+      // sent vs failed for the cron summary rather than letting the cron
+      // abort on a single bad address.
+      const res = await sendNotification({
+        kind: "activity.reminder_digest",
+        to: member.email,
+        tenantId: tenant.id,
+        userId: item.ownerUserId,
+        tokens: {
+          reminder_title:  item.title,
+          reminder_detail: item.detail,
+          reminder_kind:   notificationLabel(type),
+          reminder_url:    `${origin}${link}`,
+          workspace_name:  tenant.name,
+        },
       });
-      try {
-        await sendEmail({
-          to:       member.email,
-          subject:  tpl.subject,
-          html:     tpl.html,
-          text:     tpl.text,
-          fromName: tenant.name,
-        });
-        emailsSent += 1;
-      } catch {
-        // Email delivery errors shouldn't abort the cron — the in-app
-        // notification already fired, which is the source of truth.
-        emailsFailed += 1;
-      }
+      if (res.sent) emailsSent += 1;
+      else          emailsFailed += 1;
     }
 
     // Audit trail per tenant so owners can see the cron did run. Tiny writes

@@ -3940,3 +3940,179 @@ model PlanPriceOverride {
   @@index([tenantId])
   @@index([planId])
 }
+
+// ─────────────────────────────────────────────────────────────────
+// Notifications (M6) — DB-driven transactional-notification catalog
+// ─────────────────────────────────────────────────────────────────
+//
+// The platform has historically hardcoded every email template inside
+// `src/lib/email.ts`. This is the catalog that lets a platform admin
+// edit subject lines, headlines, body copy, and CTA labels from
+// /platform/notifications without a code change.
+//
+// Design rules (see the M6 proposal):
+//   • One row per (kind, channel, locale). Identity is by `kind` slug.
+//   • Content is structured fields, NOT raw HTML. Admin-editable body
+//     uses markdown-lite; the surrounding branded layout is code-owned
+//     (`brandedEmailLayout()` in src/lib/email.ts) for cross-client
+//     safety.
+//   • Every kind has a compile-time default in
+//     `src/lib/notifications/defaults.ts`. If the DB row is missing or
+//     disabled, we fall back to the default so the system can never go
+//     email-silent due to a misconfigured row.
+//   • `isCritical` kinds (auth, security, payment_failed) cannot be
+//     disabled from the admin UI — their `enabled` toggle is locked.
+//   • Publishing snapshots a NotificationTemplateVersion row. Same
+//     pattern as PlanVersion — supports diff, rollback, and audit.
+//   • `channel` + `locale` are columns from day 1 even though only
+//     EMAIL / "en" ship in M1; slots future in-app/SMS/push + i18n
+//     without a schema migration.
+
+enum NotificationChannel {
+  EMAIL
+  IN_APP
+  SMS
+  PUSH
+}
+
+enum NotificationStatus {
+  DRAFT // never published — renderer falls back to code default
+  PUBLISHED // live content served to senders
+  DISABLED // non-critical kill-switch; renderer returns early
+}
+
+// A platform-level template that shapes a single outbound notification
+// kind. The `kind` string is the programmatic identity used by code
+// (`sendNotification({ kind: "auth.email_verification", ... })`) — it
+// must match a registration in `src/lib/notifications/registry.ts`.
+model NotificationTemplate {
+  id String @id @default(cuid())
+
+  // Programmatic identity — e.g. "auth.email_verification",
+  // "billing.payment_failed". Dotted namespace keeps the catalog
+  // alphabetizable and makes category inference trivial.
+  kind    String
+  channel NotificationChannel @default(EMAIL)
+  locale  String              @default("en") // future i18n
+
+  status    NotificationStatus @default(DRAFT)
+  // Human category for the admin UI sidebar — "auth" | "billing" |
+  // "team" | "support" | "activity". Duplicates the `kind` namespace
+  // but explicit so we can reorder without parsing slugs.
+  category  String
+  sortOrder Int                @default(0)
+
+  // Editable content. Admins change these from /platform/notifications.
+  // `body` is markdown-lite (paragraphs + **bold** + [links](url) +
+  // `code` + *italic*) — rendered safely into the branded layout.
+  // `ctaUrlToken` is usually a token reference like "{{verify_url}}";
+  // the dispatcher resolves tokens at send time.
+  subject     String
+  preheader   String?
+  headline    String
+  subheading  String?
+  body        String // markdown-lite
+  ctaLabel    String?
+  ctaUrlToken String?
+  footerNote  String?
+
+  // Draft-in-progress content. When non-null, the admin has unsaved
+  // changes relative to the main columns. "Publish" copies draftJson
+  // into the main columns + clears this + snapshots a version.
+  draftJson Json?
+
+  // Controls.
+  enabled    Boolean @default(true) // hard kill-switch; ignored for isCritical
+  // Critical kinds (auth, security, payment-failed) can still be
+  // copy-edited, but the enabled toggle is locked in the UI — you
+  // cannot accidentally disable "your password was changed".
+  isCritical Boolean @default(false)
+
+  // Frozen at registration time — the allowlist of tokens this kind
+  // may reference. Publishing validates every `{{token}}` in the
+  // subject/body against this schema. Shape is
+  //   { [token: string]: { type: "string" | "url" | "number", sample: string } }
+  tokenSchema Json
+
+  publishedAt   DateTime?
+  updatedById   String?
+  publishedById String?
+
+  createdAt DateTime @default(now())
+  updatedAt DateTime @updatedAt
+
+  versions NotificationTemplateVersion[]
+
+  // Identity is (kind, channel, locale) — one English email template
+  // per kind, one English in-app per kind, room for ("…", EMAIL, "fr").
+  @@unique([kind, channel, locale])
+  @@index([category, sortOrder])
+  @@index([status])
+}
+
+// Immutable snapshot of a template at publish time. Same relationship
+// as PlanVersion has to PricingPlan. Rollback = copy a version row's
+// content fields back onto the main template + snapshot as v{N+1}.
+model NotificationTemplateVersion {
+  id         String @id @default(cuid())
+  templateId String
+  version    Int
+
+  subject     String
+  preheader   String?
+  headline    String
+  subheading  String?
+  body        String
+  ctaLabel    String?
+  ctaUrlToken String?
+  footerNote  String?
+
+  publishedAt   DateTime @default(now())
+  publishedById String?
+  // Stored separately from the live table so older versions keep
+  // their original note even after the token schema evolves.
+  tokenSchema   Json
+  // Freeform change summary shown in the history timeline.
+  changeNote    String?
+
+  template NotificationTemplate @relation(fields: [templateId], references: [id], onDelete: Cascade)
+
+  @@unique([templateId, version])
+  @@index([templateId, publishedAt])
+}
+
+// Global branding applied to every transactional notification.
+// Singleton — enforced by `singleton Boolean @unique` at value `true`.
+// Fields feed `brandedEmailLayout()` (accent color, button radius,
+// product name, footer links, support email) so changes here propagate
+// to every email without per-template edits.
+model NotificationBrand {
+  id        String  @id @default(cuid())
+  // Sentinel column to enforce a single row — all code reads the
+  // row where `singleton = true`, and @unique blocks accidental
+  // inserts of a second row.
+  singleton Boolean @unique @default(true)
+
+  productName String  @default("Flowtora")
+  tagline     String  @default("A calm ops platform for sign & print shops.")
+  logoUrl     String?
+
+  // Rendered into button backgrounds + note border-accent. Hex color.
+  accentColor    String @default("#4f8cff")
+  // 0–16 px. Controls the CTA button corner radius.
+  buttonRadiusPx Int    @default(10)
+
+  // Support-footer links. `supportEmail` doubles as the reply-to for
+  // transactional email when NotificationBrand.replyTo is null.
+  supportEmail String?
+  footerHtml   String?
+
+  // Envelope overrides. Envelope domain stays on RESEND_FROM_EMAIL
+  // for DKIM/SPF reasons; these only rewrite the display name +
+  // reply-to header.
+  fromName String?
+  replyTo  String?
+
+  updatedAt   DateTime @updatedAt
+  updatedById String?
+}

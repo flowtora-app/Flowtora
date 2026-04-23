@@ -18,8 +18,7 @@ import { z } from "zod";
 import { db } from "@/lib/db";
 import { requireTenant } from "@/lib/tenant";
 import { logAudit } from "@/lib/audit";
-import { notifyMany } from "@/lib/notifications";
-import { sendEmail, supportStaffReplyEmail } from "@/lib/email";
+import { notifyMany, sendNotification } from "@/lib/notifications";
 import { getPref, resolvePrefs, resolveEffectivePref } from "@/lib/notif-prefs";
 import { appOrigin } from "@/lib/share";
 import { computeDueBy } from "@/lib/support-sla";
@@ -342,29 +341,28 @@ export async function platformReplyToSupportTicket(params: {
     });
     const tenantDefaults = resolvePrefs(ticketTenant?.defaultNotifPrefs);
     const ticketUrl = `${appOrigin()}/t/${ticket.tenant.slug}/support/${ticket.id}`;
-    const template = supportStaffReplyEmail({
-      subject:    ticket.subject,
-      ticketUrl,
-      preview:    parsed.data.body,
-      staffName:  authorEmail,
-      tenantName: ticket.tenant.name,
-    });
     await Promise.all(
       members.map(async (m) => {
         const pref = resolveEffectivePref(resolvePrefs(m.notifPrefs), tenantDefaults, "support.staff_replied");
         if (!pref.email) return;
         if (!m.user?.email) return;
-        try {
-          await sendEmail({
-            to:      m.user.email,
-            subject: template.subject,
-            html:    template.html,
-            text:    template.text,
-          });
-        } catch {
-          // Swallow — in-app notification already landed; one bad address
-          // shouldn't block the action. Delivery errors are visible in logs.
-        }
+        // sendNotification() already swallows provider errors into a
+        // DispatchResult — one bad address shouldn't block the action. The
+        // in-app notify has already landed above, so delivery-level failures
+        // here are just missed emails, not lost context.
+        await sendNotification({
+          kind: "support.staff_reply",
+          to: m.user.email,
+          tenantId: ticket.tenantId,
+          userId: m.userId,
+          tokens: {
+            ticket_subject: ticket.subject,
+            staff_name:     authorEmail,
+            reply_preview:  parsed.data.body,
+            workspace_name: ticket.tenant.name,
+            ticket_url:     ticketUrl,
+          },
+        });
       }),
     );
   }

@@ -6,7 +6,7 @@ import { z } from "zod";
 import { db } from "@/lib/db";
 import { requirePermission } from "@/lib/tenant";
 import { generateToken } from "@/lib/token";
-import { sendEmail, inviteEmail } from "@/lib/email";
+import { sendNotification } from "@/lib/notifications";
 import { logAudit } from "@/lib/audit";
 import { auth } from "@/auth";
 import { planLimit } from "@/lib/entitlements";
@@ -76,7 +76,17 @@ export async function inviteMember(slug: string, formData: FormData) {
   const session = await auth();
   const inviterName = session?.user?.name ?? session?.user?.email ?? "A teammate";
   const acceptUrl = `${process.env.APP_URL ?? "http://localhost:3000"}/accept-invite/${token}`;
-  await sendEmail({ to: email, ...inviteEmail({ shopName: ctx.tenant.name, inviterName, acceptUrl }) });
+  await sendNotification({
+    kind: "team.invite_received",
+    to: email,
+    tenantId: ctx.tenant.id,
+    userId: ctx.userId,
+    tokens: {
+      inviter_name: inviterName,
+      workspace_name: ctx.tenant.name,
+      accept_url: acceptUrl,
+    },
+  });
   await logAudit({ tenantId: ctx.tenant.id, userId: ctx.userId, action: "team.invited", entityType: "Invite", metadata: { email, role } });
 
   revalidatePath(`/t/${slug}/settings/team`);
@@ -105,7 +115,17 @@ export async function resendInvite(slug: string, inviteId: string) {
   const session = await auth();
   const inviterName = session?.user?.name ?? session?.user?.email ?? "A teammate";
   const acceptUrl = `${process.env.APP_URL ?? "http://localhost:3000"}/accept-invite/${invite.token}`;
-  await sendEmail({ to: invite.email, ...inviteEmail({ shopName: ctx.tenant.name, inviterName, acceptUrl }) });
+  await sendNotification({
+    kind: "team.invite_received",
+    to: invite.email,
+    tenantId: ctx.tenant.id,
+    userId: ctx.userId,
+    tokens: {
+      inviter_name: inviterName,
+      workspace_name: ctx.tenant.name,
+      accept_url: acceptUrl,
+    },
+  });
 }
 
 const changeRoleSchema = z.object({

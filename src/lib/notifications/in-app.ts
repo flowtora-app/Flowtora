@@ -1,3 +1,16 @@
+// In-app notification helpers — the bell/inbox system.
+//
+// Separate from the transactional-email dispatcher in this same directory:
+// in-app notifications are tenant-scoped DB rows shown in the header bell,
+// whereas the dispatcher handles out-of-band delivery (email today,
+// IN_APP/SMS/PUSH later). The two are conceptually distinct enough that
+// they're kept in their own files but re-exported from one index so
+// callers can import from "@/lib/notifications" regardless of which side
+// they want.
+//
+// This file was previously `src/lib/notifications.ts`. Merged here when
+// the transactional-email module graduated to its own directory (M1 of
+// the notifications admin-management rollout).
 import { db } from "@/lib/db";
 
 // Notification types. Kept as a flat string union — easy to add new kinds
