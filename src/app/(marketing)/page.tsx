@@ -5,7 +5,7 @@ import { Section } from "@/components/marketing/Section";
 import { LogoCloud } from "@/components/marketing/LogoCloud";
 import { Testimonial } from "@/components/marketing/Testimonial";
 import { CTA } from "@/components/marketing/CTA";
-import { PricingTable } from "@/components/marketing/PricingTable";
+import { PricingToggle } from "@/components/marketing/PricingToggle";
 import { FAQ } from "@/components/marketing/FAQ";
 import { ProductMock } from "@/components/marketing/ProductMock";
 import { ScreenshotFrame } from "@/components/marketing/ScreenshotFrame";
@@ -458,7 +458,7 @@ export default async function LandingPage() {
         description="Start on the free trial. No credit card required. Upgrade when you're ready."
         align="center"
       >
-        <PricingTable tiers={landingTiers} />
+        <PricingToggle tiers={landingTiers} />
         <div className="mt-10 text-center">
           <Link
             href="/pricing"
