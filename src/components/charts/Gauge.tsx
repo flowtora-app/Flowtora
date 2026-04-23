@@ -1,24 +1,12 @@
 "use client";
 
 import { PieChart, Pie, Cell, ResponsiveContainer } from "recharts";
+import { bandFor } from "@/components/charts/gauge-bands";
 
 // Simple 0-100 radial gauge built on Recharts PieChart as a half-donut.
 // Chose PieChart over RadialBarChart because Recharts' RadialBarChart
 // doesn't render a clean "empty track" layer for partial scores — a
 // two-slice Pie gives us exact control.
-
-type Band = { min: number; color: string; label: string };
-
-const BANDS: Band[] = [
-  { min: 85, color: "var(--success)", label: "Excellent" },
-  { min: 70, color: "var(--info)",    label: "Healthy"   },
-  { min: 50, color: "var(--warning)", label: "Watch"     },
-  { min: 0,  color: "var(--danger)",  label: "At risk"   },
-];
-
-export function bandFor(score: number): Band {
-  return BANDS.find((b) => score >= b.min) ?? BANDS[BANDS.length - 1];
-}
 
 type Props = {
   value: number; // 0..100

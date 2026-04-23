@@ -1,4 +1,5 @@
-import { Gauge, bandFor } from "@/components/charts/Gauge";
+import { Gauge } from "@/components/charts/Gauge";
+import { bandFor } from "@/components/charts/gauge-bands";
 
 type Factor = { label: string; value: number; weightPct: number };
 
