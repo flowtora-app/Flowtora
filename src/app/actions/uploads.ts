@@ -1,26 +1,25 @@
 "use server";
 
-import { put } from "@vercel/blob";
 import { requirePermission } from "@/lib/tenant";
 import { logAudit } from "@/lib/audit";
+import {
+  isStorageConfigured,
+  publicUrlFor,
+  putFile,
+  StorageError,
+} from "@/lib/storage";
 
-// Server-side uploader used by tenant-owned image inputs (logo, etc.).
-// The client component POSTs a multipart/form-data with a `file` field
-// via a server-action call; we validate + stream straight to Vercel
-// Blob and hand back the public URL. The caller is responsible for
-// persisting the URL onto whatever model it belongs to.
+// Server-side uploader for tenant-owned image assets (logo for now,
+// room to grow). Client component posts a multipart form-data with a
+// `file` field via a server-action call; we validate + stream to R2
+// and hand back a stable public URL. The caller persists that URL
+// wherever it belongs (usually tenant.logoUrl).
 //
-// Token resolution: `put()` picks up `BLOB_READ_WRITE_TOKEN` from the
-// environment automatically. Locally, set it in `.env.local`; on
-// Vercel it's injected by the Blob integration.
-//
-// Why a new blob per upload (instead of overwriting a stable path):
-// we don't want browser/email caches to hold a stale logo after the
-// tenant re-uploads. Each upload gets a fresh random-suffixed URL;
-// `addRandomSuffix: true` is the Blob default but we pass it
-// explicitly for clarity. Prior logos leak into Blob storage but the
-// volume is trivial (a few KB per tenant per change) and Vercel
-// doesn't charge per object.
+// Why public storage for the logo specifically: logos are embedded in
+// outbound email, invoice PDFs, and the public-facing customer portal.
+// Signed URLs would expire and break every cached email render. For
+// anything tenant-private (receipts, mockups, install photos) use the
+// private half of `src/lib/storage.ts` instead.
 
 const MAX_LOGO_BYTES = 2 * 1024 * 1024; // 2 MB
 const ALLOWED_LOGO_MIME = new Set([
@@ -58,38 +57,35 @@ export async function uploadTenantLogo(
     };
   }
 
-  // Fail fast with a clear message if Blob isn't configured — otherwise
-  // `put()` throws a vague SDK error that surfaces as a 500 in the UI.
-  if (!process.env.BLOB_READ_WRITE_TOKEN) {
+  // Fail fast with a clear message if R2 isn't configured — otherwise
+  // the SDK throws a vague error that surfaces as a 500 in the UI.
+  if (!isStorageConfigured()) {
     return {
       ok: false,
       error:
-        "Image hosting isn't configured on this deploy. Set BLOB_READ_WRITE_TOKEN and redeploy.",
+        "Image hosting isn't configured on this deploy. Set the R2_* env vars and redeploy.",
     };
   }
 
-  // Extension from the MIME, not the filename — avoids "logo.png.exe"
-  // smuggling and normalises whatever the OS picker produced.
-  const ext =
-    file.type === "image/svg+xml"
-      ? "svg"
-      : file.type.split("/")[1] ?? "bin";
-  const pathname = `tenants/${ctx.tenant.id}/logo.${ext}`;
-
   try {
-    const blob = await put(pathname, file, {
-      access: "public",
-      addRandomSuffix: true,
-      contentType: file.type,
+    const { key, size } = await putFile({
+      tenantId: ctx.tenant.id,
+      scope: "logos",
+      file,
+      visibility: "public",
     });
+    const url = publicUrlFor(key);
     await logAudit({
       tenantId: ctx.tenant.id,
       userId: ctx.userId,
       action: "tenant.logo.uploaded",
-      metadata: { url: blob.url, bytes: file.size, mime: file.type },
+      metadata: { url, key, bytes: size, mime: file.type },
     });
-    return { ok: true, url: blob.url };
+    return { ok: true, url };
   } catch (err) {
+    if (err instanceof StorageError) {
+      return { ok: false, error: err.message };
+    }
     console.error("[uploadTenantLogo] put failed:", err);
     return { ok: false, error: "Upload failed. Try again." };
   }
