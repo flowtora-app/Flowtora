@@ -34,7 +34,12 @@ const emptyNum = (s: string | undefined) => {
 async function assertInvoice(tenantId: string, invoiceId: string) {
   return db.invoice.findFirst({
     where: { id: invoiceId, tenantId },
-    select: { id: true, status: true, customerId: true, orderId: true, total: true, amountPaid: true, dueDate: true, issuedAt: true },
+    select: {
+      id: true, status: true, customerId: true, orderId: true,
+      total: true, amountPaid: true,
+      dueDate: true, issuedAt: true,
+      terms: true, discountType: true,
+    },
   });
 }
 
@@ -304,35 +309,53 @@ export async function updateInvoiceMeta(slug: string, invoiceId: string, formDat
   const existing = await assertInvoice(ctx.tenant.id, invoiceId);
   if (!existing) redirect(`/t/${slug}/invoices`);
 
-  const parsed = metaSchema.safeParse(Object.fromEntries(formData.entries()));
+  // Partial-update tolerant: only apply fields whose inputs the submitted
+  // form actually carries, so the detail page can split meta across tabbed
+  // forms (Details / Notes) without each tab clobbering the others.
+  const parsed = metaSchema.partial().safeParse(Object.fromEntries(formData.entries()));
   if (!parsed.success) redirect(`/t/${slug}/invoices/${invoiceId}?error=${encodeURIComponent("Invalid input")}`);
   const d = parsed.data;
 
-  const discountValue = d.discountType === "NONE" ? 0 : (emptyNum(d.discountValue) ?? 0);
-  const taxRate = d.taxRatePercent && d.taxRatePercent.length > 0
-    ? Math.max(0, Number(d.taxRatePercent)) / 100
-    : 0;
+  const data: Prisma.InvoiceUpdateInput = {};
 
-  // If user sets an issuedAt but no dueDate, auto-derive from terms.
-  let dueDate = d.dueDate ? new Date(d.dueDate) : null;
-  const issuedAt = d.issuedAt ? new Date(d.issuedAt) : null;
-  if (!dueDate && issuedAt) {
-    dueDate = new Date(issuedAt.getTime() + TERMS_DAYS[d.terms] * 86_400_000);
+  const hasIssued = formData.has("issuedAt");
+  const hasDue = formData.has("dueDate");
+  const hasTerms = formData.has("terms");
+
+  if (hasIssued || hasDue || hasTerms) {
+    const termsValue = d.terms ?? existing.terms;
+    const issuedAt = hasIssued
+      ? (d.issuedAt ? new Date(d.issuedAt) : null)
+      : existing.issuedAt;
+    let dueDate = hasDue
+      ? (d.dueDate ? new Date(d.dueDate) : null)
+      : existing.dueDate;
+    if (!dueDate && issuedAt && hasIssued) {
+      dueDate = new Date(issuedAt.getTime() + TERMS_DAYS[termsValue] * 86_400_000);
+    }
+    if (hasIssued) data.issuedAt = issuedAt;
+    if (hasDue || (hasIssued && !existing.dueDate)) data.dueDate = dueDate;
+    if (hasTerms) data.terms = termsValue;
   }
 
-  await db.invoice.update({
-    where: { id: invoiceId },
-    data: {
-      issuedAt,
-      dueDate,
-      terms: d.terms,
-      discountType: d.discountType,
-      discountValue: discountValue as never,
-      taxRate: (Number.isFinite(taxRate) ? taxRate : 0) as never,
-      customerNote: empty(d.customerNote),
-      internalNotes: empty(d.internalNotes),
-    },
-  });
+  if (formData.has("discountType")) {
+    data.discountType = d.discountType ?? "NONE";
+  }
+  if (formData.has("discountValue") || formData.has("discountType")) {
+    const effectiveType = (formData.get("discountType") as string | null) ?? existing.discountType;
+    const discountValue = effectiveType === "NONE" ? 0 : (emptyNum(d.discountValue) ?? 0);
+    data.discountValue = discountValue as never;
+  }
+  if (formData.has("taxRatePercent")) {
+    const taxRate = d.taxRatePercent && d.taxRatePercent.length > 0
+      ? Math.max(0, Number(d.taxRatePercent)) / 100
+      : 0;
+    data.taxRate = (Number.isFinite(taxRate) ? taxRate : 0) as never;
+  }
+  if (formData.has("customerNote")) data.customerNote = empty(d.customerNote);
+  if (formData.has("internalNotes")) data.internalNotes = empty(d.internalNotes);
+
+  await db.invoice.update({ where: { id: invoiceId }, data });
 
   await recomputeInvoiceTotals(invoiceId);
   revalidatePath(`/t/${slug}/invoices/${invoiceId}`);
