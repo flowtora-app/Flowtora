@@ -239,30 +239,37 @@ export async function updateOrderMeta(slug: string, orderId: string, formData: F
   const order = await assertOrder(ctx.tenant.id, orderId);
   if (!order) redirect(`/t/${slug}/orders`);
 
-  const parsed = metaSchema.safeParse(Object.fromEntries(formData.entries()));
+  const parsed = metaSchema.partial().safeParse(Object.fromEntries(formData.entries()));
   if (!parsed.success) redirect(`/t/${slug}/orders/${orderId}?error=${encodeURIComponent("Invalid input")}`);
   const d = parsed.data;
 
-  const productionManagerId = await validAssignee(ctx.tenant.id, empty(d.productionManagerId));
-  const installerId = await validAssignee(ctx.tenant.id, empty(d.installerId));
+  // Partial updates: only touch fields the form actually submitted. Splitting
+  // this across tabs (Details / Notes / etc.) means a notes-only save would
+  // otherwise null out scheduling fields owned by a different tab.
+  const data: Prisma.OrderUpdateInput = {};
 
-  const depositPct = d.depositPercent && d.depositPercent.length > 0
-    ? Math.max(0, Math.min(100, Math.round(Number(d.depositPercent))))
-    : 0;
+  if (formData.has("dueDate")) {
+    data.dueDate = d.dueDate ? new Date(d.dueDate) : null;
+  }
+  if (formData.has("scheduledFor")) {
+    data.scheduledFor = d.scheduledFor ? new Date(d.scheduledFor) : null;
+  }
+  if (formData.has("productionManagerId")) {
+    data.productionManagerId = await validAssignee(ctx.tenant.id, empty(d.productionManagerId));
+  }
+  if (formData.has("installerId")) {
+    data.installerId = await validAssignee(ctx.tenant.id, empty(d.installerId));
+  }
+  if (formData.has("depositPercent")) {
+    data.depositPercent = d.depositPercent && d.depositPercent.length > 0
+      ? Math.max(0, Math.min(100, Math.round(Number(d.depositPercent))))
+      : 0;
+  }
+  if (formData.has("customerNote")) data.customerNote = empty(d.customerNote);
+  if (formData.has("productionNotes")) data.productionNotes = empty(d.productionNotes);
+  if (formData.has("installNotes")) data.installNotes = empty(d.installNotes);
 
-  await db.order.update({
-    where: { id: orderId },
-    data: {
-      dueDate: d.dueDate ? new Date(d.dueDate) : null,
-      scheduledFor: d.scheduledFor ? new Date(d.scheduledFor) : null,
-      productionManagerId,
-      installerId,
-      depositPercent: depositPct,
-      customerNote: empty(d.customerNote),
-      productionNotes: empty(d.productionNotes),
-      installNotes: empty(d.installNotes),
-    },
-  });
+  await db.order.update({ where: { id: orderId }, data });
 
   revalidatePath(`/t/${slug}/orders/${orderId}`);
 }
@@ -492,21 +499,22 @@ export async function saveOrderJobSpecs(slug: string, orderId: string, formData:
   const order = await assertOrder(ctx.tenant.id, orderId);
   if (!order) return;
 
-  const parsed = jobSpecsSchema.safeParse(Object.fromEntries(formData.entries()));
+  const parsed = jobSpecsSchema.partial().safeParse(Object.fromEntries(formData.entries()));
   if (!parsed.success) {
     redirect(`/t/${slug}/orders/${orderId}?error=${encodeURIComponent("Invalid job specs.")}`);
   }
   const d = parsed.data;
 
+  const data: Prisma.OrderUpdateInput = {};
+  if (formData.has("material")) data.material = empty(d.material);
+  if (formData.has("finish")) data.finish = empty(d.finish);
+  if (formData.has("colorSpecs")) data.colorSpecs = empty(d.colorSpecs);
+  if (formData.has("installMethod")) data.installMethod = empty(d.installMethod);
+  if (formData.has("specialInstructions")) data.specialInstructions = empty(d.specialInstructions);
+
   await db.order.update({
     where: { id: orderId },
-    data: {
-      material:            empty(d.material),
-      finish:              empty(d.finish),
-      colorSpecs:          empty(d.colorSpecs),
-      installMethod:       empty(d.installMethod),
-      specialInstructions: empty(d.specialInstructions),
-    },
+    data,
   });
 
   await logAudit({
