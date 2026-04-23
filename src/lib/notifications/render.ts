@@ -26,6 +26,18 @@ export interface RenderedEmail {
   preheader: string;
 }
 
+// The IN_APP channel strips everything except the title + body + link.
+// Bell UIs have no room for a preheader, no surface for markdown, and
+// the brand chrome doesn't apply — so we flatten aggressively. Title
+// comes from the resolved headline (subject is too long for a bell
+// row), body from the first ~280 chars of the plain-text render, and
+// the link resolves from ctaUrlToken so the row is clickable.
+export interface RenderedInApp {
+  title: string;
+  body: string;
+  link: string | null;
+}
+
 // Helper — brand is what the layout wants; BrandSnapshot is what the
 // loader returns. Shapes overlap 1:1 minus the "productName" helper
 // fields, so this is a direct copy.
@@ -126,4 +138,29 @@ export function renderTemplate(opts: {
   });
 
   return { subject, html, text, headline, preheader };
+}
+
+// Render a template for the IN_APP channel. Mirrors renderTemplate()
+// but produces the minimal shape the bell/inbox needs. No brand —
+// per-channel branding doesn't apply to a DB row that the UI styles
+// itself. Keeping this separate from renderTemplate keeps the email
+// code simple and lets the admin UI preview each channel distinctly.
+export function renderInAppTemplate(opts: {
+  content: TemplateContent;
+  tokens: TokenValues;
+}): RenderedInApp {
+  const { content, tokens } = opts;
+
+  const title = resolveTokensPlain(content.headline, tokens).trim();
+  const bodyMarkdown = resolveTokensPlain(content.body, tokens);
+  const bodyPlain = renderMarkdownPlain(bodyMarkdown).trim();
+  // Clip to 280 — bell rows show a 2-3 line preview; anything longer
+  // just gets truncated in CSS anyway and inflates the DB row.
+  const body = bodyPlain.length > 280 ? bodyPlain.slice(0, 279) + "…" : bodyPlain;
+
+  const link = content.ctaUrlToken
+    ? resolveTokens(content.ctaUrlToken, tokens, "url").trim() || null
+    : null;
+
+  return { title, body, link };
 }

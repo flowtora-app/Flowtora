@@ -18,7 +18,7 @@ import { z } from "zod";
 import { db } from "@/lib/db";
 import { requireTenant } from "@/lib/tenant";
 import { logAudit } from "@/lib/audit";
-import { notifyMany, sendNotification } from "@/lib/notifications";
+import { sendNotification } from "@/lib/notifications";
 import { getPref, resolvePrefs, resolveEffectivePref } from "@/lib/notif-prefs";
 import { appOrigin } from "@/lib/share";
 import { computeDueBy } from "@/lib/support-sla";
@@ -313,48 +313,51 @@ export async function platformReplyToSupportTicket(params: {
     // Notify every active member of the tenant so at least one inbox catches
     // the reply. We exclude nobody here — even the original opener benefits
     // from the notification in a different-device scenario.
+    //
+    // M5 — the in-app bell and the email now fire through a single
+    // sendNotification() call per member. Previously this was a
+    // notifyMany() (bell, unconditional) + a per-user sendNotification()
+    // (email, pref-gated). The dispatcher's IN_APP channel collapses
+    // those into one codepath: the bell row comes from the same
+    // registered kind + template as the email, so the wording stays in
+    // sync and admins only edit one row.
+    //
+    // Per-user email prefs still gate the EMAIL channel (default off,
+    // opt-in via the member's notifPrefs or tenant defaults). IN_APP
+    // remains unconditional — that's the same behaviour the old
+    // notifyMany had.
     const members = await db.membership.findMany({
       where: { tenantId: ticket.tenantId, status: "ACTIVE" },
       select: { userId: true, notifPrefs: true, user: { select: { email: true, name: true } } },
     });
-    await notifyMany(members.map((m) => m.userId), {
-      tenantId: ticket.tenantId,
-      type: "support.staff_replied",
-      title: `Support replied: ${ticket.subject}`,
-      body: parsed.data.body.slice(0, 280),
-      entityType: "SupportTicket",
-      entityId: ticket.id,
-      link: `/t/${ticket.tenant.slug}/support/${ticket.id}`,
-    });
 
-    // Phase 20 Slice B — email anyone who's opted in. Default is off, so
-    // this is an explicit subscription. We send one-by-one so we can
-    // respect per-user prefs and skip users without an email.
-    //
-    // Phase 21 Slice C — tenant-wide defaults now fill in for members
-    // whose personal prefs don't set this key (invite-accept seeds those
-    // defaults into Membership, but we still fall through in case a
-    // membership predates the defaults or has a stale blob).
     const ticketTenant = await db.tenant.findUnique({
       where: { id: ticket.tenantId },
       select: { defaultNotifPrefs: true },
     });
     const tenantDefaults = resolvePrefs(ticketTenant?.defaultNotifPrefs);
     const ticketUrl = `${appOrigin()}/t/${ticket.tenant.slug}/support/${ticket.id}`;
+    const bellLink = `/t/${ticket.tenant.slug}/support/${ticket.id}`;
+
     await Promise.all(
       members.map(async (m) => {
         const pref = resolveEffectivePref(resolvePrefs(m.notifPrefs), tenantDefaults, "support.staff_replied");
-        if (!pref.email) return;
-        if (!m.user?.email) return;
-        // sendNotification() already swallows provider errors into a
-        // DispatchResult — one bad address shouldn't block the action. The
-        // in-app notify has already landed above, so delivery-level failures
-        // here are just missed emails, not lost context.
+        const channels: ("EMAIL" | "IN_APP")[] = ["IN_APP"];
+        if (pref.email && m.user?.email) channels.push("EMAIL");
+
         await sendNotification({
           kind: "support.staff_reply",
-          to: m.user.email,
+          channels,
+          to: m.user?.email ?? undefined,
           tenantId: ticket.tenantId,
           userId: m.userId,
+          // Keep the legacy bell type so old + new rows render with the
+          // same icon/color in the inbox. Callers can decouple from the
+          // kind name when the legacy label is materially different.
+          inAppType: "support.staff_replied",
+          link: bellLink,
+          entityType: "SupportTicket",
+          entityId: ticket.id,
           tokens: {
             ticket_subject: ticket.subject,
             staff_name:     authorEmail,

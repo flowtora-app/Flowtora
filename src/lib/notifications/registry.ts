@@ -253,9 +253,9 @@ const REGISTRY: NotificationRegistration[] = [
     category: "support",
     label: "Staff reply on support ticket",
     description:
-      "Notifies a customer when a staff member posts a public reply to their ticket.",
+      "Notifies a customer when a staff member posts a public reply to their ticket. Fires both the email and the in-app bell for every active member (filtered by per-user prefs on the email side).",
     sortOrder: 10,
-    channels: ["EMAIL"],
+    channels: ["EMAIL", "IN_APP"],
     tokens: {
       ticket_subject: { type: "string", sample: "Invoice is stuck in draft", required: true },
       staff_name: { type: "string", sample: "Jamie" },

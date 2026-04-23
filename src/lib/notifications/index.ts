@@ -13,10 +13,13 @@
 //     `notify`, `notifyMany`, `notifyOnce`, and `unreadCount`. Same
 //     directory for co-location but conceptually distinct.
 //
-// The two layers overlap today (support.staff_reply kicks both an
-// in-app notify and an email) and will converge in a later milestone
-// when IN_APP becomes a first-class channel of the transactional
-// dispatcher. Until then, callers generally pick the side they need.
+// As of M5 the two layers overlap on purpose: a registered kind can
+// declare `channels: ["EMAIL", "IN_APP"]` and a single
+// sendNotification() call fans out to both with shared wording. The
+// standalone `notify`/`notifyMany` helpers remain for the 40+ legacy
+// bell-only events that don't belong in the transactional catalog
+// (stage.assigned, install.blocker, reminder.*, etc.). New events
+// should prefer the dispatcher unless they're truly bell-only.
 
 export { sendNotification } from "./dispatch";
 export type {
@@ -29,7 +32,12 @@ export {
   type NotificationKind,
 } from "./registry";
 export { loadBrand, invalidateBrandCache, DEFAULT_BRAND } from "./brand";
-export { renderTemplate, type RenderedEmail } from "./render";
+export {
+  renderTemplate,
+  renderInAppTemplate,
+  type RenderedEmail,
+  type RenderedInApp,
+} from "./render";
 export type {
   TemplateContent,
   TokenSchema,
