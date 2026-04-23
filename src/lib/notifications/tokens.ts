@@ -21,7 +21,7 @@
 //                    blocks javascript:/data: URIs outright
 //   • "raw"  mode  — no escaping (used for the plain-text email body)
 
-import type { TokenSchema, TokenValues } from "./types";
+import type { TemplateContent, TokenSchema, TokenValues } from "./types";
 
 export type EscapeMode = "text" | "attr" | "url" | "raw";
 
@@ -77,6 +77,29 @@ export function validateTemplateTokens(
   const found = extractTokens(template);
   for (const tok of found) {
     if (!(tok in schema)) throw new UnknownTokenError(tok, template);
+  }
+}
+
+// Convenience: validate every string-valued field of a TemplateContent
+// against the schema in one shot. The admin save path uses this so a
+// typo in the subject surfaces the same way a typo in the body does.
+export function validateContentTokens(
+  content: TemplateContent,
+  schema: TokenSchema,
+): void {
+  const fields: (string | null | undefined)[] = [
+    content.subject,
+    content.preheader,
+    content.headline,
+    content.subheading,
+    content.body,
+    content.ctaLabel,
+    content.ctaUrlToken,
+    content.footerNote,
+  ];
+  for (const field of fields) {
+    if (!field) continue;
+    validateTemplateTokens(field, schema);
   }
 }
 
