@@ -3,33 +3,28 @@
 import * as React from "react";
 import { useRouter, useSearchParams } from "next/navigation";
 
-export type OrderListRowData = {
+export type InvoiceListRowData = {
   id: string;
   number: string;
   customerName: string;
   statusLabel: string;
   statusColor: string;
-  priority: "NORMAL" | "HIGH" | "RUSH";
-  priorityColor: string;
+  kindLabel: string | null;
   dueLabel: string | null;
-  overdue: boolean;
+  agingLabel: string | null;
+  agingColor: string | null;
+  isOverdue: boolean;
   total: string;
-  blockerCount: number;
-  blockerHint: string | null;
-  depositOwedLabel: string | null;
+  balance: string;
+  hasBalance: boolean;
 };
 
-interface OrderListRowProps {
-  row: OrderListRowData;
+interface InvoiceListRowProps {
+  row: InvoiceListRowData;
   selected: boolean;
 }
 
-/**
- * Single row in the split-view order list. Clicking pushes `?selected=<id>`
- * which re-renders the page with the detail panel focused on this order.
- * We `router.push` with scroll:false so the list doesn't jump.
- */
-export function OrderListRow({ row, selected }: OrderListRowProps) {
+export function InvoiceListRow({ row, selected }: InvoiceListRowProps) {
   const router = useRouter();
   const sp = useSearchParams();
 
@@ -69,55 +64,53 @@ export function OrderListRow({ row, selected }: OrderListRowProps) {
           >
             {row.statusLabel}
           </span>
-          {row.priority !== "NORMAL" && (
+          {row.agingLabel && (
             <span
               className="rounded-full px-1.5 py-0.5 text-[10px] font-medium"
-              style={{ background: row.priorityColor, color: "white" }}
-              title={`Priority: ${row.priority}`}
+              style={{ background: row.agingColor ?? "var(--danger-fg)", color: "white" }}
+              title="Past due bucket"
             >
-              {row.priority === "RUSH" ? "⚡" : "!"}
+              {row.agingLabel}
             </span>
           )}
         </div>
-        <span className="shrink-0 text-sm font-semibold tabular-nums" style={{ color: "var(--text-default)" }}>
+        <span
+          className="shrink-0 text-sm font-semibold tabular-nums"
+          style={{ color: "var(--text-default)" }}
+        >
           {row.total}
         </span>
       </div>
       <div className="mt-0.5 flex items-center justify-between gap-2">
         <span className="min-w-0 truncate text-xs" style={{ color: "var(--text-muted)" }}>
           {row.customerName}
+          {row.kindLabel && (
+            <>
+              {" · "}
+              <span style={{ color: "var(--text-faint)" }}>{row.kindLabel}</span>
+            </>
+          )}
         </span>
         {row.dueLabel && (
           <span
             className="shrink-0 text-xs tabular-nums"
-            style={{ color: row.overdue ? "var(--danger-fg)" : "var(--text-muted)" }}
-            title={row.overdue ? "Past due" : "Due date"}
+            style={{ color: row.isOverdue ? "var(--danger-fg)" : "var(--text-muted)" }}
+            title={row.isOverdue ? "Past due" : "Due date"}
           >
-            {row.overdue ? "⚠ " : ""}
-            {row.dueLabel}
+            {row.isOverdue ? "⚠ " : ""}
+            due {row.dueLabel}
           </span>
         )}
       </div>
-      {(row.blockerCount > 0 || row.depositOwedLabel) && (
+      {row.hasBalance && (
         <div className="mt-1 flex flex-wrap items-center gap-1">
-          {row.blockerCount > 0 && (
-            <span
-              className="rounded-full px-1.5 py-0.5 text-[10px] font-medium"
-              style={{ background: "var(--danger-fg)", color: "white" }}
-              title={row.blockerHint ?? "Blocked"}
-            >
-              ⏸ {row.blockerCount > 1 ? `${row.blockerCount} blockers` : "Blocked"}
-            </span>
-          )}
-          {row.depositOwedLabel && (
-            <span
-              className="rounded-full px-1.5 py-0.5 text-[10px] font-medium"
-              style={{ background: "var(--danger-fg)", color: "white" }}
-              title="Deposit must be paid before production starts"
-            >
-              💰 {row.depositOwedLabel}
-            </span>
-          )}
+          <span
+            className="rounded-full px-1.5 py-0.5 text-[10px] font-medium"
+            style={{ background: "var(--danger-fg)", color: "white" }}
+            title="Outstanding balance"
+          >
+            💰 {row.balance} due
+          </span>
         </div>
       )}
     </button>

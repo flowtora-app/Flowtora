@@ -3,57 +3,51 @@
 import * as React from "react";
 import { useRouter, useSearchParams } from "next/navigation";
 
-interface OrderSplitShellProps {
+interface SplitShellProps {
   list: React.ReactNode;
   panel: React.ReactNode;
-  /** All order IDs in current list, in render order — used for keyboard nav. */
-  orderIds: string[];
+  /** All entity IDs in current list, in render order — used for keyboard nav. */
+  entityIds: string[];
   selectedId: string | null;
-  /** Slug passed through for any anchor links the panel might use. */
-  slug: string;
 }
 
 /**
- * Split-view shell for /orders. Two-pane layout on desktop, drawer-style on
- * mobile. Handles keyboard navigation (↑/↓/j/k to move selection, Enter to
- * focus the panel, `/` to focus search, Esc to clear selection) and the
- * mobile open/close of the panel.
+ * Reusable two-pane split view with keyboard nav. Row components on the left
+ * must emit `data-entity-id={id}` so the shell can scroll the selected row
+ * into view. Selection state lives in `?selected=<id>`. Used by Orders,
+ * Quotes, and Invoices list pages.
+ *
+ * Keyboard: ↑/↓/j/k move selection, `/` focuses search, Esc clears selection
+ * (or blurs an input first).
  */
-export function OrderSplitShell({
-  list,
-  panel,
-  orderIds,
-  selectedId,
-  slug: _slug,
-}: OrderSplitShellProps) {
+export function SplitShell({ list, panel, entityIds, selectedId }: SplitShellProps) {
   const router = useRouter();
   const sp = useSearchParams();
   const panelScrollRef = React.useRef<HTMLDivElement>(null);
 
-  const selectedIndex = selectedId ? orderIds.indexOf(selectedId) : -1;
+  const selectedIndex = selectedId ? entityIds.indexOf(selectedId) : -1;
 
-  // On selection change, scroll the list row into view + scroll panel to top.
   React.useEffect(() => {
     if (!selectedId) return;
-    const row = document.querySelector<HTMLButtonElement>(`[data-order-id="${selectedId}"]`);
+    const row = document.querySelector<HTMLButtonElement>(`[data-entity-id="${selectedId}"]`);
     row?.scrollIntoView({ block: "nearest" });
     panelScrollRef.current?.scrollTo({ top: 0, behavior: "instant" });
   }, [selectedId]);
 
   const moveSelection = React.useCallback(
     (delta: number) => {
-      if (orderIds.length === 0) return;
+      if (entityIds.length === 0) return;
       const nextIndex =
         selectedIndex < 0
           ? 0
-          : Math.max(0, Math.min(orderIds.length - 1, selectedIndex + delta));
-      const nextId = orderIds[nextIndex];
+          : Math.max(0, Math.min(entityIds.length - 1, selectedIndex + delta));
+      const nextId = entityIds[nextIndex];
       if (!nextId || nextId === selectedId) return;
       const params = new URLSearchParams(sp.toString());
       params.set("selected", nextId);
       router.push(`?${params.toString()}`, { scroll: false });
     },
-    [orderIds, selectedIndex, selectedId, router, sp],
+    [entityIds, selectedIndex, selectedId, router, sp],
   );
 
   const clearSelection = React.useCallback(() => {
@@ -105,8 +99,6 @@ export function OrderSplitShell({
     return () => window.removeEventListener("keydown", onKey);
   }, [moveSelection, clearSelection, selectedId]);
 
-  // Mobile: when an order is selected, show the panel overlay. List stays
-  // mounted underneath so closing the overlay returns instantly.
   const mobilePanelOpen = !!selectedId;
 
   return (
@@ -114,7 +106,6 @@ export function OrderSplitShell({
       className="grid min-h-[calc(100vh-120px)] gap-0 lg:grid-cols-[360px_minmax(0,1fr)]"
       style={{ border: "1px solid var(--border-subtle)", borderRadius: 12, overflow: "hidden" }}
     >
-      {/* LEFT: list */}
       <div
         className="flex min-h-0 flex-col lg:border-r"
         style={{ borderColor: "var(--border-subtle)", background: "var(--surface-0)" }}
@@ -122,10 +113,6 @@ export function OrderSplitShell({
         {list}
       </div>
 
-      {/* RIGHT: panel — desktop inline grid cell, mobile fullscreen overlay.
-           The `lg:` prefixed utilities reset the mobile-only `fixed inset-0`
-           classes on desktop so the panel sits inside the grid column rather
-           than overlaying the whole screen. */}
       <div
         ref={panelScrollRef}
         className={[
@@ -135,7 +122,6 @@ export function OrderSplitShell({
         ].join(" ")}
         style={{ background: "var(--surface-0)" }}
       >
-        {/* Mobile close bar */}
         {mobilePanelOpen && (
           <div
             className="sticky top-0 z-10 flex items-center gap-2 px-4 py-2 lg:hidden"

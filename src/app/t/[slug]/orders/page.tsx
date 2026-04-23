@@ -16,7 +16,7 @@ import { memberLookup } from "@/lib/members";
 import { applyBranchScope, listActiveLocations } from "@/lib/locations";
 import { SavedViewPicker } from "@/components/ui/SavedViewPicker";
 import { listSavedViews } from "@/app/actions/saved-views";
-import { OrderSplitShell } from "@/components/orders/OrderSplitShell";
+import { SplitShell } from "@/components/ui/SplitShell";
 import { OrderListRow, type OrderListRowData } from "@/components/orders/OrderListRow";
 import { OrderPanel, loadOrderForPanel } from "@/components/orders/OrderPanel";
 import type { OrderPanelTab } from "@/components/orders/OrderPanelTabs";
@@ -397,12 +397,11 @@ export default async function OrdersPage({
             />
           </Card>
         ) : (
-          <OrderSplitShell
+          <SplitShell
             list={listNode}
             panel={panelNode}
-            orderIds={rows.map((r) => r.id)}
+            entityIds={rows.map((r) => r.id)}
             selectedId={selectedId}
-            slug={slug}
           />
         )}
       </div>
