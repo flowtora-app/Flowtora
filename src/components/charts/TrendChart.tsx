@@ -30,6 +30,7 @@ type Props = {
   height?: number;
   valuePrefix?: string; // e.g. "$"
   filled?: boolean;     // area chart vs line chart
+  stacked?: boolean;    // stack areas (requires filled=true)
 };
 
 function formatValue(v: number, prefix = "") {
@@ -44,6 +45,7 @@ export function TrendChart({
   height = 220,
   valuePrefix = "",
   filled = false,
+  stacked = false,
 }: Props) {
   if (!data.length) {
     return (
@@ -103,8 +105,9 @@ export function TrendChart({
                 name={s.label}
                 stroke={s.color}
                 fill={s.color}
-                fillOpacity={0.12}
-                strokeWidth={2}
+                fillOpacity={stacked ? 0.6 : 0.12}
+                strokeWidth={stacked ? 1.5 : 2}
+                stackId={stacked ? "1" : undefined}
                 dot={false}
                 activeDot={{ r: 4 }}
               />
