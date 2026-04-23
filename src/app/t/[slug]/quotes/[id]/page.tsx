@@ -41,6 +41,7 @@ import { listActiveMembers, memberLookup } from "@/lib/members";
 import { SendMessageWidget } from "@/components/SendMessageWidget";
 import { loadSendContext } from "@/app/actions/message-templates";
 import { getGroupContext } from "@/lib/franchise";
+import { QuotePortalPreview } from "@/components/quotes/QuotePortalPreview";
 
 // Phase 23 — browser tab title resolves to the quote number so teammates
 // juggling multiple tabs ("which quote was that again?") can tell them apart.
@@ -79,7 +80,7 @@ export default async function QuoteDetailPage({
   searchParams,
 }: {
   params: Promise<{ slug: string; id: string }>;
-  searchParams: Promise<{ error?: string; notice?: string }>;
+  searchParams: Promise<{ error?: string; notice?: string; preview?: string }>;
 }) {
   const { slug, id } = await params;
   const sp = await searchParams;
@@ -684,6 +685,33 @@ export default async function QuoteDetailPage({
     : 0;
   const canApplyRush = editable && rushPct > 0 && currentSubtotal > 0;
 
+  // Phase 5 — portal-style preview. URL-driven (?preview=1) so a refresh
+  // keeps the panel open and there's no client state to manage. Close
+  // href drops the preview param (error/notice params are one-shot so
+  // dropping them is fine).
+  const previewOpen = sp.preview === "1";
+  const previewCloseHref = `/t/${slug}/quotes/${quote.id}`;
+  const previewOpenHref = `/t/${slug}/quotes/${quote.id}?preview=1`;
+  const previewItems = quote.items.map((it) => {
+    const opts = parseSelectedOptions(it.selectedOptions as unknown);
+    return {
+      id:            it.id,
+      name:          it.name,
+      description:   it.description,
+      subtotal:      Number(it.subtotal),
+      isOptional:    it.isOptional,
+      sectionId:     it.sectionId,
+      optionSummary: opts.length > 0
+        ? opts.map((o) => `${o.groupName}: ${o.label}`).join(" · ")
+        : null,
+    };
+  });
+  const previewSections = quote.sections.map((s) => ({
+    id:          s.id,
+    title:       s.title,
+    description: s.description,
+  }));
+
   return (
     <div className="space-y-6">
       <div className="text-sm">
@@ -737,7 +765,19 @@ export default async function QuoteDetailPage({
           </div>
         </div>
         {canManage && (
-          <div className="flex gap-2">
+          <div className="flex flex-wrap items-center gap-2">
+            <Link
+              href={previewOpenHref}
+              className="ts-focus inline-flex items-center gap-1.5 rounded-md px-3 py-1.5 text-sm"
+              style={{
+                background: "var(--surface-1)",
+                border: "1px solid var(--border-default)",
+                color: "var(--text-default)",
+              }}
+              title="See a read-only portal-style preview of this quote — what the customer sees when they open the share link."
+            >
+              Preview as customer
+            </Link>
             {/* Revise is the right action when a live quote needs pricing
                 or scope changes — it keeps the chain intact. Duplicate
                 stays available for starting a fully unrelated quote from
@@ -1600,6 +1640,37 @@ export default async function QuoteDetailPage({
         memberMap={memberMap}
         canModerate={ctx.can("staff:manage")}
       />
+
+      {/* Phase 5 — live portal-style preview. URL-driven so refresh /
+          deep-link keeps the drawer state, and the drawer re-renders with
+          the latest server totals every time a save triggers a
+          revalidate. */}
+      {previewOpen && (
+        <QuotePortalPreview
+          closeHref={previewCloseHref}
+          tenantName={ctx.tenant.name}
+          number={quote.number}
+          status={quote.status}
+          customerName={quote.customer.name}
+          expiresAt={quote.expiresAt}
+          currency={ctx.tenant.currency}
+          subtotal={Number(quote.subtotal)}
+          discountType={quote.discountType}
+          discountValue={Number(quote.discountValue)}
+          discountAmount={Number(quote.discountAmount)}
+          taxRate={Number(quote.taxRate)}
+          taxAmount={Number(quote.taxAmount)}
+          total={Number(quote.total)}
+          optionalSubtotal={Number(quote.optionalSubtotal)}
+          depositType={quote.depositType}
+          depositValue={Number(quote.depositValue)}
+          depositAmount={Number(quote.depositAmount)}
+          customerNote={quote.customerNote}
+          terms={quote.terms}
+          items={previewItems}
+          sections={previewSections}
+        />
+      )}
     </div>
   );
 }
