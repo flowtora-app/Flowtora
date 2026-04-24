@@ -22,11 +22,14 @@ import {
   loadEmployeeData,
   type LoaderCtx,
 } from "@/lib/dashboard-data";
+import { loadHeroMetrics } from "@/lib/dashboard-hero";
 import { ActivationWidget } from "@/components/dashboard/ActivationWidget";
 import { AttentionPanel } from "@/components/dashboard/AttentionPanel";
 import { ActivityFeed } from "@/components/dashboard/ActivityFeed";
 import { QuickActions } from "@/components/dashboard/QuickActions";
 import { EmptyStateCard } from "@/components/dashboard/EmptyStateCard";
+import { DashboardShell } from "@/components/dashboard/DashboardShell";
+import { HeroBand } from "@/components/dashboard/HeroBand";
 import { ExecutiveView } from "@/components/dashboard/views/ExecutiveView";
 import { SalesView } from "@/components/dashboard/views/SalesView";
 import { CsrView } from "@/components/dashboard/views/CsrView";
@@ -36,21 +39,43 @@ import { InstallerView } from "@/components/dashboard/views/InstallerView";
 import { FinanceView } from "@/components/dashboard/views/FinanceView";
 import { EmployeeView } from "@/components/dashboard/views/EmployeeView";
 
-// Phase 6 — persona-driven dashboard.
+// Phase 2 (transformation) — story-first dashboard.
 //
-// Eight personas, each mapped from a TenantRole by `dashboardPersona()`.
-// Per-persona concerns live in three files:
+// We use a persona-constant `DashboardShell` that renders every role's
+// dashboard in the same top-to-bottom order:
 //
-//   src/lib/dashboard-persona.ts   — role → persona mapping + labels
-//   src/lib/dashboard-config.ts    — attention kinds + quick actions +
-//                                     empty-state copy per persona
-//   src/lib/dashboard-data.ts      — one loader per persona (Promise.all)
-//   src/components/dashboard/views/— one KPI-grid component per persona
+//   greeting → activation → hero band → attention → persona view
+//   → activity feed → trial banner
 //
-// This page orchestrates: pick the persona, run the loader, fan out the
-// shared queries (attention + activity), and render. The page itself
-// stays small — every persona adds a line to the switch below, not a
-// cascade of inline JSX.
+// The hero band is the cross-persona executive summary (Revenue L30,
+// Pipeline, Open A/R, Next-7d cash). It's loaded shop-wide by
+// `loadHeroMetrics` and shown to every role that has financial
+// visibility. Front-line roles (installer, employee) skip the hero band
+// — they shouldn't see shop-wide cash figures they don't need.
+//
+// Persona-keyed concerns still live in three places:
+//   src/lib/dashboard-persona.ts  — role → persona mapping + labels
+//   src/lib/dashboard-config.ts   — attention kinds, quick actions,
+//                                   empty-state copy per persona
+//   src/lib/dashboard-data.ts     — one loader per persona
+//   src/components/dashboard/views/ — one KPI-grid component per persona
+//
+// See docs/transformation-plan.md §Phase 2 for the rationale (Stripe-
+// class summary + one frame for all personas, only widget content
+// swaps).
+
+/**
+ * Personas that should see the $-denominated hero band.
+ *
+ * Executives, sales, CSR, designer, production, and finance personas
+ * all benefit from shop-wide revenue / A/R / cash context when they
+ * plan their day. Installers and front-line employees are scoped to
+ * their own assigned work and don't need collections data — hiding the
+ * band for them avoids leaking financial detail onto a shared screen.
+ */
+function personaSeesHero(persona: DashboardPersona): boolean {
+  return persona !== "installer" && persona !== "employee";
+}
 
 export default async function DashboardPage({
   params,
@@ -67,7 +92,6 @@ export default async function DashboardPage({
   const persona = dashboardPersona(role);
   const config = PERSONA_CONFIG[persona];
 
-  // Branch-scope plumbing (unchanged from Phase 15).
   const branches = await listActiveLocations(tenant.id);
   const branchChoices =
     branchScope === null ? branches : branches.filter((b) => branchScope.includes(b.id));
@@ -81,14 +105,19 @@ export default async function DashboardPage({
     branchFilter,
   };
 
-  // Fan-out: per-persona data, attention feed filtered to the caller
-  // (except executive, which gets the whole-shop feed), recent activity.
+  // Attention feed is filtered to the caller for owner-y personas that
+  // already see the whole shop in other widgets; persona views get only
+  // "my stuff" so reps don't drown in team noise.
   const attentionFilter: { userId?: string; branchScope?: string[] | null } =
     persona === "executive" || persona === "production" || persona === "finance"
       ? { branchScope }
       : { userId, branchScope };
 
-  const [personaData, attention, activity] = await Promise.all([
+  // Fan-out: hero (shop-wide financial summary, only for personas that
+  // see it), per-persona data, attention feed, recent activity.
+  const showHero = personaSeesHero(persona);
+  const [heroMetrics, personaData, attention, activity] = await Promise.all([
+    showHero ? loadHeroMetrics(loaderCtx) : Promise.resolve(null),
     loadPersonaData(persona, loaderCtx),
     loadAttention(tenant.id, attentionFilter),
     loadRecentActivity(tenant.id, { limit: 8 }),
@@ -105,27 +134,56 @@ export default async function DashboardPage({
     ? Math.max(0, Math.ceil((tenant.trialEndsAt.getTime() - Date.now()) / 86_400_000))
     : null;
 
-  // "First-run" signal: the member has zero activity and zero attention.
-  // Swap the KPI grid for a teaching empty state when that's true. We
-  // still render the header, quick actions, and trial banner around it
-  // so the shell feels consistent — just no numeric wall of zeros.
+  // "First-run" signal: no activity, no attention items. Swap the KPI
+  // grid for a teaching empty state; keep the shell frame so the page
+  // never feels broken.
   const isFirstRun = activity.length === 0 && totalAttentionCount(attention) === 0;
+  const attentionTitle =
+    persona === "executive" || persona === "production" || persona === "finance"
+      ? "Needs attention"
+      : "Needs your attention";
 
   return (
-    <div className="space-y-8">
-      <DashboardHeader
-        tenantName={tenant.name}
-        persona={persona}
-        role={role}
-        branches={branchChoices}
-        branchFilter={branchFilter}
-        branchScoped={!branchFilter && branchScope !== null && branchScope.length > 0}
-      />
-
-      {showActivation && activation && (
-        <ActivationWidget slug={slug} report={activation} />
-      )}
-
+    <DashboardShell
+      greeting={
+        <DashboardHeader
+          tenantName={tenant.name}
+          persona={persona}
+          role={role}
+          branches={branchChoices}
+          branchFilter={branchFilter}
+          branchScoped={!branchFilter && branchScope !== null && branchScope.length > 0}
+        />
+      }
+      activation={
+        showActivation && activation ? (
+          <ActivationWidget slug={slug} report={activation} />
+        ) : undefined
+      }
+      hero={
+        showHero && heroMetrics ? (
+          <HeroBand slug={slug} currency={tenant.currency} metrics={heroMetrics} />
+        ) : undefined
+      }
+      attention={
+        // Promoted above the fold — story-first. We cap per-kind at 3 in
+        // the hero slot to stay compact; the "View all →" link on the
+        // panel routes to the full inbox-attention view.
+        <AttentionPanel
+          slug={slug}
+          groups={attention}
+          kinds={config.attentionKinds}
+          perKindLimit={3}
+          title={attentionTitle}
+        />
+      }
+      activity={!isFirstRun ? <ActivityFeed slug={slug} items={activity} /> : undefined}
+      footer={
+        tenant.status === "TRIAL" && trialDaysLeft !== null ? (
+          <TrialBanner daysLeft={trialDaysLeft} slug={slug} />
+        ) : undefined
+      }
+    >
       <QuickActions actions={config.quickActions(slug)} />
 
       {isFirstRun ? (
@@ -154,27 +212,7 @@ export default async function DashboardPage({
           data={personaData}
         />
       )}
-
-      {!isFirstRun && (
-        <div className="grid grid-cols-1 gap-6 lg:grid-cols-2">
-          <AttentionPanel
-            slug={slug}
-            groups={attention}
-            kinds={config.attentionKinds}
-            title={
-              persona === "executive" || persona === "production" || persona === "finance"
-                ? "Needs attention"
-                : "Needs your attention"
-            }
-          />
-          <ActivityFeed slug={slug} items={activity} />
-        </div>
-      )}
-
-      {tenant.status === "TRIAL" && trialDaysLeft !== null && (
-        <TrialBanner daysLeft={trialDaysLeft} slug={slug} />
-      )}
-    </div>
+    </DashboardShell>
   );
 }
 

@@ -1,6 +1,7 @@
 import * as React from "react";
 import Link from "next/link";
 import { cn } from "@/lib/cn";
+import { Sparkline } from "@/components/dashboard/Sparkline";
 
 // Phase 18 Slice D — KPI tile used by every persona dashboard.
 //
@@ -11,6 +12,9 @@ import { cn } from "@/lib/cn";
 //   href     — if present, tile becomes a link
 //   tone     — color accent for the value. Default inherits text color.
 //   icon     — optional decorative glyph
+//   spark    — optional trend series; renders a sparkline in the tile
+//              footer. Phase 2 (transformation) — used by hero tiles to
+//              give a visual "which way is this going?" signal.
 //
 // Deliberately a thin component — just a card with typography. The
 // layouts (grids of stats) live in the page-level persona views.
@@ -19,6 +23,16 @@ export type StatTone = "default" | "success" | "warning" | "danger" | "accent";
 
 const TONE_COLOR: Record<StatTone, string> = {
   default: "var(--text-default)",
+  success: "var(--success-fg)",
+  warning: "var(--warning-fg, var(--accent-primary))",
+  danger: "var(--danger-fg)",
+  accent: "var(--accent-primary)",
+};
+
+// Sparkline stroke tracks the tile's tone so the trend reads the same way
+// as the headline value (green for success, red for danger, etc.).
+const TONE_STROKE: Record<StatTone, string> = {
+  default: "var(--accent-primary)",
   success: "var(--success-fg)",
   warning: "var(--warning-fg, var(--accent-primary))",
   danger: "var(--danger-fg)",
@@ -34,6 +48,10 @@ export interface DashboardStatProps {
   icon?: React.ReactNode;
   compact?: boolean;
   className?: string;
+  /** Trend series for the inline sparkline. Ignored when compact. */
+  spark?: number[];
+  /** Screen-reader label for the sparkline (e.g. "Last 14 days revenue"). */
+  sparkLabel?: string;
 }
 
 export function DashboardStat({
@@ -45,7 +63,10 @@ export function DashboardStat({
   icon,
   compact,
   className,
+  spark,
+  sparkLabel,
 }: DashboardStatProps) {
+  const showSpark = !compact && spark && spark.length >= 2;
   const inner = (
     <div
       className={cn(
@@ -85,12 +106,25 @@ export function DashboardStat({
       >
         {value}
       </div>
-      {hint && (
-        <div
-          className="mt-1 text-xs"
-          style={{ color: "var(--text-faint)" }}
-        >
-          {hint}
+      {(hint || showSpark) && (
+        <div className="mt-2 flex items-end justify-between gap-3">
+          {hint && (
+            <div
+              className="text-xs"
+              style={{ color: "var(--text-faint)" }}
+            >
+              {hint}
+            </div>
+          )}
+          {showSpark && (
+            <div className="ml-auto shrink-0 opacity-80">
+              <Sparkline
+                values={spark!}
+                stroke={TONE_STROKE[tone]}
+                ariaLabel={sparkLabel}
+              />
+            </div>
+          )}
         </div>
       )}
     </div>
