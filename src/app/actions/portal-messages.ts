@@ -176,6 +176,37 @@ export async function markAllPortalMessagesRead(slug: string) {
   revalidatePath(`/t/${slug}/messages`);
 }
 
+// Archive every message (both directions) in a customer's portal
+// conversation. The next tick the Messages inbox will no longer list
+// this customer under "Unread" / "All" — only under "Archived".
+export async function archiveConversation(slug: string, customerId: string) {
+  const ctx = await requirePermission(slug, "customers:edit");
+  await db.portalMessage.updateMany({
+    where: {
+      tenantId:   ctx.tenant.id,
+      customerId,
+      archivedAt: null,
+    },
+    data: { archivedAt: new Date() },
+  });
+  revalidatePath(`/t/${slug}/messages`);
+  revalidatePath(`/t/${slug}/customers/${customerId}`);
+}
+
+export async function unarchiveConversation(slug: string, customerId: string) {
+  const ctx = await requirePermission(slug, "customers:edit");
+  await db.portalMessage.updateMany({
+    where: {
+      tenantId:   ctx.tenant.id,
+      customerId,
+      archivedAt: { not: null },
+    },
+    data: { archivedAt: null },
+  });
+  revalidatePath(`/t/${slug}/messages`);
+  revalidatePath(`/t/${slug}/customers/${customerId}`);
+}
+
 // ── Internal HTML builder ─────────────────────────────────────────────────
 
 function esc(s: string): string {
