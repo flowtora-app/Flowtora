@@ -52,6 +52,16 @@ export default async function WorkflowSettings({
             Guard the transitions that tend to cause expensive mistakes if skipped.
           </p>
           <div className="mt-3 space-y-2">
+            {/*
+              DUPLICATE-LABEL WARNING: `proofRequiresApproval` lives on
+              /settings/financial. That flag says "does the proof need
+              a customer sign-off at all?" This flag says "is an
+              approved proof a prerequisite for the PRODUCTION state
+              transition?" Distinct gates, overlapping language. Phase
+              4 (Settings collapse) unifies both under a single proof
+              approval matrix. See docs/transformation-plan.md §Phase
+              1 — Proof-approval duplication note.
+            */}
             <Checkbox
               name="requireProofBeforeProduction"
               label="Require an approved proof before an order can enter production"

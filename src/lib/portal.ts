@@ -1,5 +1,7 @@
 import { notFound } from "next/navigation";
+import { headers } from "next/headers";
 import { db } from "@/lib/db";
+import { checkPublicTokenRate, readClientIp } from "@/lib/public-rate-limit";
 import type { Customer, PortalToken, Tenant } from "@prisma/client";
 
 export type PortalContext = {
@@ -22,6 +24,20 @@ export async function resolvePortalToken(raw: string | undefined | null): Promis
   if (!raw || typeof raw !== "string") return null;
   // cuid() is ~25 chars; be generous but bounded to keep bogus lookups cheap.
   if (raw.length < 10 || raw.length > 200) return null;
+
+  // Phase 1 — public-token rate limit. First line of defense against
+  // brute-force scanners. Blocked requests return `null` (same as an
+  // invalid token) so we don't leak whether any particular token
+  // existed. See src/lib/public-rate-limit.ts.
+  try {
+    const hdrs = await headers();
+    const ip = readClientIp(hdrs);
+    const rate = checkPublicTokenRate({ ip, kind: "portal" });
+    if (!rate.ok) return null;
+  } catch {
+    // `headers()` throws outside a request scope (e.g. certain
+    // background jobs). Rate-limit is best-effort; fall through.
+  }
 
   const token = await db.portalToken.findUnique({
     where: { token: raw },

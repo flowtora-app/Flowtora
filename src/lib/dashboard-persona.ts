@@ -54,6 +54,10 @@ export function dashboardPersona(role: TenantRole): DashboardPersona {
     case "ACCOUNTING":
       return "finance";
     case "EMPLOYEE":
+    // CUSTOMER_PORTAL is a reserved-but-unassigned enum member (see
+    // docs/transformation-plan.md §Phase 1). This case is defensive —
+    // if a stray row ever carried the role, fall back to the minimal
+    // employee dashboard.
     case "CUSTOMER_PORTAL":
     default:
       return "employee";

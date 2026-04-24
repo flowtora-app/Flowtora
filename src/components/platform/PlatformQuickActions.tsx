@@ -43,9 +43,14 @@ const PLATFORM_ACTIONS: QuickAction[] = [
     icon: "◧",
   },
   {
+    // Announcements is a roadmap stub — the page loads and documents
+    // the intended shape but there is no Announcement model yet. Keep
+    // the quick action visible so staff can discover it, with a hint
+    // that flags the preview state. See docs/transformation-plan.md
+    // §Phase 1.
     label: "Announcements",
     href: "/platform/announcements",
-    hint: "Broadcast to tenants or specific segments",
+    hint: "Preview — model not yet wired up; see the page for current alternatives",
     icon: "◉",
   },
   {

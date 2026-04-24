@@ -1,8 +1,10 @@
 import * as React from "react";
 
 // Testimonial — pull-quote with attribution. One row of the marketing
-// trust layer. We deliberately render a placeholder persona rather
-// than a real customer until a signed quote is available.
+// trust layer. Until a signed real-customer quote is ready, consumers
+// of this component should pass a positioning-statement attribution
+// (e.g. `author="Our promise"`) rather than fabricating a customer —
+// see docs/transformation-plan.md §Phase 1.
 
 export interface TestimonialProps {
   quote: React.ReactNode;

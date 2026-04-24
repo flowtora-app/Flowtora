@@ -46,37 +46,25 @@ export default function AuthLayout({ children }: { children: React.ReactNode }) 
             </span>
           </Link>
 
+          {/* Positioning block. No fake testimonial — a real customer
+              quote will replace this when one is signed off. Tracked in
+              docs/transformation-plan.md §Phase 1. */}
           <div>
-            <blockquote
+            <div
               className="text-xl font-medium leading-snug"
               style={{ color: "var(--text-default)" }}
             >
-              &ldquo;We replaced three tools with Flowtora and finally have a
-              single place to look. Our install crews know what&apos;s coming
-              up next and our AR dropped by 22 days.&rdquo;
-            </blockquote>
-            <div className="mt-4 flex items-center gap-3">
-              <span
-                className="flex h-9 w-9 items-center justify-center rounded-full text-sm font-semibold"
-                style={{
-                  background: "var(--accent-primary)",
-                  color: "var(--accent-fg)",
-                }}
-              >
-                P
-              </span>
-              <div className="text-sm">
-                <div
-                  className="font-semibold"
-                  style={{ color: "var(--text-default)" }}
-                >
-                  Placeholder Name
-                </div>
-                <div style={{ color: "var(--text-muted)" }}>
-                  Owner · Placeholder Signs Co.
-                </div>
-              </div>
+              One place for quotes, orders, proofs, installs, and invoicing.
+              Built for sign and print shops — not adapted from a generic CRM.
             </div>
+            <ul
+              className="mt-6 space-y-2 text-sm"
+              style={{ color: "var(--text-muted)" }}
+            >
+              <li>• Customer portal with proof approval + online payment</li>
+              <li>• Production board, installs, and field-mode checklists</li>
+              <li>• Real-time A/R, cash forecast, and audit log</li>
+            </ul>
           </div>
 
           <div

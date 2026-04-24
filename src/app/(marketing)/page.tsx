@@ -438,14 +438,15 @@ export default async function LandingPage() {
         />
       </Section>
 
-      {/* 10. TESTIMONIAL */}
+      {/* 10. POSITIONING STATEMENT (not a fabricated testimonial —
+           a real signed customer quote will replace this when one is
+           ready, per docs/transformation-plan.md §Phase 1). */}
       <Section align="center">
         <div className="mx-auto max-w-3xl">
           <Testimonial
-            quote="We replaced three tools with Flowtora and finally have a single place to look. Our install crews know what's coming up next and our AR dropped by 22 days."
-            author="Placeholder Name"
-            role="Owner"
-            company="Placeholder Signs Co."
+            quote="One place for quotes, orders, proofs, installs, and invoicing. Built for sign and print shops — not adapted from a generic CRM."
+            author="Our promise"
+            role="Sales-to-cash for sign and print shops"
           />
         </div>
       </Section>

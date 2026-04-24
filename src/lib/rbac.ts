@@ -139,7 +139,12 @@ export const TENANT_ROLE_PERMISSIONS: Record<TenantRole, Permission[]> = {
     "files:upload",
     "locations:view",
   ],
-  CUSTOMER_PORTAL: [], // checked separately — portal users get a different access path
+  // Reserved enum value — never actually assigned to a Membership row.
+  // Customer portal access is token-based via `PortalToken`, not role-based.
+  // The empty array is intentional: even if a row ever did carry this role,
+  // it would grant no staff permissions. Scheduled for removal in a future
+  // phase (see docs/transformation-plan.md §Phase 1 risks/follow-ups).
+  CUSTOMER_PORTAL: [],
 };
 
 export function hasPermission(role: TenantRole, perm: Permission): boolean {

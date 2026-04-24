@@ -536,6 +536,11 @@ enum TenantRole {
   INSTALLER
   ACCOUNTING
   EMPLOYEE
+  // Reserved — never assigned to a Membership. Customer access is
+  // token-based (`PortalToken` / `ShareToken`), not role-based. Kept
+  // in the enum so existing databases don't require an enum migration;
+  // remove when a future Phase performs a coordinated Prisma migration.
+  // See docs/transformation-plan.md §Phase 1.
   CUSTOMER_PORTAL
 }
 

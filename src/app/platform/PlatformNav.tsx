@@ -24,6 +24,11 @@ type NavItem = {
   label: string;
   icon: IconName;
   exact?: boolean;
+  // Preview = feature is stubbed and lives on the roadmap. The route
+  // still loads for platform staff but the nav renders a small badge
+  // so no one is surprised when the page explains it isn't wired up.
+  // See docs/transformation-plan.md §Phase 1.
+  preview?: boolean;
 };
 
 type NavGroup = { label: string; items: NavItem[] };
@@ -53,7 +58,7 @@ const GROUPS: NavGroup[] = [
       { href: "/platform/support",       label: "Support",       icon: "Support" },
       { href: "/platform/feedback",      label: "Feedback",      icon: "MessageSquare" },
       { href: "/platform/readiness",     label: "Readiness",     icon: "Rocket" },
-      { href: "/platform/announcements", label: "Announcements", icon: "Megaphone" },
+      { href: "/platform/announcements", label: "Announcements", icon: "Megaphone", preview: true },
     ],
   },
   {
@@ -177,6 +182,19 @@ function PlatformNavItem({ item, active }: { item: NavItem; active: boolean }) {
     >
       <IconCmp size={16} className="ts-nav-icon" />
       <span className="ts-nav-label">{item.label}</span>
+      {item.preview ? (
+        <span
+          className="ml-auto rounded px-1.5 py-0.5 text-[10px] font-medium uppercase tracking-wide"
+          style={{
+            background: "var(--surface-2)",
+            color: "var(--text-muted)",
+            border: "1px solid var(--border-subtle)",
+          }}
+          title="Preview — feature is on the roadmap but not yet wired up"
+        >
+          Preview
+        </span>
+      ) : null}
     </Link>
   );
 }

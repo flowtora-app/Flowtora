@@ -101,8 +101,8 @@ export default async function PlatformSettingsPage() {
           href="/platform/feature-flags"
         />
         <LinkCard
-          title="Announcements"
-          body="Broadcast banners for release notes and maintenance."
+          title="Announcements (preview)"
+          body="Roadmap stub — the Announcement model isn't in Prisma yet; the page describes the intended shape and current alternatives."
           href="/platform/announcements"
         />
         <LinkCard

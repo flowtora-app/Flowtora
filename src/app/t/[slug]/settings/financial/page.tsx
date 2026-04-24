@@ -48,6 +48,19 @@ export default async function FinancialSettings({
             ]}
           />
         </div>
+        {/*
+          DUPLICATE-LABEL WARNING: there is a visually-similar checkbox on
+          /settings/workflow called `requireProofBeforeProduction`. The two
+          flags are NOT the same field — `proofRequiresApproval` gates
+          whether proofs need a customer sign-off at all, while the
+          workflow flag gates the production-state transition.
+
+          They can legitimately be configured differently but the label
+          collision causes support confusion. Phase 4 (Settings collapse)
+          unifies these under a single "proof approval matrix" in
+          /settings/money. See docs/transformation-plan.md §Phase 1 —
+          Proof-approval duplication note.
+        */}
         <Checkbox
           name="proofRequiresApproval"
           label="Require customer proof approval before production"

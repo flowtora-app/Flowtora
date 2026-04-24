@@ -1,7 +1,9 @@
+import { headers } from "next/headers";
 import { db } from "@/lib/db";
 import { formatDate } from "@/lib/format";
 import { statusColor, statusLabel, parseSelectedOptions } from "@/lib/quotes";
 import { respondToQuoteShare } from "@/app/actions/portal-public";
+import { checkPublicTokenRate, readClientIp } from "@/lib/public-rate-limit";
 import {
   InteractiveQuoteView,
   type InteractiveQuoteItem,
@@ -23,15 +25,26 @@ export default async function PublicQuoteSharePage({
   const { token } = await params;
   const sp = await searchParams;
 
-  const quote = await db.quote.findUnique({
-    where: { shareToken: token },
-    include: {
-      items: { orderBy: { sortOrder: "asc" } },
-      sections: { orderBy: { sortOrder: "asc" } },
-      tenant:   { select: { name: true, currency: true } },
-      customer: { select: { name: true } },
-    },
+  // Phase 1 — public-token rate limit. Rate-limited callers see the
+  // same "link is no longer valid" screen as an invalid token, so we
+  // don't leak token-existence information. See
+  // src/lib/public-rate-limit.ts.
+  const rate = checkPublicTokenRate({
+    ip: readClientIp(await headers()),
+    kind: "quote",
   });
+
+  const quote = rate.ok
+    ? await db.quote.findUnique({
+        where: { shareToken: token },
+        include: {
+          items: { orderBy: { sortOrder: "asc" } },
+          sections: { orderBy: { sortOrder: "asc" } },
+          tenant:   { select: { name: true, currency: true } },
+          customer: { select: { name: true } },
+        },
+      })
+    : null;
 
   if (!quote) {
     return (

@@ -11,7 +11,9 @@
 // other.
 
 import { notFound } from "next/navigation";
+import { headers } from "next/headers";
 import { db } from "@/lib/db";
+import { checkPublicTokenRate, readClientIp } from "@/lib/public-rate-limit";
 import type { ShareToken, ShareTokenKind } from "@prisma/client";
 
 export type ShareContext = {
@@ -40,6 +42,19 @@ export async function resolveShareToken(
 ): Promise<ShareContext | null> {
   if (!raw || typeof raw !== "string") return null;
   if (raw.length < 10 || raw.length > 200) return null;
+
+  // Phase 1 — public-token rate limit. Brute-force scanners get the
+  // same `null` outcome as an invalid token, preserving the no-leak
+  // property this resolver already had. See
+  // src/lib/public-rate-limit.ts.
+  try {
+    const hdrs = await headers();
+    const ip = readClientIp(hdrs);
+    const rate = checkPublicTokenRate({ ip, kind: "share" });
+    if (!rate.ok) return null;
+  } catch {
+    // Outside a request scope — best-effort; fall through.
+  }
 
   const row = await db.shareToken.findUnique({
     where: { token: raw },
