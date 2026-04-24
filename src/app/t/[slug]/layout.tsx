@@ -105,6 +105,7 @@ export default async function TenantLayout({
     currentMembership,
     activation,
     approvalsPending,
+    portalMessagesUnread,
   ] = await Promise.all([
     unreadCount(tenant.id, userId),
     // Top 8 most-recent notifications for the header bell popover.
@@ -142,6 +143,16 @@ export default async function TenantLayout({
     canApprove
       ? db.approvalRequest.count({ where: { tenantId: tenant.id, status: "PENDING" } }).catch(() => 0)
       : Promise.resolve(0),
+    // Unread inbound portal messages across all customers — drives the
+    // sidebar "Messages" badge. Cheap: one indexed count.
+    db.portalMessage.count({
+      where: {
+        tenantId: tenant.id,
+        direction: "INBOUND",
+        readAt:    null,
+        archivedAt: null,
+      },
+    }).catch(() => 0),
   ]);
   const attentionCount = attentionGroups ? totalAttentionCount(attentionGroups) : 0;
 
@@ -187,6 +198,7 @@ export default async function TenantLayout({
         { href: `${base}/dashboard`, label: "Dashboard", icon: "Dashboard" },
         { href: `${base}/attention`, label: "Needs attention", icon: "Attention", badge: attentionCount },
         { href: `${base}/approvals`, label: "Approvals", icon: "Approvals", badge: approvalsPending },
+        { href: `${base}/messages`,  label: "Messages",  icon: "MessageSquare", badge: portalMessagesUnread },
         { href: `${base}/tasks`,     label: "Tasks",     icon: "Tasks" },
       ],
     },

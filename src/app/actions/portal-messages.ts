@@ -156,6 +156,24 @@ export async function markPortalMessagesRead(slug: string, customerId: string) {
     data: { readAt: new Date() },
   });
   revalidatePath(`/t/${slug}/customers/${customerId}`);
+  revalidatePath(`/t/${slug}/messages`);
+}
+
+// Bulk "mark every unread inbound as read" — backs the centralized inbox
+// Mark-all-read button. Same permission gate as per-customer because the
+// data scope is identical.
+export async function markAllPortalMessagesRead(slug: string) {
+  const ctx = await requirePermission(slug, "customers:view");
+  await db.portalMessage.updateMany({
+    where: {
+      tenantId:   ctx.tenant.id,
+      direction:  "INBOUND",
+      readAt:     null,
+      archivedAt: null,
+    },
+    data: { readAt: new Date() },
+  });
+  revalidatePath(`/t/${slug}/messages`);
 }
 
 // ── Internal HTML builder ─────────────────────────────────────────────────
