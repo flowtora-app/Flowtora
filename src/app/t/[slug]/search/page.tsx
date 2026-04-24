@@ -188,7 +188,7 @@ export default async function SearchPage({
         sub:
           (row.customer?.name ? `${row.customer.name} · ` : "") +
           (row.completedAt ? "completed" : "open"),
-        href: `/t/${slug}/tasks`,
+        href: `/t/${slug}/inbox?chip=tasks&view=all`,
       })),
     });
   }

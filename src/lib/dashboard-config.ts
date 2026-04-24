@@ -88,7 +88,7 @@ export const PERSONA_CONFIG: Record<DashboardPersona, PersonaConfig> = {
       { label: "New customer", href: `/t/${slug}/customers/new`, hint: "Capture a walk-in", icon: "+", primary: true },
       { label: "Proofs sent",  href: `/t/${slug}/proofs?status=SENT`, hint: "Awaiting customer", icon: "✎" },
       { label: "Installs to confirm", href: `/t/${slug}/installs?status=SCHEDULED`, hint: "This week", icon: "☎" },
-      { label: "All tasks",    href: `/t/${slug}/tasks`, hint: "Open tickets", icon: "✓" },
+      { label: "All tasks",    href: `/t/${slug}/inbox?chip=tasks&view=all`, hint: "Open tickets", icon: "✓" },
     ],
     emptyState: {
       icon: "☎",
@@ -150,7 +150,7 @@ export const PERSONA_CONFIG: Record<DashboardPersona, PersonaConfig> = {
       { label: "Today's installs", href: `/t/${slug}/installs?scope=mine&when=today`, hint: "Your schedule today", icon: "📅", primary: true },
       { label: "This week",        href: `/t/${slug}/installs?scope=mine&when=week`, hint: "Your week ahead", icon: "≡" },
       { label: "Awaiting confirm", href: `/t/${slug}/installs?scope=mine&status=SCHEDULED`, hint: "Customer not confirmed", icon: "☎" },
-      { label: "My tasks",         href: `/t/${slug}/tasks?owner=me`, hint: "Your open items", icon: "✓" },
+      { label: "My tasks",         href: `/t/${slug}/inbox?chip=tasks`, hint: "Your open items", icon: "✓" },
     ],
     emptyState: {
       icon: "🚚",
@@ -186,7 +186,7 @@ export const PERSONA_CONFIG: Record<DashboardPersona, PersonaConfig> = {
       "task.overdue",
     ],
     quickActions: (slug) => [
-      { label: "My tasks",      href: `/t/${slug}/tasks?owner=me`, hint: "Your open items", icon: "✓", primary: true },
+      { label: "My tasks",      href: `/t/${slug}/inbox?chip=tasks`, hint: "Your open items", icon: "✓", primary: true },
       { label: "Active orders", href: `/t/${slug}/orders`,         hint: "On the floor",    icon: "≡" },
     ],
     emptyState: {

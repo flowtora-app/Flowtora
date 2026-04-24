@@ -47,7 +47,7 @@ export function SalesView({
           value={String(data.followUpsDue)}
           hint={`${data.myOpenTasks} open tasks total`}
           tone={data.followUpsDue > 5 ? "warning" : "default"}
-          href={`/t/${slug}/tasks?owner=me`}
+          href={`/t/${slug}/inbox?chip=tasks`}
         />
       </div>
 

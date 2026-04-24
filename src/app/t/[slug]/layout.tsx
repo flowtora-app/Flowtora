@@ -193,13 +193,21 @@ export default async function TenantLayout({
   const base = `/t/${slug}`;
   const sections: SidebarSection[] = [
     {
+      // Sprint 1 (Inbox consolidation): the five legacy inbox entries
+      // (attention/approvals/messages/tasks + notifications popover target)
+      // are now a single "Inbox" link. Chips inside the page handle the
+      // per-surface navigation. Badge sums action-items only — attention
+      // + messages + approvals — matching the pre-consolidation UX where
+      // tasks never surfaced a sidebar count.
       label: "Inbox",
       items: [
         { href: `${base}/dashboard`, label: "Dashboard", icon: "Dashboard" },
-        { href: `${base}/attention`, label: "Needs attention", icon: "Attention", badge: attentionCount },
-        { href: `${base}/approvals`, label: "Approvals", icon: "Approvals", badge: approvalsPending },
-        { href: `${base}/messages`,  label: "Messages",  icon: "MessageSquare", badge: portalMessagesUnread },
-        { href: `${base}/tasks`,     label: "Tasks",     icon: "Tasks" },
+        {
+          href:  `${base}/inbox`,
+          label: "Inbox",
+          icon:  "MessageSquare",
+          badge: attentionCount + portalMessagesUnread + approvalsPending,
+        },
       ],
     },
     {
@@ -251,8 +259,9 @@ export default async function TenantLayout({
     { id: "c-vendor",   label: "Add vendor",      sub: "New record", href: `${base}/vendors/new`,   icon: "Vendors",   keywords: ["new", "add", "supplier"] },
     { id: "c-product",  label: "Create product",  sub: "New record", href: `${base}/products/new`,  icon: "Products",  keywords: ["new", "add", "catalog"] },
     { id: "g-dashboard",label: "Go to dashboard", href: `${base}/dashboard`,  icon: "Dashboard" },
-    { id: "g-attention",label: "Go to needs attention", href: `${base}/attention`, icon: "Attention" },
-    { id: "g-tasks",    label: "Go to tasks",     href: `${base}/tasks`,      icon: "Tasks"    },
+    { id: "g-inbox",    label: "Go to inbox",     href: `${base}/inbox`,                     icon: "MessageSquare" },
+    { id: "g-attention",label: "Go to needs attention", href: `${base}/inbox?chip=attention`, icon: "Attention" },
+    { id: "g-tasks",    label: "Go to tasks",     href: `${base}/inbox?chip=tasks`,          icon: "Tasks"    },
     { id: "g-production", label: "Go to production board", href: `${base}/production`, icon: "Production" },
     { id: "g-reports",  label: "Go to reports",   href: `${base}/reports`,    icon: "Reports"  },
     { id: "g-settings", label: "Go to settings",  href: `${base}/settings`,   icon: "Settings" },

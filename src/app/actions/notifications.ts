@@ -19,7 +19,7 @@ export async function markNotificationRead(slug: string, notificationId: string)
     },
     data: { readAt: new Date() },
   });
-  revalidatePath(`/t/${slug}/notifications`);
+  revalidatePath(`/t/${slug}/inbox`);
   revalidatePath(`/t/${slug}`, "layout");
 }
 
@@ -29,7 +29,7 @@ export async function markAllNotificationsRead(slug: string) {
     where: { tenantId: ctx.tenant.id, userId: ctx.userId, readAt: null },
     data:  { readAt: new Date() },
   });
-  revalidatePath(`/t/${slug}/notifications`);
+  revalidatePath(`/t/${slug}/inbox`);
   revalidatePath(`/t/${slug}`, "layout");
 }
 
@@ -42,7 +42,7 @@ export async function dismissNotification(slug: string, notificationId: string) 
       userId:   ctx.userId,
     },
   });
-  revalidatePath(`/t/${slug}/notifications`);
+  revalidatePath(`/t/${slug}/inbox`);
   revalidatePath(`/t/${slug}`, "layout");
 }
 
@@ -55,6 +55,6 @@ export async function clearReadNotifications(slug: string) {
       readAt:   { not: null },
     },
   });
-  revalidatePath(`/t/${slug}/notifications`);
+  revalidatePath(`/t/${slug}/inbox`);
   revalidatePath(`/t/${slug}`, "layout");
 }

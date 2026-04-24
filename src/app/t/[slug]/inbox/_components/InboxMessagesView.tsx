@@ -15,17 +15,15 @@ import { InboxShortcuts } from "@/components/messages/InboxShortcuts";
 import { InboxReplyForm } from "@/components/messages/InboxReplyForm";
 import { AutoMarkRead } from "@/components/messages/AutoMarkRead";
 
-// Centralized portal-messages inbox — Gmail-style split pane.
-//
-// Left: conversation list (one row per customer, latest inbound first).
-// Right: full thread with reply form, archive button, and context header.
-// URL:   ?view=unread|all|archived · ?entity=proof|invoice|order|quote
-//        · ?q=<search> · ?c=<customerId>  (selected conversation)
-//
-// Client-side affordances:
-//   • Keyboard shortcuts (j/k navigate, r reply, e archive, / search, esc deselect)
-//   • Auto-mark-read when a conversation is opened
-//   • Optimistic reply-form reset after send (no full page reload)
+// Messages chip — Gmail-style split-pane for portal-originated customer
+// threads. Ported from /t/[slug]/messages with three differences:
+//   • URL schema scoped under chip=messages (all other params are preserved
+//     unchanged so old bookmarks with ?c=<id> still work once PR-2's
+//     redirects land).
+//   • basePath for the InboxShortcuts client bits points at /inbox so
+//     j/k navigation stays on the chip instead of bouncing to /messages.
+//   • "Mark all read" header button is preserved; the page-level
+//     typography is lighter (no h1 here — the inbox page owns the title).
 
 type View = "unread" | "all" | "archived";
 type Entity = "all" | "proof" | "order" | "invoice" | "quote" | "general";
@@ -38,31 +36,31 @@ const VIEWS: { value: View; label: string; hint: string }[] = [
 
 const ENTITIES: { value: Entity; label: string; dbValue: string | null }[] = [
   { value: "all",     label: "All types", dbValue: null       },
-  { value: "general", label: "General",   dbValue: "__NULL__" }, // sentinel — null relatedEntityType
+  { value: "general", label: "General",   dbValue: "__NULL__" },
   { value: "proof",   label: "Proofs",    dbValue: "Proof"    },
   { value: "order",   label: "Orders",    dbValue: "Order"    },
   { value: "invoice", label: "Invoices",  dbValue: "Invoice"  },
   { value: "quote",   label: "Quotes",    dbValue: "Quote"    },
 ];
 
-export default async function MessagesInboxPage({
-  params,
+export async function InboxMessagesView({
+  slug,
   searchParams,
 }: {
-  params: Promise<{ slug: string }>;
-  searchParams: Promise<{ q?: string; view?: View; entity?: Entity; c?: string }>;
+  slug: string;
+  searchParams: Record<string, string | undefined>;
 }) {
-  const { slug } = await params;
-  const sp = await searchParams;
   const ctx = await requirePermission(slug, "customers:view");
 
-  const view: View = VIEWS.some((v) => v.value === sp.view) ? (sp.view as View) : "unread";
-  const entity: Entity = ENTITIES.some((e) => e.value === sp.entity) ? (sp.entity as Entity) : "all";
-  const q = sp.q?.trim() ?? "";
-  const selectedCustomerId = sp.c ?? null;
+  const view: View = VIEWS.some((v) => v.value === searchParams.view)
+    ? (searchParams.view as View)
+    : "unread";
+  const entity: Entity = ENTITIES.some((e) => e.value === searchParams.entity)
+    ? (searchParams.entity as Entity)
+    : "all";
+  const q = searchParams.q?.trim() ?? "";
+  const selectedCustomerId = searchParams.c ?? null;
 
-  // Entity filter is applied to the inbound message rows. "general" means
-  // relatedEntityType is null; specific values map to the Prisma string.
   const entityMeta = ENTITIES.find((e) => e.value === entity)!;
   const entityWhere =
     entityMeta.dbValue === null
@@ -71,7 +69,6 @@ export default async function MessagesInboxPage({
       ? { relatedEntityType: null }
       : { relatedEntityType: entityMeta.dbValue };
 
-  // Latest inbound message per customer (conversation root).
   const listFilter = {
     tenantId:   ctx.tenant.id,
     direction:  "INBOUND" as const,
@@ -80,8 +77,8 @@ export default async function MessagesInboxPage({
     ...(q
       ? {
           OR: [
-            { subject: { contains: q, mode: "insensitive" as const } },
-            { body:    { contains: q, mode: "insensitive" as const } },
+            { subject:  { contains: q, mode: "insensitive" as const } },
+            { body:     { contains: q, mode: "insensitive" as const } },
             { customer: { name:  { contains: q, mode: "insensitive" as const } } },
             { customer: { email: { contains: q, mode: "insensitive" as const } } },
           ],
@@ -90,7 +87,7 @@ export default async function MessagesInboxPage({
   };
 
   const latestPerCustomer = await db.portalMessage.findMany({
-    where: listFilter,
+    where:    listFilter,
     distinct: ["customerId"],
     orderBy:  { createdAt: "desc" },
     take:     200,
@@ -102,13 +99,10 @@ export default async function MessagesInboxPage({
       readAt:     true,
       createdAt:  true,
       relatedEntityType: true,
-      customer: {
-        select: { id: true, name: true, email: true },
-      },
+      customer:   { select: { id: true, name: true, email: true } },
     },
   });
 
-  // Unread counts per customer (inbox-level, independent of entity filter).
   const customerIds = latestPerCustomer.map((m) => m.customerId);
   const unreadGroups = customerIds.length
     ? await db.portalMessage.groupBy({
@@ -127,7 +121,6 @@ export default async function MessagesInboxPage({
     unreadGroups.map((g) => [g.customerId, g._count._all]),
   );
 
-  // "Unread" view filters to conversations with unread inbounds.
   const rows = latestPerCustomer.filter((m) => {
     if (view === "unread") return (unreadByCustomer.get(m.customerId) ?? 0) > 0;
     return true;
@@ -135,13 +128,12 @@ export default async function MessagesInboxPage({
 
   const orderedCustomerIds = rows.map((r) => r.customerId);
 
-  // ── View-tab totals (ignore the entity filter so tabs stay stable) ────
   const [totalUnreadConvos, totalAllConvos, totalArchivedConvos] = await Promise.all([
     db.portalMessage
       .findMany({
         where: {
-          tenantId: ctx.tenant.id, direction: "INBOUND",
-          readAt: null, archivedAt: null,
+          tenantId:   ctx.tenant.id, direction: "INBOUND",
+          readAt:     null, archivedAt: null,
         },
         distinct: ["customerId"],
         select:   { customerId: true },
@@ -149,14 +141,14 @@ export default async function MessagesInboxPage({
       .then((r) => r.length),
     db.portalMessage
       .findMany({
-        where: { tenantId: ctx.tenant.id, direction: "INBOUND", archivedAt: null },
+        where:    { tenantId: ctx.tenant.id, direction: "INBOUND", archivedAt: null },
         distinct: ["customerId"],
         select:   { customerId: true },
       })
       .then((r) => r.length),
     db.portalMessage
       .findMany({
-        where: { tenantId: ctx.tenant.id, direction: "INBOUND", archivedAt: { not: null } },
+        where:    { tenantId: ctx.tenant.id, direction: "INBOUND", archivedAt: { not: null } },
         distinct: ["customerId"],
         select:   { customerId: true },
       })
@@ -169,7 +161,7 @@ export default async function MessagesInboxPage({
     archived: totalArchivedConvos,
   };
 
-  // ── Selected conversation (right pane) ─────────────────────────────────
+  // ── Selected conversation ──────────────────────────────────────────────
   let selected:
     | {
         customer: { id: string; name: string; email: string | null };
@@ -197,10 +189,7 @@ export default async function MessagesInboxPage({
     });
     if (customer) {
       const messages = await db.portalMessage.findMany({
-        where: {
-          tenantId:   ctx.tenant.id,
-          customerId: customer.id,
-        },
+        where:   { tenantId: ctx.tenant.id, customerId: customer.id },
         orderBy: { createdAt: "asc" },
         select: {
           id: true, direction: true, subject: true, body: true,
@@ -211,7 +200,6 @@ export default async function MessagesInboxPage({
       });
       const unreadCount = messages.filter((m) => m.direction === "INBOUND" && !m.readAt).length;
       const activeInbound = messages.filter((m) => m.direction === "INBOUND" && !m.archivedAt);
-      // Conversation considered archived when every inbound is archived.
       const isArchived =
         messages.some((m) => m.direction === "INBOUND") && activeInbound.length === 0;
       selected = {
@@ -226,36 +214,42 @@ export default async function MessagesInboxPage({
     }
   }
 
-  // ── URL helpers ────────────────────────────────────────────────────────
-  const currentParams = new URLSearchParams();
-  if (q)                   currentParams.set("q", q);
-  if (view !== "unread")   currentParams.set("view", view);
-  if (entity !== "all")    currentParams.set("entity", entity);
-  const preservedParams = currentParams.toString() ? `?${currentParams.toString()}` : "";
+  // ── URL helpers — always carry chip=messages ───────────────────────────
+  const baseSp = () => {
+    const p = new URLSearchParams();
+    p.set("chip", "messages");
+    return p;
+  };
+
+  const currentParams = baseSp();
+  if (q)                 currentParams.set("q", q);
+  if (view !== "unread") currentParams.set("view", view);
+  if (entity !== "all")  currentParams.set("entity", entity);
+  const preservedParams = `?${currentParams.toString()}`;
 
   const viewHref = (v: View) => {
-    const p = new URLSearchParams();
-    if (q)                   p.set("q", q);
-    if (entity !== "all")    p.set("entity", entity);
-    if (v !== "unread")      p.set("view", v);
-    const qs = p.toString();
-    return `/t/${slug}/messages${qs ? `?${qs}` : ""}`;
+    const p = baseSp();
+    if (q)                 p.set("q", q);
+    if (entity !== "all")  p.set("entity", entity);
+    if (v !== "unread")    p.set("view", v);
+    return `/t/${slug}/inbox?${p.toString()}`;
   };
 
   const entityHref = (e: Entity) => {
-    const p = new URLSearchParams();
-    if (q)                   p.set("q", q);
-    if (view !== "unread")   p.set("view", view);
-    if (e !== "all")         p.set("entity", e);
-    const qs = p.toString();
-    return `/t/${slug}/messages${qs ? `?${qs}` : ""}`;
+    const p = baseSp();
+    if (q)                 p.set("q", q);
+    if (view !== "unread") p.set("view", view);
+    if (e !== "all")       p.set("entity", e);
+    return `/t/${slug}/inbox?${p.toString()}`;
   };
 
   const rowHref = (customerId: string) => {
     const p = new URLSearchParams(currentParams);
     p.set("c", customerId);
-    return `/t/${slug}/messages?${p.toString()}`;
+    return `/t/${slug}/inbox?${p.toString()}`;
   };
+
+  const clearHref = `/t/${slug}/inbox?chip=messages${selectedCustomerId ? `&c=${selectedCustomerId}` : ""}`;
 
   const markAllAction = markAllPortalMessagesRead.bind(null, slug);
   const replyAction   = replyToPortalMessage.bind(null, slug);
@@ -265,26 +259,24 @@ export default async function MessagesInboxPage({
       <InboxShortcuts
         orderedCustomerIds={orderedCustomerIds}
         currentCustomerId={selectedCustomerId}
-        basePath={`/t/${slug}/messages`}
+        basePath={`/t/${slug}/inbox`}
         preservedParams={preservedParams}
       />
 
+      {/* Summary row + mark-all */}
       <div className="flex items-start justify-between gap-4">
-        <div>
-          <h1 className="text-2xl font-semibold">Messages</h1>
-          <p className="mt-1 text-sm" style={{ color: "var(--text-muted)" }}>
-            {totalUnreadConvos > 0
-              ? `${totalUnreadConvos} unread ${totalUnreadConvos === 1 ? "conversation" : "conversations"}`
-              : "You're all caught up."}
-            {" · "}
-            <span style={{ color: "var(--text-faint)" }}>
-              <kbd className="rounded border px-1 text-[10px]">j</kbd>/<kbd className="rounded border px-1 text-[10px]">k</kbd> navigate
-              {" · "}<kbd className="rounded border px-1 text-[10px]">r</kbd> reply
-              {" · "}<kbd className="rounded border px-1 text-[10px]">e</kbd> archive
-              {" · "}<kbd className="rounded border px-1 text-[10px]">/</kbd> search
-            </span>
-          </p>
-        </div>
+        <p className="text-sm" style={{ color: "var(--text-muted)" }}>
+          {totalUnreadConvos > 0
+            ? `${totalUnreadConvos} unread ${totalUnreadConvos === 1 ? "conversation" : "conversations"}`
+            : "You're all caught up on portal messages."}
+          {" · "}
+          <span style={{ color: "var(--text-faint)" }}>
+            <kbd className="rounded border px-1 text-[10px]">j</kbd>/<kbd className="rounded border px-1 text-[10px]">k</kbd> navigate
+            {" · "}<kbd className="rounded border px-1 text-[10px]">r</kbd> reply
+            {" · "}<kbd className="rounded border px-1 text-[10px]">e</kbd> archive
+            {" · "}<kbd className="rounded border px-1 text-[10px]">/</kbd> search
+          </span>
+        </p>
         {totalUnreadConvos > 0 && (
           <form action={markAllAction}>
             <button type="submit" className="ts-btn-secondary rounded-md px-3 py-2 text-sm">
@@ -294,7 +286,7 @@ export default async function MessagesInboxPage({
         )}
       </div>
 
-      <nav className="mt-4 flex flex-wrap gap-1 text-sm" aria-label="View">
+      <nav className="mt-4 flex flex-wrap gap-1 text-sm" aria-label="Message view">
         {VIEWS.map((v) => {
           const active = view === v.value;
           const count = viewCounts[v.value];
@@ -352,6 +344,7 @@ export default async function MessagesInboxPage({
       </div>
 
       <form className="mt-3 flex flex-wrap items-center gap-2 text-sm" method="get">
+        <input type="hidden" name="chip" value="messages" />
         <input
           id="inbox-search"
           name="q"
@@ -364,15 +357,15 @@ export default async function MessagesInboxPage({
             color: "var(--text-default)",
           }}
         />
-        {view !== "unread"  && <input type="hidden" name="view" value={view} />}
+        {view !== "unread"  && <input type="hidden" name="view"   value={view}   />}
         {entity !== "all"   && <input type="hidden" name="entity" value={entity} />}
-        {selectedCustomerId && <input type="hidden" name="c" value={selectedCustomerId} />}
+        {selectedCustomerId && <input type="hidden" name="c"      value={selectedCustomerId} />}
         <button type="submit" className="ts-btn-secondary rounded-md px-3 py-2">
           Search
         </button>
         {(q || view !== "unread" || entity !== "all") && (
           <Link
-            href={`/t/${slug}/messages${selectedCustomerId ? `?c=${selectedCustomerId}` : ""}`}
+            href={clearHref}
             className="rounded-md px-3 py-2 text-sm underline"
             style={{ color: "var(--text-muted)" }}
           >
@@ -381,9 +374,8 @@ export default async function MessagesInboxPage({
         )}
       </form>
 
-      {/* ── Split pane ────────────────────────────────────────────────── */}
+      {/* Split pane */}
       <div className="mt-5 grid gap-4 lg:grid-cols-[minmax(320px,380px)_1fr]">
-        {/* ── List (left) ─────────────────────────────────────────────── */}
         <div className={selectedCustomerId ? "hidden lg:block" : ""}>
           {rows.length === 0 ? (
             <Card>
@@ -391,7 +383,7 @@ export default async function MessagesInboxPage({
                 <EmptyState
                   title="No messages match your search"
                   description="Try a different keyword or clear the filters."
-                  actionHref={`/t/${slug}/messages`}
+                  actionHref={clearHref}
                   actionLabel="Clear filters"
                 />
               ) : view === "unread" ? (
@@ -415,7 +407,7 @@ export default async function MessagesInboxPage({
             </Card>
           ) : (
             <Card className="overflow-hidden p-0">
-              <ul className="max-h-[calc(100vh-280px)] overflow-y-auto">
+              <ul className="max-h-[calc(100vh-320px)] overflow-y-auto">
                 {rows.map((msg, idx) => {
                   const unread = unreadByCustomer.get(msg.customerId) ?? 0;
                   const isUnread = unread > 0;
@@ -470,10 +462,7 @@ export default async function MessagesInboxPage({
                               {msg.relatedEntityType && (
                                 <span
                                   className="rounded px-1.5 py-0.5 text-[9px] font-semibold uppercase tracking-wider"
-                                  style={{
-                                    background: "var(--surface-2)",
-                                    color: "var(--text-muted)",
-                                  }}
+                                  style={{ background: "var(--surface-2)", color: "var(--text-muted)" }}
                                 >
                                   {msg.relatedEntityType}
                                 </span>
@@ -507,7 +496,6 @@ export default async function MessagesInboxPage({
           )}
         </div>
 
-        {/* ── Detail (right) ──────────────────────────────────────────── */}
         <div className={selectedCustomerId ? "" : "hidden lg:block"}>
           {!selected ? (
             <Card>
@@ -537,7 +525,6 @@ export default async function MessagesInboxPage({
   );
 }
 
-// ── Detail pane (server component — client bits nested inside) ─────────────
 function ConversationDetail({
   slug,
   customer,
@@ -579,7 +566,6 @@ function ConversationDetail({
         unreadCount={unreadCount}
       />
 
-      {/* Header */}
       <div
         className="flex items-center justify-between gap-3 px-5 py-3"
         style={{ borderBottom: "1px solid var(--border-subtle)" }}
@@ -638,8 +624,7 @@ function ConversationDetail({
         </div>
       </div>
 
-      {/* Thread */}
-      <div className="max-h-[calc(100vh-480px)] space-y-3 overflow-y-auto px-5 py-4">
+      <div className="max-h-[calc(100vh-520px)] space-y-3 overflow-y-auto px-5 py-4">
         {messages.length === 0 ? (
           <p className="py-6 text-center text-sm" style={{ color: "var(--text-muted)" }}>
             No messages yet.
@@ -689,7 +674,6 @@ function ConversationDetail({
         )}
       </div>
 
-      {/* Reply */}
       {customer.email ? (
         <div
           className="space-y-3 px-5 py-4"
@@ -726,7 +710,6 @@ function truncate(s: string, max: number): string {
   return s.slice(0, max - 1).trimEnd() + "…";
 }
 
-// Compact date for the list ("Today 4:32 PM", "Yesterday", "Mar 12").
 function formatShortDate(d: Date): string {
   const now = new Date();
   const diffMs = now.getTime() - d.getTime();

@@ -112,7 +112,7 @@ export function NotificationsMenu({
             <span className="text-xs" style={{ color: "var(--text-faint)" }}>&nbsp;</span>
           )}
           <Link
-            href={`/t/${slug}/notifications`}
+            href={`/t/${slug}/inbox?chip=notifications`}
             className="text-xs font-medium underline"
             style={{ color: "var(--accent-primary)" }}
             onClick={() => onOpenChange(false)}

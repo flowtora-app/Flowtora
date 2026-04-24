@@ -59,7 +59,7 @@ export function DesignerView({ slug, data }: { slug: string; data: DesignerData 
           label="My open tasks"
           value={String(data.myOpenTasks)}
           tone={data.myOpenTasks > 5 ? "warning" : "default"}
-          href={`/t/${slug}/tasks?owner=me`}
+          href={`/t/${slug}/inbox?chip=tasks`}
         />
       </div>
     </>

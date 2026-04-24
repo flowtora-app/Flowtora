@@ -881,7 +881,7 @@ export default async function QuoteDetailPage({
               {pendingApproval.requestedById && (
                 <> by {memberMap.get(pendingApproval.requestedById)?.name ?? "a team member"}</>
               )}.{" "}
-              <Link href={`/t/${slug}/approvals`} className="underline">Open approvals inbox</Link>
+              <Link href={`/t/${slug}/inbox?chip=approvals`} className="underline">Open approvals inbox</Link>
             </div>
           ) : ctx.can("quotes:approve_exceptions") ? (
             <form action={approveAction} className="mt-3">

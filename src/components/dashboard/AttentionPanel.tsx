@@ -120,7 +120,7 @@ export function AttentionPanel({
           )}
         </div>
         <Link
-          href={`/t/${slug}/attention`}
+          href={`/t/${slug}/inbox?chip=attention`}
           className="text-xs font-medium"
           style={{ color: "var(--accent-primary)" }}
         >
@@ -216,7 +216,7 @@ function KindSection({
       </ul>
       {overflow > 0 && (
         <Link
-          href={`/t/${slug}/attention`}
+          href={`/t/${slug}/inbox?chip=attention`}
           className="mt-2 inline-block text-xs"
           style={{ color: "var(--accent-primary)" }}
         >

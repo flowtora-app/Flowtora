@@ -46,7 +46,7 @@ export function InstallerView({ slug, data }: { slug: string; data: InstallerDat
           label="My open tasks"
           value={String(data.myOpenTasks)}
           tone={data.myOpenTasks > 5 ? "warning" : "default"}
-          href={`/t/${slug}/tasks?owner=me`}
+          href={`/t/${slug}/inbox?chip=tasks`}
         />
       </div>
     </>

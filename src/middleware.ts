@@ -18,6 +18,16 @@ import { authConfig } from "@/auth.config";
 
 const { auth } = NextAuth(authConfig);
 
+// Sprint 1 (Inbox consolidation) — 308 redirects for the five legacy
+// routes that now live behind /t/[slug]/inbox chips. 308 (not 307) so
+// browsers + CDNs cache the redirect permanently. Old links in emails,
+// stored notifications, and anyone's bookmarks keep working.
+//
+// Query params are forwarded as-is and merged with the chip param. A
+// link like /t/acme/messages?c=cus_123 becomes
+// /t/acme/inbox?chip=messages&c=cus_123.
+const INBOX_LEGACY_RE = /^\/t\/([^/]+)\/(attention|approvals|messages|notifications|tasks)\/?$/;
+
 // Exact-match public paths. Anything in the marketing route group
 // (src/app/(marketing)/…) needs to be listed here so unauthenticated
 // visitors can actually navigate the site — previously only "/" was
@@ -63,6 +73,18 @@ const PUBLIC_PREFIXES = [
 export default auth((req) => {
   const { pathname } = req.nextUrl;
   const session = req.auth;
+
+  // Legacy inbox route redirects — handled before auth so an unauthed
+  // user bookmarking /t/foo/messages gets bounced to /inbox first, then
+  // login with the correct `next=` pointer. Permanent 308 so CDNs cache.
+  const legacyMatch = pathname.match(INBOX_LEGACY_RE);
+  if (legacyMatch) {
+    const [, slug, chip] = legacyMatch;
+    const url = req.nextUrl.clone();
+    url.pathname = `/t/${slug}/inbox`;
+    url.searchParams.set("chip", chip);
+    return NextResponse.redirect(url, 308);
+  }
 
   // Forward the pathname so server components / layouts can read it.
   const requestHeaders = new Headers(req.headers);

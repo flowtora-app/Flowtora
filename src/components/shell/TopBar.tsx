@@ -386,7 +386,7 @@ function QuickCreateMenu({
         <PopoverItem href={`/t/${slug}/invoices/new`} leftIcon={<Icon.Invoices size={14} />}>
           Invoice
         </PopoverItem>
-        <PopoverItem href={`/t/${slug}/tasks?new=1`} leftIcon={<Icon.Tasks size={14} />}>
+        <PopoverItem href={`/t/${slug}/inbox?chip=tasks&new=1`} leftIcon={<Icon.Tasks size={14} />}>
           Task
         </PopoverItem>
         <PopoverItem href={`/t/${slug}/products/new`} leftIcon={<Icon.Products size={14} />}>

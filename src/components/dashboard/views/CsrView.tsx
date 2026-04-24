@@ -34,13 +34,13 @@ export function CsrView({ slug, data }: { slug: string; data: CsrData }) {
         <DashboardStat
           label="Open customer tasks"
           value={String(data.openCustomerTasks)}
-          href={`/t/${slug}/tasks?scope=customer`}
+          href={`/t/${slug}/inbox?chip=tasks&view=all`}
         />
         <DashboardStat
           label="My open tasks"
           value={String(data.myOpenTasks)}
           tone={data.myOpenTasks > 5 ? "warning" : "default"}
-          href={`/t/${slug}/tasks?owner=me`}
+          href={`/t/${slug}/inbox?chip=tasks`}
         />
       </div>
 

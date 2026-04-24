@@ -156,7 +156,7 @@ export async function markPortalMessagesRead(slug: string, customerId: string) {
     data: { readAt: new Date() },
   });
   revalidatePath(`/t/${slug}/customers/${customerId}`);
-  revalidatePath(`/t/${slug}/messages`);
+  revalidatePath(`/t/${slug}/inbox`);
 }
 
 // Bulk "mark every unread inbound as read" — backs the centralized inbox
@@ -173,7 +173,7 @@ export async function markAllPortalMessagesRead(slug: string) {
     },
     data: { readAt: new Date() },
   });
-  revalidatePath(`/t/${slug}/messages`);
+  revalidatePath(`/t/${slug}/inbox`);
 }
 
 // Archive every message (both directions) in a customer's portal
@@ -189,7 +189,7 @@ export async function archiveConversation(slug: string, customerId: string) {
     },
     data: { archivedAt: new Date() },
   });
-  revalidatePath(`/t/${slug}/messages`);
+  revalidatePath(`/t/${slug}/inbox`);
   revalidatePath(`/t/${slug}/customers/${customerId}`);
 }
 
@@ -203,7 +203,7 @@ export async function unarchiveConversation(slug: string, customerId: string) {
     },
     data: { archivedAt: null },
   });
-  revalidatePath(`/t/${slug}/messages`);
+  revalidatePath(`/t/${slug}/inbox`);
   revalidatePath(`/t/${slug}/customers/${customerId}`);
 }
 

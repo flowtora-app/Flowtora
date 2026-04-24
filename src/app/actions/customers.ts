@@ -495,14 +495,14 @@ export async function createTask(slug: string, formData: FormData) {
         body:       task.description,
         entityType: "Task",
         entityId:   task.id,
-        link:       `/t/${slug}/tasks`,
+        link:       `/t/${slug}/inbox?chip=tasks`,
       },
       { excludeUserId: ctx.userId },
     );
   }
 
   if (customerId) revalidatePath(`/t/${slug}/customers/${customerId}`);
-  revalidatePath(`/t/${slug}/tasks`);
+  revalidatePath(`/t/${slug}/inbox`);
 }
 
 export async function toggleTask(slug: string, taskId: string) {
@@ -528,13 +528,13 @@ export async function toggleTask(slug: string, taskId: string) {
         title:      `Task completed: ${t.title}`,
         entityType: "Task",
         entityId:   t.id,
-        link:       `/t/${slug}/tasks`,
+        link:       `/t/${slug}/inbox?chip=tasks`,
       },
       { excludeUserId: ctx.userId },
     );
   }
 
-  revalidatePath(`/t/${slug}/tasks`);
+  revalidatePath(`/t/${slug}/inbox`);
   if (t.customerId) revalidatePath(`/t/${slug}/customers/${t.customerId}`);
 }
 
@@ -543,7 +543,7 @@ export async function deleteTask(slug: string, taskId: string) {
   const t = await db.task.findFirst({ where: { id: taskId, tenantId: ctx.tenant.id } });
   if (!t) return;
   await db.task.delete({ where: { id: t.id } });
-  revalidatePath(`/t/${slug}/tasks`);
+  revalidatePath(`/t/${slug}/inbox`);
   if (t.customerId) revalidatePath(`/t/${slug}/customers/${t.customerId}`);
 }
 

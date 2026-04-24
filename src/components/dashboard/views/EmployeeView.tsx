@@ -24,7 +24,7 @@ export function EmployeeView({
           label="My open tasks"
           value={String(data.myOpenTasks)}
           tone={data.myOpenTasks > 5 ? "warning" : "default"}
-          href={`/t/${slug}/tasks?owner=me`}
+          href={`/t/${slug}/inbox?chip=tasks`}
         />
         <DashboardStat
           label="Completed this week"

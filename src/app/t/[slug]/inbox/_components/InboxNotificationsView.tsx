@@ -13,9 +13,10 @@ import {
 } from "@/app/actions/notifications";
 import type { Prisma } from "@prisma/client";
 
-// Domain grouping for the filter row. Each group is identified by the
-// prefix on `notification.type` (e.g. "portal." or "reminder."). "all"
-// is special — no filter applied.
+// Notifications chip — per-user in-app event feed. 9 domain chips +
+// unread/all views. Ported from /t/[slug]/notifications with URL params
+// rewrapped under chip=notifications.
+
 const DOMAIN_GROUPS = [
   { value: "all",        label: "All",          prefixes: [] as string[] },
   { value: "customer",   label: "Customer",     prefixes: ["portal.", "share."] },
@@ -30,27 +31,25 @@ const DOMAIN_GROUPS = [
 
 type DomainValue = (typeof DOMAIN_GROUPS)[number]["value"];
 
-function buildLink(slug: string, filter: string, domain: DomainValue): string {
+function buildLink(slug: string, view: string, domain: DomainValue): string {
   const params = new URLSearchParams();
-  if (filter !== "unread") params.set("filter", filter);
-  if (domain !== "all") params.set("domain", domain);
-  const q = params.toString();
-  return `/t/${slug}/notifications${q ? `?${q}` : ""}`;
+  params.set("chip", "notifications");
+  if (view !== "unread") params.set("view", view);
+  if (domain !== "all")  params.set("domain", domain);
+  return `/t/${slug}/inbox?${params.toString()}`;
 }
 
-export default async function NotificationsPage({
-  params,
+export async function InboxNotificationsView({
+  slug,
   searchParams,
 }: {
-  params: Promise<{ slug: string }>;
-  searchParams: Promise<{ filter?: string; domain?: string }>;
+  slug: string;
+  searchParams: Record<string, string | undefined>;
 }) {
-  const { slug } = await params;
-  const sp = await searchParams;
   const ctx = await requireTenant(slug);
-  const filter = sp.filter === "all" ? "all" : "unread";
-  const domain: DomainValue = (DOMAIN_GROUPS.map((d) => d.value) as string[]).includes(sp.domain ?? "")
-    ? (sp.domain as DomainValue)
+  const view = searchParams.view === "all" ? "all" : "unread";
+  const domain: DomainValue = (DOMAIN_GROUPS.map((d) => d.value) as string[]).includes(searchParams.domain ?? "")
+    ? (searchParams.domain as DomainValue)
     : "all";
 
   const domainDef = DOMAIN_GROUPS.find((d) => d.value === domain)!;
@@ -68,23 +67,20 @@ export default async function NotificationsPage({
     db.notification.findMany({
       where: {
         ...baseWhere,
-        ...(filter === "unread" ? { readAt: null } : {}),
+        ...(view === "unread" ? { readAt: null } : {}),
       },
       orderBy: { createdAt: "desc" },
-      take: 100,
+      take:    100,
     }),
     db.notification.count({ where: { ...baseWhere, readAt: null } }),
     db.notification.count({ where: baseWhere }),
-    // Count unread per domain so we can show small badges on the filter chips
-    // without hammering the DB — a single groupBy covers all domains.
     db.notification.groupBy({
-      by: ["type"],
-      where: { tenantId: ctx.tenant.id, userId: ctx.userId, readAt: null },
+      by:     ["type"],
+      where:  { tenantId: ctx.tenant.id, userId: ctx.userId, readAt: null },
       _count: { _all: true },
     }),
   ]);
 
-  // Fold the per-type counts up to the domain level.
   const unreadByDomain = new Map<DomainValue, number>();
   for (const group of DOMAIN_GROUPS) unreadByDomain.set(group.value, 0);
   let totalUnread = 0;
@@ -100,17 +96,15 @@ export default async function NotificationsPage({
   }
   unreadByDomain.set("all", totalUnread);
 
-  const markAll = markAllNotificationsRead.bind(null, slug);
+  const markAll   = markAllNotificationsRead.bind(null, slug);
   const clearRead = clearReadNotifications.bind(null, slug);
 
   return (
-    <div className="space-y-6">
-      <div>
-        <h1 className="text-2xl font-semibold">Notifications</h1>
-        <p className="mt-1 text-sm" style={{ color: "var(--muted)" }}>
-          {unreadTotal} unread · {allTotal} total{domain !== "all" ? ` · ${domainDef.label.toLowerCase()} only` : ""}
-        </p>
-      </div>
+    <div className="space-y-4">
+      <p className="text-sm" style={{ color: "var(--text-muted)" }}>
+        {unreadTotal} unread · {allTotal} total
+        {domain !== "all" ? ` · ${domainDef.label.toLowerCase()} only` : ""}
+      </p>
 
       {/* Domain filter chips */}
       <div className="flex flex-wrap gap-2 text-xs">
@@ -120,12 +114,12 @@ export default async function NotificationsPage({
           return (
             <Link
               key={g.value}
-              href={buildLink(slug, filter, g.value)}
+              href={buildLink(slug, view, g.value)}
               className="inline-flex items-center gap-1.5 rounded-full px-3 py-1"
               style={{
-                background: active ? "var(--accent)" : "transparent",
-                color:      active ? "white" : "var(--muted)",
-                border:     `1px solid ${active ? "var(--accent)" : "var(--border)"}`,
+                background: active ? "var(--accent-primary)" : "transparent",
+                color:      active ? "white" : "var(--text-muted)",
+                border:     `1px solid ${active ? "var(--accent-primary)" : "var(--border-default)"}`,
               }}
             >
               <span>{g.label}</span>
@@ -133,8 +127,8 @@ export default async function NotificationsPage({
                 <span
                   className="rounded-full px-1.5 text-[10px] font-semibold"
                   style={{
-                    background: active ? "rgba(255,255,255,0.2)" : "var(--panel)",
-                    color:      active ? "white" : "var(--text)",
+                    background: active ? "rgba(255,255,255,0.2)" : "var(--surface-1)",
+                    color:      active ? "white" : "var(--text-default)",
                   }}
                 >
                   {count > 99 ? "99+" : count}
@@ -151,9 +145,9 @@ export default async function NotificationsPage({
             href={buildLink(slug, "unread", domain)}
             className="rounded-md px-3 py-1.5"
             style={{
-              background: filter === "unread" ? "var(--accent)" : "transparent",
-              color:      filter === "unread" ? "white" : "var(--muted)",
-              border:     "1px solid var(--border)",
+              background: view === "unread" ? "var(--accent-primary)" : "transparent",
+              color:      view === "unread" ? "white" : "var(--text-muted)",
+              border:     "1px solid var(--border-default)",
             }}
           >
             Unread ({unreadTotal})
@@ -162,9 +156,9 @@ export default async function NotificationsPage({
             href={buildLink(slug, "all", domain)}
             className="rounded-md px-3 py-1.5"
             style={{
-              background: filter === "all" ? "var(--accent)" : "transparent",
-              color:      filter === "all" ? "white" : "var(--muted)",
-              border:     "1px solid var(--border)",
+              background: view === "all" ? "var(--accent-primary)" : "transparent",
+              color:      view === "all" ? "white" : "var(--text-muted)",
+              border:     "1px solid var(--border-default)",
             }}
           >
             All ({allTotal})
@@ -185,23 +179,23 @@ export default async function NotificationsPage({
       </div>
 
       <Card>
-        <CardHeader title={filter === "unread" ? "Unread" : "All notifications"} />
+        <CardHeader title={view === "unread" ? "Unread" : "All notifications"} />
         <ul>
           {items.length === 0 && (
-            <li className="px-5 py-8 text-center text-sm" style={{ color: "var(--muted)" }}>
-              {filter === "unread" ? "You're all caught up." : "No notifications yet."}
+            <li className="px-5 py-8 text-center text-sm" style={{ color: "var(--text-muted)" }}>
+              {view === "unread" ? "You're all caught up." : "No notifications yet."}
             </li>
           )}
           {items.map((n) => {
             const markRead = markNotificationRead.bind(null, slug, n.id);
-            const dismiss = dismissNotification.bind(null, slug, n.id);
-            const unread = !n.readAt;
+            const dismiss  = dismissNotification.bind(null, slug, n.id);
+            const unread   = !n.readAt;
             return (
               <li
                 key={n.id}
                 className="px-5 py-3"
                 style={{
-                  borderTop: "1px solid var(--border)",
+                  borderTop: "1px solid var(--border-subtle)",
                   background: unread ? "rgba(79, 140, 255, 0.05)" : "transparent",
                 }}
               >
@@ -214,7 +208,7 @@ export default async function NotificationsPage({
                       >
                         {notificationLabel(n.type)}
                       </span>
-                      <span className="text-xs" style={{ color: "var(--muted)" }}>
+                      <span className="text-xs" style={{ color: "var(--text-muted)" }}>
                         {relativeDays(n.createdAt) ?? formatDateTime(n.createdAt)}
                       </span>
                     </div>
@@ -228,7 +222,7 @@ export default async function NotificationsPage({
                       )}
                     </div>
                     {n.body && (
-                      <div className="mt-1 text-sm" style={{ color: "var(--muted)" }}>
+                      <div className="mt-1 text-sm" style={{ color: "var(--text-muted)" }}>
                         {n.body}
                       </div>
                     )}
@@ -236,7 +230,11 @@ export default async function NotificationsPage({
                   <div className="flex items-center gap-2">
                     {unread && (
                       <form action={markRead}>
-                        <button type="submit" className="text-xs underline" style={{ color: "var(--muted)" }}>
+                        <button
+                          type="submit"
+                          className="text-xs underline"
+                          style={{ color: "var(--text-muted)" }}
+                        >
                           Mark read
                         </button>
                       </form>

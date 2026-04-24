@@ -65,7 +65,7 @@ function revalidateParent(slug: string, kind: CommentParentKind, id: string) {
     case "proof":    // proofs render nested under orders — caller can pass orderId if needed
                      return revalidatePath(`/t/${slug}/orders`);
     case "install":  return revalidatePath(`/t/${slug}/installs/${id}`);
-    case "task":     return revalidatePath(`/t/${slug}/tasks`);
+    case "task":     return revalidatePath(`/t/${slug}/inbox`);
   }
 }
 
@@ -175,7 +175,7 @@ function parentDetailLink(slug: string, parent: CommentParent): string {
     case "order":    return `/t/${slug}/orders/${parent.orderId}`;
     case "proof":    return `/t/${slug}/orders`;
     case "install":  return `/t/${slug}/installs/${parent.installEventId}`;
-    case "task":     return `/t/${slug}/tasks`;
+    case "task":     return `/t/${slug}/inbox?chip=tasks`;
   }
 }
 

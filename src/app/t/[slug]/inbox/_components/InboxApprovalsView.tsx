@@ -7,32 +7,32 @@ import { formatMoney, formatDateTime } from "@/lib/format";
 import { approveRequest, rejectRequest, cancelRequest } from "@/app/actions/approvals";
 import { APPROVER_PERMISSION } from "@/lib/approval-requests";
 
-// Phase 22 Slice A — approval inbox.
+// Approvals chip — inbox for quote-exception approval requests.
 //
-// Two lists: pending requests the viewer can decide on, and requests they
-// themselves raised (so they can track or cancel their own). Approvers
-// (quotes:approve_exceptions) see the decision forms; everyone else sees
-// read-only rows.
+// Ported from /t/[slug]/approvals with two UX improvements from the
+// product-strategy doc §2.1 item 4:
+//   • "Your requests" is shown to EVERYONE (including approvers), so a
+//     manager who raised their own request can see and cancel it.
+//   • Pending + Decided + Your requests render in one vertical stack
+//     instead of a mid-page "Show recent decisions" toggle.
 
-export default async function ApprovalsPage({
-  params,
+export async function InboxApprovalsView({
+  slug,
   searchParams,
 }: {
-  params: Promise<{ slug: string }>;
-  searchParams: Promise<{ error?: string; notice?: string; filter?: string }>;
+  slug: string;
+  searchParams: Record<string, string | undefined>;
 }) {
-  const { slug } = await params;
-  const sp = await searchParams;
   const ctx = await requireTenant(slug);
   const canDecide = ctx.can(APPROVER_PERMISSION);
-  const filter = sp.filter === "decided" ? "decided" : "pending";
+  const showDecided = searchParams.view === "decided";
 
   const [pending, decided, mine] = await Promise.all([
     db.approvalRequest.findMany({
       where:   { tenantId: ctx.tenant.id, status: "PENDING" },
       orderBy: { createdAt: "asc" },
     }),
-    filter === "decided"
+    showDecided
       ? db.approvalRequest.findMany({
           where:   { tenantId: ctx.tenant.id, status: { in: ["APPROVED", "REJECTED", "CANCELED"] } },
           orderBy: { decidedAt: "desc" },
@@ -40,7 +40,7 @@ export default async function ApprovalsPage({
         })
       : Promise.resolve([]),
     db.approvalRequest.findMany({
-      where:   {
+      where: {
         tenantId:      ctx.tenant.id,
         requestedById: ctx.userId,
         status:        "PENDING",
@@ -49,8 +49,6 @@ export default async function ApprovalsPage({
     }),
   ]);
 
-  // Hydrate quote numbers/totals for the rows we'll render. Cheap batch
-  // lookup — keeps the UI data-dense without a per-row join.
   const quoteIds = Array.from(new Set(
     [...pending, ...decided, ...mine]
       .filter((r) => r.entityType === "Quote")
@@ -64,8 +62,6 @@ export default async function ApprovalsPage({
     : [];
   const quoteById = new Map(quotes.map((q) => [q.id, q] as const));
 
-  // Resolve requester names so the inbox reads "Jordan wants to send Q-1042"
-  // instead of a raw userId.
   const userIds = Array.from(new Set(
     [...pending, ...decided, ...mine].flatMap((r) => [r.requestedById, r.decidedById ?? ""]).filter(Boolean),
   ));
@@ -82,10 +78,15 @@ export default async function ApprovalsPage({
 
   const currency = ctx.tenant.currency;
 
-  const renderRow = (req: (typeof pending)[number], opts: { showDecide: boolean; showCancel: boolean }) => {
+  type Row = (typeof pending)[number];
+  const renderRow = (req: Row, opts: { showDecide: boolean; showCancel: boolean }) => {
     const quote = req.entityType === "Quote" ? quoteById.get(req.entityId) : null;
     return (
-      <li key={req.id} className="px-5 py-4" style={{ borderTop: "1px solid var(--border)" }}>
+      <li
+        key={req.id}
+        className="px-5 py-4"
+        style={{ borderTop: "1px solid var(--border-subtle)" }}
+      >
         <div className="flex flex-wrap items-start justify-between gap-3">
           <div className="min-w-0 flex-1">
             <div className="text-sm font-medium">
@@ -97,15 +98,15 @@ export default async function ApprovalsPage({
                 <span>{req.entityType} · {req.entityId.slice(0, 8)}</span>
               )}
               {quote && (
-                <span className="ml-2 text-xs" style={{ color: "var(--muted)" }}>
+                <span className="ml-2 text-xs" style={{ color: "var(--text-muted)" }}>
                   {quote.customer.name} · {formatMoney(Number(quote.total), currency)}
                 </span>
               )}
             </div>
-            <div className="mt-1 text-sm" style={{ color: "var(--text)" }}>
+            <div className="mt-1 text-sm" style={{ color: "var(--text-default)" }}>
               {req.reason}
             </div>
-            <div className="mt-1 text-[11px]" style={{ color: "var(--muted)" }}>
+            <div className="mt-1 text-[11px]" style={{ color: "var(--text-muted)" }}>
               Requested by {labelFor(req.requestedById)} · {formatDateTime(req.createdAt)}
               {req.status !== "PENDING" && (
                 <> · <span className="font-medium">{req.status}</span>
@@ -115,8 +116,10 @@ export default async function ApprovalsPage({
               )}
             </div>
             {req.decisionNote && (
-              <div className="mt-1 rounded-md px-2 py-1 text-xs"
-                style={{ background: "var(--surface-1)", color: "var(--text)" }}>
+              <div
+                className="mt-1 rounded-md px-2 py-1 text-xs"
+                style={{ background: "var(--surface-1)", color: "var(--text-default)" }}
+              >
                 “{req.decisionNote}”
               </div>
             )}
@@ -132,7 +135,11 @@ export default async function ApprovalsPage({
                       placeholder="Optional note"
                       maxLength={500}
                       className="rounded-md px-2 py-1 text-xs"
-                      style={{ border: "1px solid var(--border)", background: "var(--surface-0)", color: "var(--text)" }}
+                      style={{
+                        border: "1px solid var(--border-default)",
+                        background: "var(--surface-0)",
+                        color: "var(--text-default)",
+                      }}
                     />
                     <button
                       type="submit"
@@ -149,12 +156,16 @@ export default async function ApprovalsPage({
                       placeholder="Reason (optional)"
                       maxLength={500}
                       className="rounded-md px-2 py-1 text-xs"
-                      style={{ border: "1px solid var(--border)", background: "var(--surface-0)", color: "var(--text)" }}
+                      style={{
+                        border: "1px solid var(--border-default)",
+                        background: "var(--surface-0)",
+                        color: "var(--text-default)",
+                      }}
                     />
                     <button
                       type="submit"
                       className="rounded-md px-3 py-1 text-xs font-medium"
-                      style={{ border: "1px solid var(--border)", color: "#ef4444" }}
+                      style={{ border: "1px solid var(--border-default)", color: "#ef4444" }}
                     >
                       Reject
                     </button>
@@ -166,7 +177,7 @@ export default async function ApprovalsPage({
                   <button
                     type="submit"
                     className="rounded-md px-3 py-1 text-xs font-medium"
-                    style={{ border: "1px solid var(--border)", color: "var(--muted)" }}
+                    style={{ border: "1px solid var(--border-default)", color: "var(--text-muted)" }}
                   >
                     Cancel request
                   </button>
@@ -180,24 +191,25 @@ export default async function ApprovalsPage({
   };
 
   return (
-    <div className="space-y-6">
-      <div>
-        <h1 className="text-2xl font-semibold">Approvals</h1>
-        <p className="mt-1 text-sm" style={{ color: "var(--muted)" }}>
-          Requests for manager sign-off on discount or large-job quotes.
-        </p>
-      </div>
+    <div className="space-y-4">
+      <p className="text-sm" style={{ color: "var(--text-muted)" }}>
+        Requests for manager sign-off on discount or large-job quotes.
+      </p>
 
-      {sp.notice && (
-        <div className="rounded-md px-4 py-2 text-sm"
-          style={{ background: "#ecfdf5", color: "#065f46", border: "1px solid #a7f3d0" }}>
-          {sp.notice}
+      {searchParams.notice && (
+        <div
+          className="rounded-md px-4 py-2 text-sm"
+          style={{ background: "#ecfdf5", color: "#065f46", border: "1px solid #a7f3d0" }}
+        >
+          {searchParams.notice}
         </div>
       )}
-      {sp.error && (
-        <div className="rounded-md px-4 py-2 text-sm"
-          style={{ background: "#fef2f2", color: "#7f1d1d", border: "1px solid #fecaca" }}>
-          {sp.error}
+      {searchParams.error && (
+        <div
+          className="rounded-md px-4 py-2 text-sm"
+          style={{ background: "#fef2f2", color: "#7f1d1d", border: "1px solid #fecaca" }}
+        >
+          {searchParams.error}
         </div>
       )}
 
@@ -220,45 +232,45 @@ export default async function ApprovalsPage({
             }
           />
         ) : (
-          <ul className="divide-y" style={{ borderColor: "var(--border)" }}>
+          <ul>
             {pending.map((r) =>
               renderRow(r, {
                 showDecide: canDecide,
-                showCancel: !canDecide && r.requestedById === ctx.userId,
+                // Strategy §2.1 item 4: show cancel even to approvers when it's
+                // their own request. Old page hid this.
+                showCancel: r.requestedById === ctx.userId,
               }),
             )}
           </ul>
         )}
       </Card>
 
-      {!canDecide && mine.length > 0 && (
+      {mine.length > 0 && !canDecide && (
         <Card>
           <CardHeader title="Your requests" description="Requests you've raised that are still pending." />
-          <ul className="divide-y" style={{ borderColor: "var(--border)" }}>
-            {mine.map((r) => renderRow(r, { showDecide: false, showCancel: true }))}
-          </ul>
+          <ul>{mine.map((r) => renderRow(r, { showDecide: false, showCancel: true }))}</ul>
         </Card>
       )}
 
       <div className="text-xs">
         <Link
-          href={`/t/${slug}/approvals?filter=${filter === "pending" ? "decided" : "pending"}`}
+          href={`/t/${slug}/inbox?chip=approvals${showDecided ? "" : "&view=decided"}`}
           className="underline"
-          style={{ color: "var(--muted)" }}
+          style={{ color: "var(--text-muted)" }}
         >
-          {filter === "pending" ? "Show recent decisions" : "Back to pending"}
+          {showDecided ? "Hide recent decisions" : "Show recent decisions"}
         </Link>
       </div>
 
-      {filter === "decided" && (
+      {showDecided && (
         <Card>
           <CardHeader title="Recent decisions" description="Last 50 approval requests decided or canceled." />
           {decided.length === 0 ? (
-            <p className="px-5 py-4 text-sm" style={{ color: "var(--muted)" }}>
+            <p className="px-5 py-4 text-sm" style={{ color: "var(--text-muted)" }}>
               No decisions yet.
             </p>
           ) : (
-            <ul className="divide-y" style={{ borderColor: "var(--border)" }}>
+            <ul>
               {decided.map((r) => renderRow(r, { showDecide: false, showCancel: false }))}
             </ul>
           )}

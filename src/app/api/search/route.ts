@@ -246,7 +246,7 @@ export async function GET(req: Request) {
         id: t.id,
         label: t.title,
         sub: t.customer?.name,
-        href: `/t/${slug}/tasks`,
+        href: `/t/${slug}/inbox?chip=tasks&view=all`,
       })),
     });
   }

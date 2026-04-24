@@ -18,7 +18,7 @@ import { useRouter } from "next/navigation";
 type Props = {
   orderedCustomerIds: string[];
   currentCustomerId: string | null;
-  basePath: string;              // `/t/{slug}/messages`
+  basePath: string;              // `/t/{slug}/inbox` (from the Messages chip)
   preservedParams: string;       // `?view=all&q=...` — already includes leading `?` or empty
 };
 

@@ -35,9 +35,9 @@ export async function approveRequest(slug: string, requestId: string, formData: 
   const note = parsed.success ? emptyNote(parsed.data.note) : null;
 
   const req = await loadRequest(ctx.tenant.id, requestId);
-  if (!req) redirect(`/t/${slug}/approvals`);
+  if (!req) redirect(`/t/${slug}/inbox?chip=approvals`);
   if (req.status !== "PENDING") {
-    redirect(`/t/${slug}/approvals?error=${encodeURIComponent("This request was already decided.")}`);
+    redirect(`/t/${slug}/inbox?chip=approvals&error=${encodeURIComponent("This request was already decided.")}`);
   }
 
   const now = new Date();
@@ -87,11 +87,11 @@ export async function approveRequest(slug: string, requestId: string, formData: 
     metadata:   { targetType: req.entityType, targetId: req.entityId, note },
   });
 
-  revalidatePath(`/t/${slug}/approvals`);
+  revalidatePath(`/t/${slug}/inbox`);
   if (req.entityType === "Quote") {
     revalidatePath(`/t/${slug}/quotes/${req.entityId}`);
   }
-  redirect(`/t/${slug}/approvals`);
+  redirect(`/t/${slug}/inbox?chip=approvals`);
 }
 
 export async function rejectRequest(slug: string, requestId: string, formData: FormData) {
@@ -100,9 +100,9 @@ export async function rejectRequest(slug: string, requestId: string, formData: F
   const note = parsed.success ? emptyNote(parsed.data.note) : null;
 
   const req = await loadRequest(ctx.tenant.id, requestId);
-  if (!req) redirect(`/t/${slug}/approvals`);
+  if (!req) redirect(`/t/${slug}/inbox?chip=approvals`);
   if (req.status !== "PENDING") {
-    redirect(`/t/${slug}/approvals?error=${encodeURIComponent("This request was already decided.")}`);
+    redirect(`/t/${slug}/inbox?chip=approvals&error=${encodeURIComponent("This request was already decided.")}`);
   }
 
   await db.approvalRequest.update({
@@ -143,11 +143,11 @@ export async function rejectRequest(slug: string, requestId: string, formData: F
     metadata:   { targetType: req.entityType, targetId: req.entityId, note },
   });
 
-  revalidatePath(`/t/${slug}/approvals`);
+  revalidatePath(`/t/${slug}/inbox`);
   if (req.entityType === "Quote") {
     revalidatePath(`/t/${slug}/quotes/${req.entityId}`);
   }
-  redirect(`/t/${slug}/approvals`);
+  redirect(`/t/${slug}/inbox?chip=approvals`);
 }
 
 // The requester can cancel their own pending request (e.g. "never mind,
@@ -156,15 +156,15 @@ export async function cancelRequest(slug: string, requestId: string) {
   const ctx = await requireTenant(slug);
 
   const req = await loadRequest(ctx.tenant.id, requestId);
-  if (!req) redirect(`/t/${slug}/approvals`);
+  if (!req) redirect(`/t/${slug}/inbox?chip=approvals`);
   if (req.status !== "PENDING") {
-    redirect(`/t/${slug}/approvals?error=${encodeURIComponent("This request was already decided.")}`);
+    redirect(`/t/${slug}/inbox?chip=approvals&error=${encodeURIComponent("This request was already decided.")}`);
   }
 
   const isSelf = req.requestedById === ctx.userId;
   const isApprover = ctx.can(APPROVER_PERMISSION);
   if (!isSelf && !isApprover) {
-    redirect(`/t/${slug}/approvals?error=${encodeURIComponent("You can't cancel this request.")}`);
+    redirect(`/t/${slug}/inbox?chip=approvals&error=${encodeURIComponent("You can't cancel this request.")}`);
   }
 
   await db.approvalRequest.update({
@@ -185,9 +185,9 @@ export async function cancelRequest(slug: string, requestId: string) {
     metadata:   { targetType: req.entityType, targetId: req.entityId },
   });
 
-  revalidatePath(`/t/${slug}/approvals`);
+  revalidatePath(`/t/${slug}/inbox`);
   if (req.entityType === "Quote") {
     revalidatePath(`/t/${slug}/quotes/${req.entityId}`);
   }
-  redirect(`/t/${slug}/approvals`);
+  redirect(`/t/${slug}/inbox?chip=approvals`);
 }

@@ -103,7 +103,7 @@ export async function createOrderTask(slug: string, orderId: string, formData: F
   });
 
   revalidatePath(`/t/${slug}/orders/${orderId}`);
-  revalidatePath(`/t/${slug}/tasks`);
+  revalidatePath(`/t/${slug}/inbox`);
 }
 
 // ────────────────────────────────────────────────────────────
@@ -168,7 +168,7 @@ export async function addSubtask(slug: string, parentTaskId: string, formData: F
   }
 
   revalidatePath(`/t/${slug}/orders/${parent.orderId}`);
-  revalidatePath(`/t/${slug}/tasks`);
+  revalidatePath(`/t/${slug}/inbox`);
 }
 
 // ────────────────────────────────────────────────────────────
@@ -215,7 +215,7 @@ export async function updateTaskAssignment(slug: string, taskId: string, formDat
   }
 
   revalidatePath(`/t/${slug}/orders/${task.orderId}`);
-  revalidatePath(`/t/${slug}/tasks`);
+  revalidatePath(`/t/${slug}/inbox`);
 }
 
 // ────────────────────────────────────────────────────────────
@@ -260,7 +260,7 @@ export async function toggleTaskComplete(slug: string, taskId: string) {
   }
 
   revalidatePath(`/t/${slug}/orders/${task.orderId}`);
-  revalidatePath(`/t/${slug}/tasks`);
+  revalidatePath(`/t/${slug}/inbox`);
 }
 
 // ────────────────────────────────────────────────────────────
@@ -289,5 +289,5 @@ export async function deleteOrderTask(slug: string, taskId: string) {
   });
 
   revalidatePath(`/t/${slug}/orders/${task.orderId}`);
-  revalidatePath(`/t/${slug}/tasks`);
+  revalidatePath(`/t/${slug}/inbox`);
 }

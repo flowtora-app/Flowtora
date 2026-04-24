@@ -8,25 +8,32 @@ import { createTask, toggleTask, deleteTask } from "@/app/actions/customers";
 import { listActiveMembers, memberLookup } from "@/lib/members";
 import { formatDate, relativeDays, humanize } from "@/lib/format";
 
-export default async function TasksPage({
-  params,
+// Tasks chip — team to-do list. Gated on customers:view for read, and
+// customers:edit for the "Add task" form + delete buttons. Ported from
+// /t/[slug]/tasks with filter moved under chip=tasks&view=<mine|all|completed>.
+
+type View = "mine" | "all" | "completed";
+
+export async function InboxTasksView({
+  slug,
   searchParams,
 }: {
-  params: Promise<{ slug: string }>;
-  searchParams: Promise<{ filter?: "mine" | "all" | "completed" }>;
+  slug: string;
+  searchParams: Record<string, string | undefined>;
 }) {
-  const { slug } = await params;
-  const sp = await searchParams;
-  const filter = sp.filter ?? "mine";
   const ctx = await requirePermission(slug, "customers:view");
+  const view: View =
+    searchParams.view === "all"       ? "all"
+  : searchParams.view === "completed" ? "completed"
+  :                                    "mine";
 
   const where: { tenantId: string; assignedTo?: string; completedAt?: null | { not: null } } = {
     tenantId: ctx.tenant.id,
   };
-  if (filter === "mine") {
+  if (view === "mine") {
     where.assignedTo = ctx.userId;
     where.completedAt = null;
-  } else if (filter === "completed") {
+  } else if (view === "completed") {
     where.completedAt = { not: null };
   } else {
     where.completedAt = null;
@@ -36,9 +43,6 @@ export default async function TasksPage({
     db.task.findMany({
       where,
       orderBy: [{ dueDate: "asc" }, { createdAt: "desc" }],
-      // Phase 10 — pull the order too so order-scoped tasks can link back
-      // to the order detail (not just the customer). The production team
-      // creates tasks on orders more often than on customers now.
       include: {
         customer: true,
         order:    { select: { id: true, number: true } },
@@ -54,23 +58,32 @@ export default async function TasksPage({
     }),
   ]);
 
-  const create = createTask.bind(null, slug);
-  const canEdit = ctx.can("customers:edit");
+  const create   = createTask.bind(null, slug);
+  const canEdit  = ctx.can("customers:edit");
+
+  const viewHref = (v: View) => {
+    const sp = new URLSearchParams();
+    sp.set("chip", "tasks");
+    if (v !== "mine") sp.set("view", v);
+    return `/t/${slug}/inbox?${sp.toString()}`;
+  };
 
   return (
-    <div className="space-y-6">
+    <div className="space-y-4">
       <div className="flex items-center justify-between">
-        <h1 className="text-2xl font-semibold">Tasks</h1>
+        <p className="text-sm" style={{ color: "var(--text-muted)" }}>
+          Quick reminders tied to a customer, an order, or nothing in particular.
+        </p>
         <nav className="flex gap-1 text-sm">
           {(["mine", "all", "completed"] as const).map((f) => (
             <Link
               key={f}
-              href={`/t/${slug}/tasks?filter=${f}`}
+              href={viewHref(f)}
               className="rounded-md px-3 py-1.5"
               style={{
-                background: filter === f ? "var(--panel)" : "transparent",
-                border: "1px solid var(--border)",
-                color: "var(--text)",
+                background: view === f ? "var(--surface-2)" : "transparent",
+                border: "1px solid var(--border-default)",
+                color: "var(--text-default)",
               }}
             >
               {f === "mine" ? "My open" : f === "all" ? "All open" : "Completed"}
@@ -103,9 +116,9 @@ export default async function TasksPage({
                 name="priority"
                 defaultValue="NORMAL"
                 options={[
-                  { value: "LOW", label: "Low" },
+                  { value: "LOW",    label: "Low"    },
                   { value: "NORMAL", label: "Normal" },
-                  { value: "HIGH", label: "High" },
+                  { value: "HIGH",   label: "High"   },
                 ]}
               />
             </div>
@@ -122,14 +135,14 @@ export default async function TasksPage({
             <li className="px-5 py-2">
               <EmptyState
                 title={
-                  filter === "mine"     ? "You're all caught up"
-                  : filter === "completed" ? "No completed tasks yet"
-                                         : "No open tasks"
+                  view === "mine"      ? "You're all caught up"
+                : view === "completed" ? "No completed tasks yet"
+                :                        "No open tasks"
                 }
                 description={
-                  filter === "mine"
+                  view === "mine"
                     ? "Tasks assigned to you will show up here. Create one below or check All tasks for anything unassigned."
-                    : filter === "completed"
+                    : view === "completed"
                     ? "Tasks you've ticked off will collect here — a useful audit trail of what the team got done."
                     : "Tasks are the shop's to-do list — quick reminders tied to a customer, order, or nothing in particular."
                 }
@@ -137,28 +150,39 @@ export default async function TasksPage({
             </li>
           )}
           {tasks.map((t) => {
-            const toggle = toggleTask.bind(null, slug, t.id);
-            const remove = deleteTask.bind(null, slug, t.id);
+            const toggle  = toggleTask.bind(null, slug, t.id);
+            const remove  = deleteTask.bind(null, slug, t.id);
             const overdue = t.dueDate && !t.completedAt && t.dueDate < new Date();
             return (
-              <li key={t.id} className="flex items-start gap-3 px-5 py-3" style={{ borderTop: "1px solid var(--border)" }}>
+              <li
+                key={t.id}
+                className="flex items-start gap-3 px-5 py-3"
+                style={{ borderTop: "1px solid var(--border-subtle)" }}
+              >
                 <form action={toggle} className="mt-0.5">
                   <button type="submit" aria-label="toggle">
-                    <span style={{
-                      display: "inline-block", width: 16, height: 16, borderRadius: 4,
-                      border: "1px solid var(--border)",
-                      background: t.completedAt ? "var(--accent)" : "transparent",
-                    }} />
+                    <span
+                      style={{
+                        display: "inline-block", width: 16, height: 16, borderRadius: 4,
+                        border: "1px solid var(--border-default)",
+                        background: t.completedAt ? "var(--accent-primary)" : "transparent",
+                      }}
+                    />
                   </button>
                 </form>
                 <div className="flex-1">
-                  <div className={`text-sm ${t.completedAt ? "line-through opacity-60" : ""}`}>{t.title}</div>
-                  <div className="text-xs" style={{ color: overdue ? "#ff8b8b" : "var(--muted)" }}>
+                  <div className={`text-sm ${t.completedAt ? "line-through opacity-60" : ""}`}>
+                    {t.title}
+                  </div>
+                  <div
+                    className="text-xs"
+                    style={{ color: overdue ? "#ff8b8b" : "var(--text-muted)" }}
+                  >
                     {[
-                      t.order ? <Link key="o" href={`/t/${slug}/orders/${t.order.id}`} className="underline">{t.order.number}</Link> : null,
+                      t.order    ? <Link key="o" href={`/t/${slug}/orders/${t.order.id}`}       className="underline">{t.order.number}</Link> : null,
                       t.customer ? <Link key="c" href={`/t/${slug}/customers/${t.customer.id}`} className="underline">{t.customer.name}</Link> : null,
                       t.assignedTo ? memberMap.get(t.assignedTo)?.name : "Unassigned",
-                      t.dueDate ? `due ${formatDate(t.dueDate)} (${relativeDays(t.dueDate)})` : null,
+                      t.dueDate  ? `due ${formatDate(t.dueDate)} (${relativeDays(t.dueDate)})` : null,
                       humanize(t.priority),
                     ].filter(Boolean).map((part, i, arr) => (
                       <span key={i}>{part}{i < arr.length - 1 ? " · " : ""}</span>
@@ -167,7 +191,13 @@ export default async function TasksPage({
                 </div>
                 {canEdit && (
                   <form action={remove}>
-                    <button type="submit" className="text-xs underline" style={{ color: "#ff6b6b" }}>Delete</button>
+                    <button
+                      type="submit"
+                      className="text-xs underline"
+                      style={{ color: "#ff6b6b" }}
+                    >
+                      Delete
+                    </button>
                   </form>
                 )}
               </li>

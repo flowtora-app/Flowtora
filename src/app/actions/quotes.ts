@@ -615,7 +615,7 @@ export async function changeQuoteStatus(slug: string, quoteId: string, formData:
             requesterId: ctx.userId,
             title:       `Approval needed: quote ${quoteMeta?.number ?? ""}`.trim(),
             body:        reason,
-            link:        `/t/${slug}/approvals`,
+            link:        `/t/${slug}/inbox?chip=approvals`,
             entityType:  "Quote",
             entityId:    quoteId,
           });
@@ -790,7 +790,7 @@ export async function approveQuoteForSending(slug: string, quoteId: string) {
   });
 
   revalidatePath(`/t/${slug}/quotes/${quoteId}`);
-  revalidatePath(`/t/${slug}/approvals`);
+  revalidatePath(`/t/${slug}/inbox`);
   redirect(`/t/${slug}/quotes/${quoteId}`);
 }
 
