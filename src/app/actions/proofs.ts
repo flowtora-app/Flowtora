@@ -718,9 +718,11 @@ export async function changeProofStatus(slug: string, proofId: string, formData:
     if (ctxProof?.order.customer.email) {
       // Phase 15 Slice E — branded customer email. Find a live portal token
       // so we can deep-link the customer straight to the proof they need
-      // to act on; fall back to no URL when the customer has never been
-      // issued a portal token (staff can add one from the customer page).
-      const portal = await db.portalToken.findFirst({
+      // to act on. If they've never been issued one, auto-mint a
+      // never-expiring token so the email always includes a working link
+      // (otherwise customers got a linkless "your proof is ready" message
+      // that was useless to them).
+      let portal = await db.portalToken.findFirst({
         where: {
           tenantId: ctx.tenant.id,
           customerId: ctxProof.order.customerId,
@@ -733,9 +735,18 @@ export async function changeProofStatus(slug: string, proofId: string, formData:
         select: { token: true },
         orderBy: { createdAt: "desc" },
       });
-      const url = portal
-        ? `${appOrigin()}/portal/${portal.token}/proofs/${proofId}`
-        : null;
+      if (!portal) {
+        portal = await db.portalToken.create({
+          data: {
+            tenantId:   ctx.tenant.id,
+            customerId: ctxProof.order.customerId,
+            label:      "Customer portal",
+            createdBy:  ctx.userId,
+          },
+          select: { token: true },
+        });
+      }
+      const url = `${appOrigin()}/portal/${portal.token}/proofs/${proofId}`;
       await sendCustomerEmail({
         tenantId:     ctx.tenant.id,
         customerId:   ctxProof.order.customerId,

@@ -316,9 +316,14 @@ export async function sendCustomerEmail(args: SendOpts): Promise<void> {
   try {
     const tenant = await db.tenant.findUnique({
       where: { id: args.tenantId },
-      select: { emailFromName: true, emailReplyTo: true },
+      select: { name: true, emailFromName: true, emailReplyTo: true },
     });
-    fromName = tenant?.emailFromName ?? undefined;
+    // Prefer the tenant's explicit display name override. When they haven't
+    // set one, fall back to their shop name so customers still see the
+    // email come from "Acme Signs" instead of our platform brand. The
+    // envelope domain on RESEND_FROM_EMAIL is unchanged either way —
+    // DKIM/SPF stays intact.
+    fromName = tenant?.emailFromName?.trim() || tenant?.name?.trim() || undefined;
     replyTo  = tenant?.emailReplyTo  ?? undefined;
   } catch { /* fall through with platform defaults */ }
 
