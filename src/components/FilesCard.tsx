@@ -34,6 +34,10 @@ export function FilesCard({
   // but hide all mutation affordances (upload, archive, delete). Only
   // meaningful for proof parents; ignored elsewhere.
   locked = false,
+  // When true, suppress the built-in "paste a URL" upload form — callers
+  // that render their own richer uploader above the list (e.g. the proof
+  // detail page with drag & drop) pass this to avoid a duplicate input.
+  suppressUploadForm = false,
 }: {
   slug: string;
   files: FileRow[];
@@ -44,6 +48,7 @@ export function FilesCard({
   defaultKind?: (typeof FILE_KINDS)[number]["value"];
   memberMap?: MemberMap;
   locked?: boolean;
+  suppressUploadForm?: boolean;
 }) {
   const action = createFile.bind(null, slug);
 
@@ -75,7 +80,9 @@ export function FilesCard({
         description={
           `${active.length} ${active.length === 1 ? "file" : "files"}` +
           (archived.length > 0 ? ` · ${archived.length} archived` : "") +
-          ` · URLs only for now — blob uploads land in Phase 14.`
+          (suppressUploadForm
+            ? ""
+            : ` · URLs only for now — blob uploads land in Phase 14.`)
         }
       />
 
@@ -150,7 +157,7 @@ export function FilesCard({
         </details>
       )}
 
-      {canMutate && (
+      {canMutate && !suppressUploadForm && (
         <form action={action} className="space-y-3 px-5 py-4" style={{ borderTop: "1px solid var(--border)" }}>
           <input type="hidden" name={`${parent.kind}Id`} value={parent.id} />
           <input type="hidden" name="backUrl" value={backUrl} />

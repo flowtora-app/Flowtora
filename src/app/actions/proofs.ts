@@ -316,6 +316,130 @@ export async function createProofWithFiles(slug: string, formData: FormData) {
 }
 
 // ────────────────────────────────────────────────────────────
+// Attach more files to an EXISTING proof version
+// ────────────────────────────────────────────────────────────
+//
+// The version-detail page uses this when the designer wants to add or
+// replace artwork on a still-editable version (DRAFT or CHANGES_REQUESTED)
+// without starting a fresh version. Locked/superseded proofs are refused —
+// those are frozen by design. Each successful upload drops a REVISED ledger
+// entry so the version timeline shows `+ foo.pdf`, `+ bar.png`.
+
+export async function attachProofFiles(
+  slug: string,
+  proofId: string,
+  formData: FormData,
+) {
+  const ctx = await requirePermission(slug, "proofs:manage");
+  const proof = await db.proof.findFirst({
+    where: { id: proofId, tenantId: ctx.tenant.id },
+    select: {
+      id: true, orderId: true, status: true, lockedAt: true,
+      supersededAt: true, revisionRound: true,
+    },
+  });
+  if (!proof) return;
+  const back = `/t/${slug}/orders/${proof.orderId}/proofs/${proofId}`;
+
+  if (proof.lockedAt) {
+    redirect(`${back}?error=${encodeURIComponent("Proof is locked — files can't be changed. Start a new revision.")}`);
+  }
+  if (proof.supersededAt) {
+    redirect(`${back}?error=${encodeURIComponent("This version was superseded — attach files to the current version instead.")}`);
+  }
+  if (proof.status !== "DRAFT" && proof.status !== "CHANGES_REQUESTED") {
+    redirect(`${back}?error=${encodeURIComponent("Files can only be added while the version is a draft or has requested changes.")}`);
+  }
+
+  const rawFiles = formData
+    .getAll("files")
+    .filter((v): v is File => v instanceof File && v.size > 0);
+
+  if (rawFiles.length === 0) {
+    redirect(`${back}?error=${encodeURIComponent("Pick at least one file.")}`);
+  }
+  if (rawFiles.length > MAX_PROOF_UPLOAD_FILES) {
+    redirect(`${back}?error=${encodeURIComponent(`Too many files — max ${MAX_PROOF_UPLOAD_FILES} per upload.`)}`);
+  }
+  const oversized = rawFiles.find((f) => f.size > MAX_PROOF_UPLOAD_BYTES);
+  if (oversized) {
+    redirect(`${back}?error=${encodeURIComponent(`"${oversized.name}" exceeds ${MAX_PROOF_UPLOAD_BYTES / (1024 * 1024)} MB.`)}`);
+  }
+
+  if (!isStorageConfigured()) {
+    redirect(`${back}?error=${encodeURIComponent("File storage isn't configured on this deploy.")}`);
+  }
+
+  let uploadedCount = 0;
+  let totalBytes = 0;
+  for (const file of rawFiles) {
+    try {
+      const { key, contentType, size } = await putFile({
+        tenantId:   ctx.tenant.id,
+        scope:      "proofs",
+        ownerId:    proof.id,
+        file,
+        visibility: "public",
+      });
+      const url = publicUrlFor(key);
+      const isImage = contentType.startsWith("image/");
+      const fileRow = await db.file.create({
+        data: {
+          tenantId:     ctx.tenant.id,
+          uploaderId:   ctx.userId,
+          filename:     file.name,
+          storageUrl:   url,
+          thumbnailUrl: isImage ? url : null,
+          mimeType:     contentType,
+          sizeBytes:    size,
+          kind:         "PROOF",
+          proofId:      proof.id,
+        },
+      });
+      await db.proofDecision.create({
+        data: {
+          tenantId:        ctx.tenant.id,
+          proofId:         proof.id,
+          round:           proof.revisionRound,
+          decision:        "REVISED",
+          decidedByUserId: ctx.userId,
+          notes:           `+ ${file.name}`,
+          metadata:        { fileId: fileRow.id, kind: "PROOF", bytes: size, op: "attach" },
+        },
+      });
+      uploadedCount += 1;
+      totalBytes += size;
+    } catch (err) {
+      if (err instanceof StorageError) {
+        console.error("[attachProofFiles] storage error for", file.name, err.message);
+      } else {
+        console.error("[attachProofFiles] upload failed for", file.name, err);
+      }
+    }
+  }
+
+  await logAudit({
+    tenantId:   ctx.tenant.id,
+    userId:     ctx.userId,
+    action:     "proof.files_attached",
+    entityType: "Proof",
+    entityId:   proof.id,
+    metadata:   {
+      orderId:       proof.orderId,
+      uploadedFiles: uploadedCount,
+      totalBytes,
+    },
+  });
+
+  revalidatePath(back);
+  revalidatePath(`/t/${slug}/orders/${proof.orderId}`);
+
+  if (uploadedCount === 0) {
+    redirect(`${back}?error=${encodeURIComponent("Upload failed. Try again.")}`);
+  }
+}
+
+// ────────────────────────────────────────────────────────────
 // Phase 11 — Start revision (CHANGES_REQUESTED → new version v+1)
 // ────────────────────────────────────────────────────────────
 //

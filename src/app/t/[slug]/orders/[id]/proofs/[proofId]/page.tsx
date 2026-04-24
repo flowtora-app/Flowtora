@@ -22,9 +22,11 @@ import {
   changeProofStatus,
   startProofRevision,
   deleteProof,
+  attachProofFiles,
 } from "@/app/actions/proofs";
 import { issueProofShareToken, revokeShareToken } from "@/app/actions/share-tokens";
 import { ShareLinkPanel } from "@/components/share/ShareLinkPanel";
+import { AttachProofFilesForm } from "@/components/proofs/AttachProofFilesForm";
 
 const TRANSITION_LABELS: Partial<Record<string, string>> = {
   SENT:              "Send to customer",
@@ -86,6 +88,7 @@ export default async function ProofDetailPage({
   const del          = deleteProof.bind(null, slug, proof.id);
   const issueShare   = issueProofShareToken.bind(null, slug, orderId, proof.id);
   const revokeShare  = revokeShareToken.bind(null, slug);
+  const attach       = attachProofFiles.bind(null, slug, proof.id);
 
   const dueUrgency = (() => {
     if (!proof.dueAt) return null;
@@ -339,7 +342,20 @@ export default async function ProofDetailPage({
       {/* MAIN WORKSPACE — files preview + sidebar. */}
       <div className="grid gap-5 lg:grid-cols-[minmax(0,1fr)_320px]">
         <div className="min-w-0 space-y-5">
-          {/* Files — the visual heart of the page. */}
+          {/* Rich uploader — drag & drop, image previews, type chips.
+              Only mounted when the version is editable and the viewer can
+              upload. A locked or superseded version skips the uploader
+              entirely (FilesCard below still renders the frozen list). */}
+          {canManage && editable && (
+            <AttachProofFilesForm
+              action={attach}
+              existingFileCount={proof.files.filter((f) => !f.archivedAt).length}
+            />
+          )}
+
+          {/* Files list — archived + active artwork for this version. The
+              paste-a-URL form is suppressed; the dropzone above covers new
+              uploads, and archive/restore/remove controls stay on each row. */}
           <FilesCard
             slug={slug}
             files={proof.files}
@@ -350,6 +366,7 @@ export default async function ProofDetailPage({
             backUrl={`/t/${slug}/orders/${orderId}/proofs/${proof.id}`}
             title="Proof files"
             defaultKind="PROOF"
+            suppressUploadForm
           />
 
           {/* Customer-visible copy. */}
