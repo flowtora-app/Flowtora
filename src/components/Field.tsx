@@ -23,13 +23,28 @@ export function Field(
   );
 }
 
+export interface SelectOption {
+  value: string;
+  label: string;
+}
+
+export interface SelectOptionGroup {
+  label: string;
+  options: SelectOption[];
+}
+
+/** SelectField renders either a flat `options` list or a nested
+ *  `groups` list (mapped to <optgroup>). Pass one or the other; when
+ *  both are supplied, `groups` wins so a caller can preserve old
+ *  `options` code while switching incrementally. */
 export function SelectField(
-  props: React.SelectHTMLAttributes<HTMLSelectElement> & {
+  props: Omit<React.SelectHTMLAttributes<HTMLSelectElement>, "children"> & {
     label: string;
-    options: { value: string; label: string }[];
+    options?: SelectOption[];
+    groups?: SelectOptionGroup[];
   },
 ) {
-  const { label, options, ...rest } = props;
+  const { label, options, groups, ...rest } = props;
   return (
     <label className="block">
       <span className="mb-1 block text-sm">{label}</span>
@@ -38,7 +53,21 @@ export function SelectField(
         className="w-full rounded-md px-3 py-2 text-sm outline-none"
         style={inputStyle}
       >
-        {options.map((o) => <option key={o.value} value={o.value}>{o.label}</option>)}
+        {groups
+          ? groups.map((g) => (
+              <optgroup key={g.label} label={g.label}>
+                {g.options.map((o) => (
+                  <option key={o.value} value={o.value}>
+                    {o.label}
+                  </option>
+                ))}
+              </optgroup>
+            ))
+          : (options ?? []).map((o) => (
+              <option key={o.value} value={o.value}>
+                {o.label}
+              </option>
+            ))}
       </select>
     </label>
   );

@@ -3,6 +3,27 @@ import { saveWorkflow } from "@/app/actions/settings";
 import { Button, Field, Checkbox } from "@/components/Field";
 import { Card, CardHeader } from "@/components/Card";
 
+// Phase 4 (transformation) — one page, four approval gates.
+//
+// Before: `proofRequiresApproval` lived on /settings/financial with a
+// misleading "Require customer proof approval before production" label,
+// while the three `require…Before…` flags lived here. Operators rightly
+// read the two surfaces as overlapping and would toggle the wrong one.
+//
+// After: all four gates edit on this page, grouped into one "Production
+// gates" card. The matrix reads top-to-bottom as the work lifecycle —
+// (1) do proofs need a customer sign-off at all? → (2) can production
+// start without one? → (3) must a deposit be collected before
+// production? → (4) must a deposit be collected before install? The
+// labels are distinct enough that someone opening this page the first
+// time understands what each flag does without cross-referencing the
+// other.
+//
+// The `#production-gates` anchor on the section is the deep-link target
+// the financial page links to ("moved to Workflow → Rules & gates"),
+// and is also used by the onboarding wizard when it highlights proof
+// policy during shop setup.
+
 export default async function WorkflowSettings({
   params,
 }: {
@@ -15,10 +36,10 @@ export default async function WorkflowSettings({
   return (
     <Card>
       <CardHeader
-        title="Approval rules"
+        title="Rules & gates"
         description="Gate quote sending, production, and install scheduling on explicit approvals. Set a threshold to 0 to disable that rule."
       />
-      <form action={action} className="space-y-5 px-5 py-5">
+      <form action={action} className="space-y-6 px-5 py-5">
         <div>
           <h3 className="text-sm font-medium">Quote send gates</h3>
           <p className="mt-1 text-xs" style={{ color: "var(--text-muted)" }}>
@@ -46,22 +67,17 @@ export default async function WorkflowSettings({
           </div>
         </div>
 
-        <div>
-          <h3 className="text-sm font-medium">Downstream gates</h3>
+        <div id="production-gates" style={{ scrollMarginTop: 92 }}>
+          <h3 className="text-sm font-medium">Production gates</h3>
           <p className="mt-1 text-xs" style={{ color: "var(--text-muted)" }}>
-            Guard the transitions that tend to cause expensive mistakes if skipped.
+            The rules that decide when an order is allowed to move forward. Read top to bottom — each gate is evaluated in lifecycle order.
           </p>
           <div className="mt-3 space-y-2">
-            {/*
-              DUPLICATE-LABEL WARNING: `proofRequiresApproval` lives on
-              /settings/financial. That flag says "does the proof need
-              a customer sign-off at all?" This flag says "is an
-              approved proof a prerequisite for the PRODUCTION state
-              transition?" Distinct gates, overlapping language. Phase
-              4 (Settings collapse) unifies both under a single proof
-              approval matrix. See docs/transformation-plan.md §Phase
-              1 — Proof-approval duplication note.
-            */}
+            <Checkbox
+              name="proofRequiresApproval"
+              label="Require customers to approve proofs before they count as signed off"
+              defaultChecked={tenant.proofRequiresApproval}
+            />
             <Checkbox
               name="requireProofBeforeProduction"
               label="Require an approved proof before an order can enter production"

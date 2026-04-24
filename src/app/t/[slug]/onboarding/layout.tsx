@@ -1,12 +1,14 @@
 import { requireTenant } from "@/lib/tenant";
-import { OnboardingStepper } from "@/components/onboarding/OnboardingStepper";
-import { ONBOARDING_STEPS } from "./steps";
 
-// Phase 18 Slice D — onboarding chrome.
+// Phase 4 (transformation) — onboarding is a checklist, not a wizard.
 //
-// The layout owns the tenant fetch and hands the stepper the shared
-// list of steps. The stepper itself is a client component because it
-// drives the active highlight off `usePathname`.
+// We dropped the `OnboardingStepper` that used to live here. The
+// stepper made sense when each step owned its own form; now the steps
+// deep-link into Settings instead (see `./page.tsx`), so the progress
+// UI lives on the landing page as a checklist rather than a step bar.
+//
+// Layout just owns the max-width wrapper + tenant hydration. The
+// `/onboarding/done` completion page still renders inside this.
 
 export default async function OnboardingLayout({
   children,
@@ -16,15 +18,10 @@ export default async function OnboardingLayout({
   params: Promise<{ slug: string }>;
 }) {
   const { slug } = await params;
-  const { tenant } = await requireTenant(slug);
+  await requireTenant(slug);
 
   return (
     <div className="mx-auto max-w-3xl px-6 py-12">
-      <OnboardingStepper
-        tenantSlug={slug}
-        tenantName={tenant.name}
-        steps={ONBOARDING_STEPS}
-      />
       {children}
     </div>
   );

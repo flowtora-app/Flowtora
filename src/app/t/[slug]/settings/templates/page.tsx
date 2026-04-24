@@ -5,6 +5,7 @@ import { Card, CardHeader } from "@/components/Card";
 import { Button, Field, SelectField } from "@/components/Field";
 import { createTemplate } from "@/app/actions/checklists";
 import { getGroupContext } from "@/lib/franchise";
+import { TemplatesTabs } from "@/components/settings/TemplatesTabs";
 
 export default async function TemplatesPage({
   params,
@@ -46,6 +47,7 @@ export default async function TemplatesPage({
 
   return (
     <div className="space-y-6">
+      <TemplatesTabs slug={slug} />
       <Card>
         <CardHeader
           title="Checklist templates"

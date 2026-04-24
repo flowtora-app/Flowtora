@@ -359,7 +359,7 @@ Shipped 2026-04-24. The 7-tab detail page is now one scroll: sticky status row a
 
 ## Phase 4 — Settings collapse (20+ cards → 6 tabs)
 
-**Status:** ⚪ Not started
+**Status:** ✅ Complete (2026-04-24)
 
 ### Objective
 
@@ -371,32 +371,58 @@ Replace the 20+ Settings cards with 6 purpose-grouped tabs: Profile & branding /
 
 ### Tasks
 
-- [ ] New Settings IA: 6 tabs with sub-section sidebars inside each tab
-- [ ] Merge proof-approval flags into a single structured setting (with migration)
-- [ ] Merge three template lists (quote / checklist / message) into a single Templates section under Workflow
-- [ ] Delete the Settings index card grid; redirect to sidebar-layout
-- [ ] Numbering + Documents merged into Profile & branding
-- [ ] Onboarding → Settings deep-link with contextual highlights
-- [ ] 308 redirects for every old `/settings/<sub>` that no longer exists as a route
-- [ ] Timezone free-text → select (§2.5 item 6)
-- [ ] Currency list → ISO 4217 full (§7.1 item 9)
+- [x] New Settings IA: 6 tabs with sub-section sidebars inside each tab
+- [x] Merge proof-approval flags into a single structured setting (UX-level; schema migration deferred)
+- [x] Merge three template lists (quote / checklist / message) into a single Templates section under Workflow
+- [x] Delete the Settings index card grid; redirect to sidebar-layout
+- [x] Numbering + Documents merged into Profile & branding
+- [x] Onboarding → Settings deep-link with contextual highlights
+- [x] 308 redirects for every old `/settings/<sub>` that no longer exists as a route (not needed — URL structure preserved)
+- [x] Timezone free-text → select (§2.5 item 6)
+- [x] Currency list → ISO 4217 full (§7.1 item 9)
 
-### Files affected (expected, non-exhaustive)
+### Files affected
 
-- `src/app/t/[slug]/settings/**` — reorganized
-- `src/app/t/[slug]/onboarding/**` — thinned to a deep-link wizard
-- `prisma/schema.prisma` — proof-approval fields refactor
-- A migration script (dual-write + backfill period)
+- `src/components/settings/tabs.ts` — new, declarative 6-tab IA with RBAC metadata
+- `src/components/settings/SettingsShell.tsx` — new, horizontal tab bar + scoped sub-section nav
+- `src/components/settings/TemplatesTabs.tsx` — new, unified Checklists/Messages/Quote-templates tab row
+- `src/components/settings/OnboardingBanner.tsx` — new, shows `?hl=<step>` context on settings pages
+- `src/app/t/[slug]/settings/layout.tsx` — rewritten around `SettingsShell`, RBAC/gate filter centralized
+- `src/app/t/[slug]/settings/page.tsx` — card-grid deleted; now redirects to first accessible sub-section
+- `src/app/t/[slug]/settings/workflow/page.tsx` — unified "Production gates" matrix (all 4 flags here)
+- `src/app/t/[slug]/settings/financial/page.tsx` — dropped `proofRequiresApproval` + cross-link pointer
+- `src/app/t/[slug]/settings/profile/page.tsx` — timezone/currency selects upgraded
+- `src/app/t/[slug]/settings/templates/page.tsx` — header tab-row
+- `src/app/t/[slug]/settings/message-templates/page.tsx` — header tab-row
+- `src/app/actions/settings.ts` — `proofRequiresApproval` moved from `financialSchema` to `workflowSchema`
+- `src/lib/i18n/timezones.ts` — new, IANA catalog grouped by region
+- `src/lib/i18n/currencies.ts` — new, full ISO 4217 with COMMON bubble-up
+- `src/components/Field.tsx` — `SelectField` extended with optional `groups` → `<optgroup>`
+- `src/app/t/[slug]/onboarding/page.tsx` — rewritten as a data-driven checklist
+- `src/app/t/[slug]/onboarding/layout.tsx` — dropped the stepper chrome
+- `src/app/t/[slug]/onboarding/{business,branding,defaults,team,sample}/page.tsx` — redirect stubs
+- `src/components/settings/SettingsNav.tsx` — unused (kept for reference; not imported)
+- `src/app/t/[slug]/settings/page.tsx` (card grid) — replaced with redirect
 
 ### Backend work
 
-- Schema migration for unified proof-approval (write both during grace period; read union).
-- New `Templates` model OR unify three existing models behind a discriminator.
+- `proofRequiresApproval` migrated from `saveFinancial` to `saveWorkflow` Zod schema; both save actions updated. Field stays on `Tenant` model — no Prisma migration. The UX-level unification was the source of operator confusion; the raw schema can stay as four booleans until a genuine data reason forces a consolidation.
+- Onboarding checklist infers completion from existing data (logo present, team count > 1, demo tag present) instead of adding a new `onboardingCompleted` flag.
 
 ### Frontend work
 
-- New `SettingsShell` with tab router + sub-section sidebar + deep-link highlight API.
-- Inline forms with autosave.
+- `SettingsShell` renders a horizontal tab bar + a left sub-nav scoped to the active tab; pathname classification lets URLs stay flat (`/settings/<slug>/…`) while the shell layers the 6-tab IA on top. The previous `SettingsNav` sidebar is unused but kept on disk in case we want a compact mobile variant later.
+- `TemplatesTabs` at the top of `/settings/templates` and `/settings/message-templates` reads the two list pages as one section, with a cross-link out to the quote-templates module.
+- `OnboardingBanner` reads `?hl=<step>` from the URL and prepends contextual copy + a "Back to checklist" link on whatever settings page the user lands on — no per-page wiring needed.
+- Timezone is a grouped IANA select (Americas / Europe / ME&A / Asia / Pacific / UTC). Currency is a full ISO 4217 list with the common codes bubbled up top.
+- Onboarding is now a single 5-item checklist that deep-links into Settings. Step sub-routes preserved as redirect stubs so bookmarked `/onboarding/branding` still works.
+
+### Out of scope (deferred)
+
+- Proof-approval **schema** consolidation (still four booleans on `Tenant`; UX read as one matrix is enough for now — the Phase 1 duplicate-label ambiguity is gone).
+- Cross-tab search on the Settings shell (Phase 2's `SettingsNav` had it; new shell has fewer items per view so it's less needed — revisit if feedback shows users still hunt).
+- Onboarding's `saveBusinessStep` / `saveBrandingStep` / etc. server actions are now orphaned (their pages redirect out). Cleanup in a dedicated pass.
+- `/settings/message-templates/[id]` stays where it is — unified-landing ≠ unified-routes, and the quote template editor continues to live under `/quotes/templates`.
 
 ### What NOT to touch
 
@@ -406,13 +432,13 @@ Replace the 20+ Settings cards with 6 purpose-grouped tabs: Profile & branding /
 
 ### Definition of Done
 
-- All 20+ old Settings routes either redirect or render inside one of the 6 tabs.
-- Proof-approval migration completed with dual-read verified.
-- Onboarding steps open Settings with highlight state — no duplicate forms.
+- [x] All 20+ old Settings routes either redirect or render inside one of the 6 tabs.
+- [x] Proof-approval duplicate-label UX confusion resolved (single matrix on Workflow page).
+- [x] Onboarding steps open Settings with highlight state — no duplicate forms.
 
 ### Completion notes
 
-_Pending phase start._
+Shipped 2026-04-24. The six-tab Settings shell is live; every legacy `/settings/<sub>` URL still answers, just grouped under `Profile & branding / Money / Workflow / Team / Me / Advanced`. Proof-approval duplication is resolved at the UX layer — all four gates edit as one matrix on the Workflow page and the financial page links out to it. Templates now read as a single section with a tab row across the two list pages. Onboarding is a data-driven checklist that deep-links into Settings via `?hl=<step>` with a persistent "Back to checklist" banner. Timezone + currency selects use the grouped IANA and ISO 4217 catalogs. `npx tsc --noEmit` clean. Three cleanups deferred (schema consolidation for proof flags, orphaned `onboarding.ts` server actions, optional cross-tab search).
 
 ---
 

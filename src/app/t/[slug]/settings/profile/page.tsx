@@ -2,13 +2,15 @@ import { requirePermission } from "@/lib/tenant";
 import { saveProfile } from "@/app/actions/settings";
 import { Button, Field, SelectField } from "@/components/Field";
 import { Card, CardHeader } from "@/components/Card";
+import { TIMEZONE_GROUPS, isKnownTimezone } from "@/lib/i18n/timezones";
+import { ALL_CURRENCIES, isKnownCurrency } from "@/lib/i18n/currencies";
 
-const TIMEZONES = [
-  "UTC", "America/New_York", "America/Chicago", "America/Denver",
-  "America/Los_Angeles", "America/Phoenix", "America/Anchorage",
-  "Europe/London", "Europe/Paris", "Australia/Sydney",
-];
-const CURRENCIES = ["USD", "CAD", "EUR", "GBP", "AUD"];
+// Phase 4 (transformation) — timezone + currency selects upgraded from
+// a 10-row freeform list to the full IANA catalog (grouped) and ISO
+// 4217 (common codes up top). If a tenant is already saved on a zone/
+// currency not in our catalog (e.g. a legacy value), we prepend a
+// "Current (non-standard)" option so the form round-trips cleanly
+// instead of silently resetting them.
 
 export default async function ProfileSettings({
   params,
@@ -61,10 +63,42 @@ export default async function ProfileSettings({
           <Field label="Country" name="country" defaultValue={tenant.country ?? ""} />
         </div>
         <div className="grid grid-cols-2 gap-3">
-          <SelectField label="Timezone" name="timezone" defaultValue={tenant.timezone}
-            options={TIMEZONES.map((t) => ({ value: t, label: t }))} />
-          <SelectField label="Currency" name="currency" defaultValue={tenant.currency}
-            options={CURRENCIES.map((c) => ({ value: c, label: c }))} />
+          <SelectField
+            label="Timezone"
+            name="timezone"
+            defaultValue={tenant.timezone}
+            groups={[
+              // Round-trip safeguard: if the tenant's saved value isn't
+              // in our IANA catalog (older data or a zone we haven't
+              // added yet), show it as its own first group so the
+              // select doesn't silently reset on save.
+              ...(!isKnownTimezone(tenant.timezone)
+                ? [{
+                    label: "Current",
+                    options: [{ value: tenant.timezone, label: `${tenant.timezone} (non-standard)` }],
+                  }]
+                : []),
+              ...TIMEZONE_GROUPS.map((g) => ({
+                label: g.label,
+                options: g.zones,
+              })),
+            ]}
+          />
+          <SelectField
+            label="Currency"
+            name="currency"
+            defaultValue={tenant.currency}
+            options={[
+              // Same round-trip safeguard for a legacy non-ISO code.
+              ...(!isKnownCurrency(tenant.currency)
+                ? [{ value: tenant.currency, label: `${tenant.currency} (non-standard)` }]
+                : []),
+              ...ALL_CURRENCIES.map((c) => ({
+                value: c.value,
+                label: `${c.value} — ${c.label}`,
+              })),
+            ]}
+          />
         </div>
 
         {/* Phase 21 Slice D — date format and week start. Customer-facing

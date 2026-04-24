@@ -1,7 +1,15 @@
+import Link from "next/link";
 import { requirePermission } from "@/lib/tenant";
 import { saveFinancial } from "@/app/actions/settings";
-import { Button, Field, SelectField, Checkbox } from "@/components/Field";
+import { Button, Field, SelectField } from "@/components/Field";
 import { Card, CardHeader } from "@/components/Card";
+
+// Phase 4 (transformation) — `proofRequiresApproval` moved out of this
+// page and into the unified "Production gates" section on the workflow
+// settings page. Financial defaults now owns only tax + deposit % +
+// payment terms, which read as a coherent set without the orphan
+// approval toggle. The link at the bottom points users to where the
+// proof setting went.
 
 export default async function FinancialSettings({
   params,
@@ -48,25 +56,18 @@ export default async function FinancialSettings({
             ]}
           />
         </div>
-        {/*
-          DUPLICATE-LABEL WARNING: there is a visually-similar checkbox on
-          /settings/workflow called `requireProofBeforeProduction`. The two
-          flags are NOT the same field — `proofRequiresApproval` gates
-          whether proofs need a customer sign-off at all, while the
-          workflow flag gates the production-state transition.
-
-          They can legitimately be configured differently but the label
-          collision causes support confusion. Phase 4 (Settings collapse)
-          unifies these under a single "proof approval matrix" in
-          /settings/money. See docs/transformation-plan.md §Phase 1 —
-          Proof-approval duplication note.
-        */}
-        <Checkbox
-          name="proofRequiresApproval"
-          label="Require customer proof approval before production"
-          defaultChecked={tenant.proofRequiresApproval}
-        />
-        <div className="flex justify-end">
+        <div className="flex items-center justify-between gap-3 pt-2">
+          <p className="text-xs" style={{ color: "var(--text-muted)" }}>
+            Looking for proof-approval gates? They moved to{" "}
+            <Link
+              href={`/t/${slug}/settings/workflow#production-gates`}
+              className="underline"
+              style={{ color: "var(--accent-primary)" }}
+            >
+              Workflow → Rules &amp; gates
+            </Link>
+            .
+          </p>
           <Button type="submit">Save</Button>
         </div>
       </form>

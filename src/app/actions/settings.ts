@@ -90,11 +90,15 @@ export async function saveNumbering(slug: string, formData: FormData) {
   revalidatePath(`/t/${slug}/settings/numbering`);
 }
 
+// Phase 4 (transformation) — `proofRequiresApproval` used to live here
+// and had a confusing duplicate-label relationship with the workflow
+// page's production gates. Moved under the unified "Production gates"
+// section on /settings/workflow so all four approval flags edit as one
+// matrix. Financial settings now owns only tax + deposit + terms.
 const financialSchema = z.object({
   defaultTaxRate: z.coerce.number().min(0).max(1),
   defaultDepositPercent: z.coerce.number().int().min(0).max(100),
   defaultPaymentTerms: z.enum(["DUE_ON_RECEIPT", "NET_15", "NET_30", "NET_45", "NET_60"]),
-  proofRequiresApproval: z.preprocess((v) => v === "on" || v === "true", z.boolean()),
 });
 
 export async function saveFinancial(slug: string, formData: FormData) {
@@ -144,6 +148,12 @@ const workflowSchema = z.object({
   // because "disabled" is just 0 — easier to reason about than null/0/false.
   approvalDiscountThresholdPct: z.coerce.number().int().min(0).max(100),
   approvalLargeJobThreshold:    z.coerce.number().min(0).max(10_000_000),
+  // Phase 4 (transformation) — all four production/approval gates edit
+  // here. `proofRequiresApproval` moved over from the financial page so
+  // the UX reads as one matrix of "what has to be true before we can
+  // move the order forward?" instead of two pages with overlapping
+  // vocab (see Phase 1 proof-approval duplication note).
+  proofRequiresApproval:          z.preprocess((v) => v === "on" || v === "true", z.boolean()),
   requireProofBeforeProduction:   z.preprocess((v) => v === "on" || v === "true", z.boolean()),
   requireDepositBeforeProduction: z.preprocess((v) => v === "on" || v === "true", z.boolean()),
   requireDepositBeforeInstall:    z.preprocess((v) => v === "on" || v === "true", z.boolean()),

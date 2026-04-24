@@ -10,6 +10,7 @@ import {
 } from "@/lib/message-templates";
 import { createMessageTemplate } from "@/app/actions/message-templates";
 import { getGroupContext } from "@/lib/franchise";
+import { TemplatesTabs } from "@/components/settings/TemplatesTabs";
 
 export default async function MessageTemplatesPage({
   params,
@@ -56,6 +57,7 @@ export default async function MessageTemplatesPage({
 
   return (
     <div className="space-y-6">
+      <TemplatesTabs slug={slug} />
       {sp.error && (
         <div
           className="rounded-md px-4 py-2 text-sm"
