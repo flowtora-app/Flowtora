@@ -32,7 +32,8 @@ import {
   outstandingBalance,
 } from "@/lib/invoices";
 import { computeMargin, marginColor, expenseMethodLabel } from "@/lib/finance";
-import { proofStatusColor, proofStatusLabel } from "@/lib/proofs";
+import { ProofVersionCard } from "@/components/proofs/ProofVersionCard";
+import { ProofsStatusBanner } from "@/components/proofs/ProofsStatusBanner";
 import {
   installKindColor,
   installKindLabel,
@@ -53,7 +54,6 @@ import { getGroupContext } from "@/lib/franchise";
 import { FilesCard } from "@/components/FilesCard";
 import { ChecklistCard } from "@/components/ChecklistCard";
 import { CommentThread } from "@/components/CommentThread";
-import { createProof } from "@/app/actions/proofs";
 import {
   createOrderTask,
   addSubtask,
@@ -163,7 +163,21 @@ export default async function OrderDetailPage({
       files: { orderBy: { createdAt: "desc" } },
       proofs: {
         orderBy: { version: "desc" },
-        include: { _count: { select: { files: true } } },
+        include: {
+          _count: { select: { files: true } },
+          files: {
+            where: { archivedAt: null, kind: "PROOF" },
+            orderBy: { createdAt: "asc" },
+            take: 1,
+            select: {
+              id: true,
+              storageUrl: true,
+              thumbnailUrl: true,
+              mimeType: true,
+              filename: true,
+            },
+          },
+        },
       },
       installEvents: { orderBy: { scheduledStart: "asc" } },
       checklistItems: { orderBy: { sortOrder: "asc" } },
@@ -1619,43 +1633,48 @@ export default async function OrderDetailPage({
         )}
 
         {activeTab === "proofs" && (
-          <Card>
-            <CardHeader
-              title="Proofs"
-              description={`${order.proofs.length} ${order.proofs.length === 1 ? "version" : "versions"}`}
-            />
-            <ul>
-              {order.proofs.length === 0 && (
-                <li className="px-5 py-4 text-sm" style={{ color: "var(--text-muted)" }}>No proofs yet.</li>
+          <div className="space-y-5">
+            {/* Header row — title + "+ New version" CTA. */}
+            <div className="flex flex-wrap items-end justify-between gap-3">
+              <div>
+                <h2 className="text-lg font-semibold" style={{ color: "var(--text-default)" }}>
+                  Proofs
+                </h2>
+                <p className="mt-0.5 text-xs" style={{ color: "var(--text-muted)" }}>
+                  {order.proofs.length === 0
+                    ? "Share artwork for customer approval."
+                    : `${order.proofs.length} ${order.proofs.length === 1 ? "version" : "versions"} — latest first.`}
+                </p>
+              </div>
+              {canProofs && (
+                <Link href={`/t/${slug}/orders/${order.id}/proofs/new`}>
+                  <Button type="button">+ New proof version</Button>
+                </Link>
               )}
-              {order.proofs.map((p) => (
-                <li key={p.id} className="flex items-center justify-between px-5 py-3" style={{ borderTop: "1px solid var(--border-subtle)" }}>
-                  <div className="flex items-center gap-3">
-                    <Link href={`/t/${slug}/orders/${order.id}/proofs/${p.id}`} className="text-sm font-medium underline">
-                      v{p.version}
-                    </Link>
-                    <span className="rounded-full px-2 py-0.5 text-xs" style={{ background: proofStatusColor(p.status), color: "white" }}>
-                      {proofStatusLabel(p.status)}
-                    </span>
-                    {p.title && <span className="text-sm" style={{ color: "var(--text-muted)" }}>{p.title}</span>}
-                  </div>
-                  <div className="text-xs" style={{ color: "var(--text-muted)" }}>
-                    {p._count.files} {p._count.files === 1 ? "file" : "files"}
-                    {p.sentAt && <> · sent {formatDate(p.sentAt)}</>}
-                    {p.respondedAt && <> · responded {formatDate(p.respondedAt)}</>}
-                  </div>
-                </li>
-              ))}
-            </ul>
-            {canProofs && (
-              <form action={createProof.bind(null, slug)} className="space-y-3 px-5 py-4" style={{ borderTop: "1px solid var(--border-subtle)" }}>
-                <input type="hidden" name="orderId" value={order.id} />
-                <Field label="Title (optional)" name="title" placeholder="e.g. Storefront channel letters" />
-                <TextArea label="Internal description" name="description" rows={2} />
-                <Button type="submit" variant="secondary">Start new proof version</Button>
-              </form>
+            </div>
+
+            {/* Status banner — at-a-glance state of the current version. */}
+            <ProofsStatusBanner proofs={order.proofs} />
+
+            {/* Version cards, latest on top. */}
+            {order.proofs.length > 0 && (
+              <div className="space-y-3">
+                {order.proofs.map((p, i) => (
+                  <ProofVersionCard
+                    key={p.id}
+                    slug={slug}
+                    orderId={order.id}
+                    proof={p}
+                    isLatest={i === 0}
+                    isCurrent={i === 0 && !p.supersededAt}
+                    canManage={canProofs}
+                    uploaderName={memberMap.get(p.createdBy)?.name ?? null}
+                    customerEmail={order.customer.email}
+                  />
+                ))}
+              </div>
             )}
-          </Card>
+          </div>
         )}
 
         {activeTab === "install" && (
