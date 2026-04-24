@@ -82,25 +82,102 @@ export function proofReadyEmail(opts: CommonBrand & {
   dueAt?:       string | null;
   notes?:       string | null;
 }): Rendered {
-  const dueLine = opts.dueAt ? `\n\nWe'd love a response by ${opts.dueAt} to keep production on schedule.` : "";
-  const notesBlock = opts.notes ? `\n\n"${opts.notes}"` : "";
-  const urlLine   = opts.url   ? `\n\nReview proof: ${opts.url}` : "";
-  const text = [
+  // ── Plain-text version (mirrors the HTML structure) ──────────────────────
+  const textLines: string[] = [
     `Hi ${opts.customerName},`,
     ``,
-    `${opts.proofTitle} for order ${opts.orderNumber} is ready for your review. Approve the artwork or let us know what needs to change.${urlLine}${dueLine}${notesBlock}`,
+    `${opts.proofTitle} for order ${opts.orderNumber} is ready for your review.`,
     ``,
-    signoff(opts),
-  ].join("\n");
+    `From the secure review link you can:`,
+    `  • Approve the artwork and send it to production`,
+    `  • Request changes with notes on what to adjust`,
+    `  • Leave a comment or question for our team`,
+  ];
+  if (opts.url)   textLines.push(``, `Review your proof:`, opts.url);
+  if (opts.dueAt) textLines.push(``, `Please respond by ${opts.dueAt} so we can keep production on schedule.`);
+  if (opts.notes) textLines.push(``, `A note from the team:`, `"${opts.notes}"`);
+  textLines.push(``, signoff(opts));
+
+  // ── HTML version ─────────────────────────────────────────────────────────
+  // Email-safe markup only: inline styles, table-free card layout, no web
+  // fonts, no background images. Tested against Gmail / Outlook / Apple
+  // Mail default rendering.
+  const hero = `
+    <div style="background:linear-gradient(135deg,#111 0%,#2a2a33 100%);color:#fff;border-radius:10px;padding:22px 24px;margin:0 0 20px">
+      <div style="font-size:12px;letter-spacing:0.08em;text-transform:uppercase;color:#c8c8d0;margin:0 0 6px">
+        Proof ready for review
+      </div>
+      <div style="font-size:22px;font-weight:700;line-height:1.25;margin:0">
+        ${esc(opts.proofTitle)}
+      </div>
+      <div style="font-size:13px;color:#c8c8d0;margin:6px 0 0">
+        Order ${esc(opts.orderNumber)} · ${esc(opts.shopName)}
+      </div>
+    </div>
+  `;
+
+  const actionsPanel = `
+    <div style="margin:22px 0 4px;padding:14px 16px;background:#f6f7fb;border:1px solid #eaeaef;border-radius:10px">
+      <div style="font-size:13px;font-weight:600;color:#111;margin:0 0 8px">
+        What you can do from the review link
+      </div>
+      <table role="presentation" cellpadding="0" cellspacing="0" border="0" style="border-collapse:collapse;width:100%">
+        <tr>
+          <td style="padding:4px 0;font-size:13px;color:#333;vertical-align:top;width:22px">✓</td>
+          <td style="padding:4px 0;font-size:13px;color:#333"><strong>Approve</strong> the artwork and send it to production</td>
+        </tr>
+        <tr>
+          <td style="padding:4px 0;font-size:13px;color:#333;vertical-align:top;width:22px">✎</td>
+          <td style="padding:4px 0;font-size:13px;color:#333"><strong>Request changes</strong> with notes on what to adjust</td>
+        </tr>
+        <tr>
+          <td style="padding:4px 0;font-size:13px;color:#333;vertical-align:top;width:22px">💬</td>
+          <td style="padding:4px 0;font-size:13px;color:#333"><strong>Leave a comment</strong> or question for our team</td>
+        </tr>
+      </table>
+    </div>
+  `;
+
+  const dueBlock = opts.dueAt
+    ? `<div style="margin:16px 0 0;padding:10px 14px;background:#fff8e1;border:1px solid #f3e3a8;border-radius:8px;font-size:13px;color:#5a4a00">
+         <strong>Please respond by ${esc(opts.dueAt)}</strong> so we can keep production on schedule.
+       </div>`
+    : "";
+
+  const notesBlock = opts.notes
+    ? `<div style="margin:18px 0 0;padding:12px 14px;border-left:3px solid #111;background:#fafafa;color:#333;font-size:13px;white-space:pre-wrap">
+         <div style="font-size:11px;letter-spacing:0.06em;text-transform:uppercase;color:#888;margin:0 0 4px">A note from the team</div>
+         ${esc(opts.notes)}
+       </div>`
+    : "";
+
+  const fallbackLink = opts.url
+    ? `<p style="color:#888;font-size:12px;margin:18px 0 0;word-break:break-all">
+         If the button above doesn’t work, paste this link into your browser:<br/>
+         <a href="${esc(opts.url)}" style="color:#555">${esc(opts.url)}</a>
+       </p>`
+    : "";
+
   const html = wrapHtml(opts, `
-    <h1 style="margin:0 0 12px 0;font-size:20px">${esc(opts.proofTitle)} ready for review</h1>
-    <p>Hi ${esc(opts.customerName)},</p>
-    <p><strong>${esc(opts.proofTitle)}</strong> for order <strong>${esc(opts.orderNumber)}</strong> is ready for your review. Approve the artwork or let us know what needs to change.</p>
-    ${opts.url ? button(opts.url, "Review proof") : ""}
-    ${opts.dueAt ? `<p style="color:#666;font-size:13px">Please respond by <strong>${esc(opts.dueAt)}</strong> so we can keep production on schedule.</p>` : ""}
-    ${opts.notes ? `<blockquote style="border-left:3px solid #eee;padding:4px 12px;color:#444;margin:16px 0">${esc(opts.notes)}</blockquote>` : ""}
+    ${hero}
+    <p style="margin:0 0 10px 0">Hi ${esc(opts.customerName)},</p>
+    <p style="margin:0 0 6px 0">
+      <strong>${esc(opts.proofTitle)}</strong> for order <strong>${esc(opts.orderNumber)}</strong>
+      is ready for your review. Please take a look and let us know how it looks — your feedback is
+      what keeps this job moving.
+    </p>
+    ${opts.url ? button(opts.url, "Review & respond to proof") : ""}
+    ${actionsPanel}
+    ${dueBlock}
+    ${notesBlock}
+    ${fallbackLink}
   `);
-  return { subject: `${opts.proofTitle} for ${opts.orderNumber}`, html, text };
+
+  return {
+    subject: `Action needed: review ${opts.proofTitle} for order ${opts.orderNumber}`,
+    html,
+    text: textLines.join("\n"),
+  };
 }
 
 export function invoiceReadyEmail(opts: CommonBrand & {
