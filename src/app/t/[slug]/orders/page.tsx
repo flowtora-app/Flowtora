@@ -1,4 +1,5 @@
 import Link from "next/link";
+import { redirect } from "next/navigation";
 import { requirePermission } from "@/lib/tenant";
 import { db } from "@/lib/db";
 import { EmptyState } from "@/components/ui/EmptyState";
@@ -20,6 +21,7 @@ import { SplitShell } from "@/components/ui/SplitShell";
 import { OrderListRow, type OrderListRowData } from "@/components/orders/OrderListRow";
 import { OrderPanel, loadOrderForPanel } from "@/components/orders/OrderPanel";
 import type { OrderPanelTab } from "@/components/orders/OrderPanelTabs";
+import { OrdersViewToggle } from "@/components/orders/OrdersViewToggle";
 import type { Prisma } from "@prisma/client";
 
 type View = "all" | "queue" | "blocked" | "hotlist" | "overdue";
@@ -52,6 +54,15 @@ export default async function OrdersPage({
 }) {
   const { slug } = await params;
   const sp = await searchParams;
+
+  // Phase 5 — List ⇄ Board toggle. ?view=board is a shortcut into the
+  // production swimlane UI; everything else keeps its existing meaning
+  // (saved-view filters). Cast is narrow: `view` is typed to our own
+  // saved-view enum, but we accept the extra "board" sentinel value.
+  if ((sp.view as string | undefined) === "board") {
+    redirect(`/t/${slug}/production`);
+  }
+
   const ctx = await requirePermission(slug, "orders:view");
   const canManage = ctx.can("orders:manage");
   const canInvoice = ctx.can("invoices:manage");
@@ -361,6 +372,7 @@ export default async function OrdersPage({
           </p>
         </div>
         <div className="flex items-center gap-2">
+          <OrdersViewToggle slug={slug} active="list" />
           <Link
             href={`/t/${slug}/orders?assignee=mine${view !== "all" ? `&view=${view}` : ""}`}
             className="rounded-md px-3 py-1.5 text-xs"

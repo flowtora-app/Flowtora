@@ -86,7 +86,8 @@ import {
   stageStatusColor,
   stageStatusLabel,
 } from "@/lib/production";
-import { OrderDetailTabs, type OrderDetailTab } from "@/components/orders/OrderDetailTabs";
+import { OrderDetailTabs, mapLegacyTab, type OrderDetailTab } from "@/components/orders/OrderDetailTabs";
+import { OrderProgressBar } from "@/components/orders/OrderProgressBar";
 
 const TRANSITION_LABELS: Partial<Record<string, string>> = {
   IN_PRODUCTION: "Start production",
@@ -97,21 +98,11 @@ const TRANSITION_LABELS: Partial<Record<string, string>> = {
   NEW:           "Reopen",
 };
 
-// Inlined rather than imported from the client component — a value exported
-// from a "use client" module is a client reference and can't be called from
-// the server.
+// Delegates to the pure helper in the tabs component. Keeping the
+// thin wrapper around for readability at the call site (and so a
+// future `hl=<section>` deep link param can layer on top).
 function parseOrderDetailTab(raw: string | undefined): OrderDetailTab {
-  switch (raw) {
-    case "production":
-    case "proofs":
-    case "install":
-    case "tasks":
-    case "billing":
-    case "activity":
-      return raw;
-    default:
-      return "details";
-  }
+  return mapLegacyTab(raw);
 }
 
 export async function generateMetadata(
@@ -349,7 +340,7 @@ export default async function OrderDetailPage({
     } else if (order.status === "NEW" && activeBlockers.length > 0) {
       primaryCta = (
         <Link
-          href={`/t/${slug}/orders/${order.id}?tab=details`}
+          href={`/t/${slug}/orders/${order.id}?tab=work`}
           className="ts-focus inline-flex items-center gap-1.5 rounded-md px-4 py-2 text-sm font-medium transition-colors"
           style={{ background: "var(--danger-fg)", color: "white" }}
         >
@@ -375,19 +366,32 @@ export default async function OrderDetailPage({
   // its own cancelReason input) and any backwards moves are secondary too.
   const secondaryTransitions = transitions.filter((t) => t !== primaryTransitionUsed);
 
-  // Tab counts — shown as chips in the tab strip.
+  // Tab counts — shown as chips in the tab strip. With the 3-tab
+  // collapse, "Work" aggregates everything that used to live under
+  // details/production/proofs/install/tasks, so we sum the ones that
+  // read as "needs attention" (open defects + open tasks + open
+  // blockers). "Money" surfaces outstanding invoices. "Conversation"
+  // stays uncounted — a comment count would be noisy here.
   const openTasksCount = orderTasks.filter((t) => !t.completedAt).length;
   const openDefectsCount = order.defectReports.filter((d) => !d.resolvedAt).length;
   const outstandingInvoicesCount = order.invoices.filter(
     (inv) => outstandingBalance(inv) > 0,
   ).length;
+  const workAttentionCount =
+    openTasksCount + openDefectsCount + activeBlockers.length;
   const tabCounts: Partial<Record<OrderDetailTab, number>> = {
-    production: openDefectsCount,
-    proofs:     order.proofs.length,
-    install:    order.installEvents.length,
-    tasks:      openTasksCount,
-    billing:    outstandingInvoicesCount,
+    work:  workAttentionCount,
+    money: outstandingInvoicesCount,
   };
+
+  // Production stage completion — feeds the header progress bar so
+  // the connector between "In prod" and "Ready" fills proportionally.
+  const stageDoneCount = order.stages.filter(
+    (s) => s.status === "DONE" || s.status === "SKIPPED",
+  ).length;
+  const stagePct = order.stages.length > 0
+    ? Math.round((stageDoneCount / order.stages.length) * 100)
+    : 0;
 
   return (
     <div className="space-y-5">
@@ -476,7 +480,7 @@ export default async function OrderDetailPage({
             ))}
           </ul>
           <div className="mt-1 text-xs opacity-80">
-            Resolve these in the Details tab before starting production.
+            Resolve these in the Work tab before starting production.
           </div>
         </div>
       )}
@@ -609,6 +613,15 @@ export default async function OrderDetailPage({
             </div>
             {primaryCta && <div className="flex items-center gap-2">{primaryCta}</div>}
           </div>
+        </div>
+
+        {/* Progress pipeline — dot + connector diagram for the 5 forward
+            statuses. Gives an at-a-glance sense of where the job is. */}
+        <div
+          className="px-5 pb-4"
+          style={{ borderTop: "1px solid var(--border-subtle)", paddingTop: 12 }}
+        >
+          <OrderProgressBar status={order.status} stagePct={stagePct} />
         </div>
       </header>
 
@@ -808,7 +821,7 @@ export default async function OrderDetailPage({
       <div className="space-y-5 pt-2">
         <OrderDetailTabs active={activeTab} counts={tabCounts} />
 
-        {activeTab === "details" && (
+        {activeTab === "work" && (
           <div className="space-y-5">
             <Card>
               <CardHeader
@@ -1072,7 +1085,7 @@ export default async function OrderDetailPage({
           </div>
         )}
 
-        {activeTab === "production" && (
+        {activeTab === "work" && (
           <div className="space-y-5">
             <Card>
               <CardHeader
@@ -1626,13 +1639,13 @@ export default async function OrderDetailPage({
               parent={{ kind: "order", id: order.id }}
               canUpload={canUploadFiles}
               memberMap={memberMap}
-              backUrl={`/t/${slug}/orders/${order.id}?tab=production`}
+              backUrl={`/t/${slug}/orders/${order.id}?tab=work`}
               defaultKind="PRODUCTION_READY"
             />
           </div>
         )}
 
-        {activeTab === "proofs" && (
+        {activeTab === "work" && (
           <div className="space-y-5">
             {/* Header row — title + "+ New version" CTA. */}
             <div className="flex flex-wrap items-end justify-between gap-3">
@@ -1677,7 +1690,7 @@ export default async function OrderDetailPage({
           </div>
         )}
 
-        {activeTab === "install" && (
+        {activeTab === "work" && (
           <Card>
             <CardHeader
               title="Install calendar"
@@ -1714,7 +1727,7 @@ export default async function OrderDetailPage({
                 style={{ borderTop: "1px solid var(--border-subtle)" }}
               >
                 <input type="hidden" name="orderId" value={order.id} />
-                <input type="hidden" name="redirectTo" value={`/t/${slug}/orders/${order.id}?tab=install`} />
+                <input type="hidden" name="redirectTo" value={`/t/${slug}/orders/${order.id}?tab=work`} />
                 <SelectField
                   label="Kind"
                   name="kind"
@@ -1758,7 +1771,7 @@ export default async function OrderDetailPage({
           </Card>
         )}
 
-        {activeTab === "tasks" && (
+        {activeTab === "work" && (
           <Card>
             <CardHeader
               title="Tasks"
@@ -1969,7 +1982,7 @@ export default async function OrderDetailPage({
           </Card>
         )}
 
-        {activeTab === "billing" && (
+        {activeTab === "money" && (
           <div className="space-y-5">
             <Card>
               <CardHeader
@@ -2154,7 +2167,7 @@ export default async function OrderDetailPage({
           </div>
         )}
 
-        {activeTab === "activity" && (
+        {activeTab === "conversation" && (
           <div className="space-y-5">
             <Card>
               <CardHeader title="Timeline" description="Status milestones for this order." />
@@ -2209,7 +2222,7 @@ export default async function OrderDetailPage({
                   customerId={order.customerId}
                   customerEmail={order.customer.email}
                   orderId={order.id}
-                  returnTo={`/t/${slug}/orders/${order.id}?tab=activity`}
+                  returnTo={`/t/${slug}/orders/${order.id}?tab=conversation`}
                   templates={sendCtx.templates}
                   bag={sendCtx.bag}
                 />

@@ -1,5 +1,6 @@
 import Link from "next/link";
 import { requirePermission } from "@/lib/tenant";
+import { OrdersViewToggle } from "@/components/orders/OrdersViewToggle";
 import { db } from "@/lib/db";
 import { Card, CardHeader } from "@/components/Card";
 import { Button } from "@/components/Field";
@@ -306,6 +307,7 @@ export default async function ProductionBoardPage({
           </p>
         </div>
         <div className="flex items-center gap-2">
+          <OrdersViewToggle slug={slug} active="board" />
           <Link
             href={`/t/${slug}/settings/production`}
             className="rounded-md px-3 py-1.5 text-sm"
