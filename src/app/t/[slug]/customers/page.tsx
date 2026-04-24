@@ -12,19 +12,36 @@ import { loadHealthBundle } from "@/lib/opportunity-health-loader";
 import { computeOpportunityHealth, type HealthTier } from "@/lib/opportunity-health";
 import { loadTenantTags } from "@/lib/customer-tags";
 import { CustomersTable, type CustomersTableRow } from "@/components/crm/CustomersTable";
+import { PipelineBoard, type PipelineCard } from "@/components/customers/PipelineBoard";
 import { SavedViewPicker } from "@/components/ui/SavedViewPicker";
 import { listSavedViews } from "@/app/actions/saved-views";
 import type { Prisma } from "@prisma/client";
+
+// Phase 3 (transformation) — the customers list now supports two views:
+//   • `view=table`    (default) — the DataTable surface used since v1
+//   • `view=pipeline`         — a drag-drop kanban grouped by stage
+//
+// The board is intentionally light on filters: stage filtering is
+// meaningless (cards are already grouped by stage), so the board hides
+// that form control. Everything else (search, status, health, branch,
+// tag) still applies.
+
+type CustomersView = "table" | "pipeline";
+
+function parseView(raw: string | undefined): CustomersView {
+  return raw === "pipeline" ? "pipeline" : "table";
+}
 
 export default async function CustomersPage({
   params,
   searchParams,
 }: {
   params: Promise<{ slug: string }>;
-  searchParams: Promise<{ q?: string; stage?: string; status?: string; branch?: string; health?: string; tag?: string }>;
+  searchParams: Promise<{ q?: string; stage?: string; status?: string; branch?: string; health?: string; tag?: string; view?: string }>;
 }) {
   const { slug } = await params;
   const sp = await searchParams;
+  const view = parseView(sp.view);
   const ctx = await requirePermission(slug, "customers:view");
   const { tenant } = ctx;
 
@@ -123,6 +140,9 @@ export default async function CustomersPage({
           </p>
         </div>
         <div className="flex items-center gap-2">
+          {/* View toggle — table vs. pipeline kanban. Preserves every
+              other filter so switching views doesn't reset the page. */}
+          <ViewToggle slug={slug} sp={sp} view={view} />
           <SavedViewPicker
             slug={slug}
             entityKind="customers"
@@ -256,6 +276,31 @@ export default async function CustomersPage({
             }
           />
         </Card>
+      ) : view === "pipeline" ? (
+        <div className="mt-4">
+          <PipelineBoard
+            slug={slug}
+            stages={PIPELINE_STAGES.map((s) => ({ value: s.value, label: s.label, color: s.color }))}
+            cards={customers.map<PipelineCard>((c) => {
+              const report = healthReports.get(c.id);
+              return {
+                id: c.id,
+                name: c.name,
+                stage: c.stage,
+                value: formatMoney(c.estimatedValue?.toString() ?? null, tenant.currency),
+                ownerName: c.ownerId ? members.get(c.ownerId)?.name ?? null : null,
+                tags: c.tags,
+                health: report
+                  ? {
+                      tier: report.tier as HealthTier,
+                      score: report.score,
+                      atRisk: report.atRisk,
+                    }
+                  : null,
+              };
+            })}
+          />
+        </div>
       ) : (
         <div className="mt-4">
           <CustomersTable
@@ -308,8 +353,8 @@ export default async function CustomersPage({
 // swaps/clears specific params. Used by the tag chip row.
 function buildListHref(
   slug: string,
-  sp: { q?: string; stage?: string; status?: string; branch?: string; health?: string; tag?: string },
-  overrides: Partial<{ q: string; stage: string; status: string; branch: string; health: string; tag: string | undefined }>,
+  sp: { q?: string; stage?: string; status?: string; branch?: string; health?: string; tag?: string; view?: string },
+  overrides: Partial<{ q: string; stage: string; status: string; branch: string; health: string; tag: string | undefined; view: string | undefined }>,
 ): string {
   const merged: Record<string, string | undefined> = { ...sp, ...overrides };
   const qs = new URLSearchParams();
@@ -319,4 +364,55 @@ function buildListHref(
   }
   const query = qs.toString();
   return `/t/${slug}/customers${query ? `?${query}` : ""}`;
+}
+
+// View toggle — two pills in a shared pill-group, each preserving
+// filters via buildListHref. The default (table) clears the `view`
+// param so the URL stays short; pipeline explicitly writes it.
+function ViewToggle({
+  slug,
+  sp,
+  view,
+}: {
+  slug: string;
+  sp: { q?: string; stage?: string; status?: string; branch?: string; health?: string; tag?: string; view?: string };
+  view: CustomersView;
+}) {
+  const tableHref    = buildListHref(slug, sp, { view: undefined });
+  const pipelineHref = buildListHref(slug, sp, { view: "pipeline" });
+  return (
+    <div
+      className="inline-flex items-center rounded-md p-0.5 text-xs"
+      style={{ background: "var(--surface-2)" }}
+      role="tablist"
+      aria-label="Customers view"
+    >
+      <Link
+        href={tableHref}
+        role="tab"
+        aria-selected={view === "table"}
+        className="rounded px-2 py-1"
+        style={
+          view === "table"
+            ? { background: "var(--panel)", color: "var(--text)" }
+            : { color: "var(--text-muted)" }
+        }
+      >
+        Table
+      </Link>
+      <Link
+        href={pipelineHref}
+        role="tab"
+        aria-selected={view === "pipeline"}
+        className="rounded px-2 py-1"
+        style={
+          view === "pipeline"
+            ? { background: "var(--panel)", color: "var(--text)" }
+            : { color: "var(--text-muted)" }
+        }
+      >
+        Pipeline
+      </Link>
+    </div>
+  );
 }

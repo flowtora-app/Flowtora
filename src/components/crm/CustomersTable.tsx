@@ -157,7 +157,10 @@ export function CustomersTable({ slug, rows, empty, canEdit }: CustomersTablePro
         canEdit
           ? (c) => [
               { label: "Open customer", href: `/t/${slug}/customers/${c.id}` },
-              { label: "Edit details", href: `/t/${slug}/customers/${c.id}/edit` },
+              // Phase 3: /edit route is gone — inline-edit cards live
+              // under #overview on the detail page. Keep the "Edit
+              // details" label familiar, just point it at the anchor.
+              { label: "Edit details", href: `/t/${slug}/customers/${c.id}#overview` },
               { label: "New quote", href: `/t/${slug}/quotes/new?customer=${c.id}` },
               { type: "separator" as const },
               {

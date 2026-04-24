@@ -133,7 +133,9 @@ export async function updateCustomer(slug: string, customerId: string, formData:
   const ctx = await requirePermission(slug, "customers:edit");
   const parsed = customerSchema.safeParse(Object.fromEntries(formData.entries()));
   if (!parsed.success) {
-    redirect(`/t/${slug}/customers/${customerId}/edit?error=${encodeURIComponent("Invalid input")}`);
+    // Phase 3: /edit route is gone; surface the error on the detail
+    // page where the inline-edit cards live.
+    redirect(`/t/${slug}/customers/${customerId}?error=${encodeURIComponent("Invalid input")}`);
   }
 
   const existing = await db.customer.findFirst({
@@ -209,6 +211,146 @@ export async function deleteCustomer(slug: string, customerId: string) {
     entityId: customerId,
   });
   redirect(`/t/${slug}/customers`);
+}
+
+// ────────────────────────────────────────────────────────────
+// Phase 3 (transformation) — partial update for inline-edit cards.
+//
+// The customer detail page replaces the /edit route with per-section
+// edit toggles. Each section only submits the fields it owns (contact
+// info, addresses, notes, ownership/value), so we need a server action
+// that accepts whichever subset of fields arrives in the FormData and
+// updates only those on the row — no-ops the rest.
+//
+// Security: same `customers:edit` gate as updateCustomer + branch-scope
+// assertion on the existing row so a rep can't use a narrower edit
+// surface to slip past the full-edit checks.
+// ────────────────────────────────────────────────────────────
+
+// Every field is optional; we only patch the ones that are present in
+// the submitted FormData. Mirrors `customerSchema` but each field is
+// `.optional()` so partial submissions validate.
+const patchSchema = z.object({
+  ownerId: optionalString,
+  source: optionalString,
+  estimatedValue: z.string().optional().or(z.literal("")),
+  closeProbability: z.string().optional().or(z.literal("")),
+  defaultDiscountPct: z.string().optional().or(z.literal("")),
+  email: z.string().email().optional().or(z.literal("")),
+  phone: optionalString,
+  website: z.string().url().optional().or(z.literal("")),
+  notes: optionalLong,
+  locationId: optionalString,
+  // billing
+  billingAddressLine1: optionalString,
+  billingAddressLine2: optionalString,
+  billingCity: optionalString,
+  billingRegion: optionalString,
+  billingPostalCode: optionalString,
+  billingCountry: optionalString,
+  // install
+  installAddressLine1: optionalString,
+  installAddressLine2: optionalString,
+  installCity: optionalString,
+  installRegion: optionalString,
+  installPostalCode: optionalString,
+  installCountry: optionalString,
+});
+
+// Keys the InlineEditCard surfaces can touch. Anything outside this set
+// is ignored even if it lands in the FormData — stage/status/name/kind
+// still go through the dedicated flows (changeStage, updateCustomer).
+const PATCHABLE_KEYS = [
+  "ownerId", "source", "estimatedValue", "closeProbability", "defaultDiscountPct",
+  "email", "phone", "website", "notes", "locationId",
+  "billingAddressLine1", "billingAddressLine2", "billingCity", "billingRegion", "billingPostalCode", "billingCountry",
+  "installAddressLine1", "installAddressLine2", "installCity", "installRegion", "installPostalCode", "installCountry",
+] as const;
+
+export async function patchCustomer(slug: string, customerId: string, formData: FormData) {
+  const ctx = await requirePermission(slug, "customers:edit");
+
+  // Narrow the FormData to only the keys this action may touch before
+  // validation — stops callers from sneaking in fields we don't expose.
+  const raw: Record<string, string> = {};
+  for (const key of PATCHABLE_KEYS) {
+    const v = formData.get(key);
+    if (typeof v === "string") raw[key] = v;
+  }
+  const parsed = patchSchema.safeParse(raw);
+  if (!parsed.success) return;
+
+  const existing = await db.customer.findFirst({
+    where: { id: customerId, tenantId: ctx.tenant.id },
+  });
+  if (!existing) return;
+  ctx.assertBranchAccess(existing.locationId);
+
+  const d = parsed.data;
+  // Build a Prisma patch containing only the fields that were actually
+  // submitted. `undefined` means "not in the FormData" (leave alone);
+  // an empty string means "clear this field to null".
+  const patch: Record<string, unknown> = {};
+  const setIfPresent = <K extends keyof typeof d>(key: K, mapper: (v: string) => unknown) => {
+    const v = d[key];
+    if (v === undefined) return;
+    patch[key as string] = mapper(v as string);
+  };
+
+  setIfPresent("ownerId",        (v) => v || null);
+  setIfPresent("source",         (v) => empty(v));
+  setIfPresent("email",          (v) => empty(v));
+  setIfPresent("phone",          (v) => empty(v));
+  setIfPresent("website",        (v) => empty(v));
+  setIfPresent("notes",          (v) => empty(v));
+  setIfPresent("estimatedValue", (v) => empty(v)); // Prisma Decimal; empty clears
+  setIfPresent("closeProbability", (v) => {
+    const n = emptyNum(v);
+    return n !== null ? Math.max(0, Math.min(100, Math.round(n))) : null;
+  });
+  setIfPresent("defaultDiscountPct", (v) => {
+    const n = emptyNum(v);
+    return n !== null ? Math.max(0, Math.min(100, Math.round(n))) : 0;
+  });
+
+  // Addresses — straight string passthrough with null-if-empty.
+  const addressFields = [
+    "billingAddressLine1", "billingAddressLine2", "billingCity", "billingRegion",
+    "billingPostalCode", "billingCountry",
+    "installAddressLine1", "installAddressLine2", "installCity", "installRegion",
+    "installPostalCode", "installCountry",
+  ] as const;
+  for (const k of addressFields) setIfPresent(k, (v) => empty(v));
+
+  // Owner validation — same gate as updateCustomer; reject anyone who
+  // isn't an active member of the tenant.
+  if ("ownerId" in patch) {
+    patch.ownerId = await validOwnerId(ctx.tenant.id, patch.ownerId as string | null);
+  }
+  // Branch change — only allow moving to a location inside the tenant.
+  if ("locationId" in patch && typeof patch.locationId === "string" && patch.locationId.length > 0) {
+    const next = await resolveTenantLocationId(ctx.tenant.id, patch.locationId);
+    if (next) patch.locationId = next;
+    else delete patch.locationId; // invalid — drop it rather than corrupt the row
+  }
+
+  if (Object.keys(patch).length === 0) return;
+
+  await db.customer.update({
+    where: { id: existing.id },
+    data: patch as Parameters<typeof db.customer.update>[0]["data"],
+  });
+
+  await logAudit({
+    tenantId: ctx.tenant.id,
+    userId: ctx.userId,
+    action: "customer.updated",
+    entityType: "Customer",
+    entityId: existing.id,
+    metadata: { fields: Object.keys(patch) },
+  });
+
+  revalidatePath(`/t/${slug}/customers/${existing.id}`);
 }
 
 const stageSchema = z.object({

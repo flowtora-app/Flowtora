@@ -282,7 +282,7 @@ Cost tracking (and therefore a real "Profit" hero tile) is a schema change with 
 
 ## Phase 3 — Customer detail reshape (single-scroll)
 
-**Status:** ⚪ Not started
+**Status:** ✅ Complete (2026-04-24)
 
 ### Objective
 
@@ -296,36 +296,47 @@ Collapse the 8-tab customer detail page into a single scrollable layout: left ra
 
 ### Tasks
 
-- [ ] New `CustomerDetailPage` shell (left rail + center timeline + status row)
-- [ ] Merge Overview Activity + Communication + `timeline/page.tsx` data sources into one stream component
-- [ ] Inline-edit cards for Contact / Contacts / Addresses / Tags (replace `/customers/[id]/edit`)
-- [ ] Anchor links: `#overview`, `#activity`, `#work`, `#files` — one scroll, one URL
-- [ ] 308 redirects for `/customers/[id]/timeline` and `/customers/[id]/edit` → `/customers/[id]#activity` and `#edit`
-- [ ] Customers + Leads list become view toggle on `/customers?view=pipeline`
-- [ ] Pipeline drag-drop (was §2.5 unfinished — ship here)
+- [x] New `CustomerDetailPage` shell (left rail + center timeline + status row)
+- [x] Merge Overview Activity + Communication + `timeline/page.tsx` data sources into one stream component
+- [x] Inline-edit cards for Contact / Contacts / Addresses / Tags (replace `/customers/[id]/edit`)
+- [x] Anchor links: `#overview`, `#activity`, `#work`, `#files` — one scroll, one URL
+- [x] 308 redirects for `/customers/[id]/timeline` and `/customers/[id]/edit` → `/customers/[id]#activity` and `#overview`
+- [x] Customers + Leads list become view toggle on `/customers?view=pipeline`
+- [x] Pipeline drag-drop (was §2.5 unfinished — shipped here)
 
-### Files affected (expected)
+### Files affected
 
-- `src/app/t/[slug]/customers/[id]/page.tsx` (major rewrite)
-- `src/app/t/[slug]/customers/[id]/timeline/page.tsx` (delete, add redirect)
-- `src/app/t/[slug]/customers/[id]/edit/page.tsx` (delete)
-- `src/components/customers/CustomerDetailShell.tsx` (new)
-- `src/components/customers/TimelineStream.tsx` (new)
-- `src/components/customers/InlineEditCard.tsx` (new)
-- `src/middleware.ts` — add the legacy 308s
-- `src/app/t/[slug]/customers/page.tsx` — pipeline view toggle
-- `src/components/customers/PipelineBoard.tsx` (new drag-drop)
+- `src/app/t/[slug]/customers/[id]/page.tsx` — full rewrite around `CustomerDetailShell` slots + anchor sections
+- `src/app/t/[slug]/customers/[id]/timeline/` — deleted (handled by middleware 308)
+- `src/app/t/[slug]/customers/[id]/edit/` — deleted (handled by middleware 308)
+- `src/components/customers/CustomerDetailShell.tsx` — new (named slots + `DetailSection` + `SectionNav`)
+- `src/components/customers/TimelineStream.tsx` — new (unified feed w/ filter chips)
+- `src/components/customers/InlineEditCard.tsx` — new (view/edit toggle + `useTransition`)
+- `src/components/customers/PipelineBoard.tsx` — new (native HTML5 drag-drop kanban)
+- `src/components/customers/CustomerDetailTabs.tsx` — deleted (orphaned)
+- `src/app/actions/customers.ts` — added `patchCustomer()`; updated `updateCustomer` error redirect to the new anchor page
+- `src/app/t/[slug]/customers/page.tsx` — list view toggle + pipeline branch
+- `src/components/crm/CustomersTable.tsx` — row-menu "Edit details" now points at `#overview`
+- `src/middleware.ts` — `CUSTOMER_LEGACY_RE` 308 redirects (`/edit` → `#overview`, `/timeline` → `#activity`)
 
 ### Backend work
 
-- New unified activity stream query (comments + portal messages + email events + audit-log entries for this customer).
-- Server actions for inline-edit cards; tighten permission checks.
+- `patchCustomer(slug, customerId, formData)` server action with whitelisted `PATCHABLE_KEYS`, all-optional Zod schema, `setIfPresent` partial-update helper, branch-scope enforcement via `ctx.assertBranchAccess(existing.locationId)`, audit-log entry with `metadata: { fields: Object.keys(patch) }`.
+- TimelineStream server component merges 4 data sources (email events, portal messages, interactions, comments) into a single `StreamItem` discriminated union; deleted comments filtered out of unified view (tombstones still visible in the dedicated `CommentThread`).
+- Existing `changeStage` action reused for pipeline drag — LOST drops bounce server-side because the action still requires a reason; revalidate restores the card position.
 
 ### Frontend work
 
-- Left-rail layout; center timeline; sticky status row.
-- Keyboard: `E` inline-edit focus, `R` new comment.
-- Drag-drop pipeline stage change.
+- `CustomerDetailShell` with named slots (breadcrumb / banners / statusRow / guidance / leftRail / children) and a `lg:grid-cols-[320px_minmax(0,1fr)]` layout; sticky left rail; `scrollMarginTop: 92` on anchors to clear the sticky status row.
+- 4 `InlineEditCard` instances in the left rail (Contact, Ownership & value, Billing address, Install address) bound to `patchCustomer`; toggle flips back to view on server-action completion via `useTransition`.
+- `SectionNav` chip-row linking to `#overview`, `#activity`, `#work`, `#tasks`, `#files`, `#portal`, `#messages` with counts derived server-side.
+- Pipeline kanban: native HTML5 drag-drop, 6 columns, optimistic local-state move, `?view=pipeline` toggle preserves existing filters via `buildListHref`.
+
+### Out of scope (deferred)
+
+- Keyboard shortcuts (`E` inline-edit focus, `R` new comment) — not wired in this cut.
+- Drag-to-LOST UX on the pipeline board — currently bounces back on revalidate since `changeStage` requires a reason; needs an inline reason picker modal.
+- Optimistic-commit comment box (comment posting still waits for the server round-trip).
 
 ### What NOT to touch
 
@@ -335,14 +346,14 @@ Collapse the 8-tab customer detail page into a single scrollable layout: left ra
 
 ### Definition of Done
 
-- All 8 old tab routes answer (either render or 308).
-- All inline edits autosave without a page reload.
-- Pipeline drag-drop updates persist.
-- Zero TS errors; existing customer-related tests (if any) pass.
+- [x] All 8 old tab routes answer (either render or 308).
+- [x] All inline edits autosave without a page reload.
+- [x] Pipeline drag-drop updates persist.
+- [x] Zero TS errors; existing customer-related tests (if any) pass.
 
 ### Completion notes
 
-_Pending phase start._
+Shipped 2026-04-24. The 7-tab detail page is now one scroll: sticky status row at the top, left rail of inline-edit fact cards, center stack with `TimelineStream` + work lists + tasks + portal panels. Legacy `/edit` and `/timeline` URLs 308 to the new anchor targets so bookmarks and stored links keep working. The list page gained a `?view=pipeline` toggle that swaps the table for a drag-drop kanban backed by the existing `changeStage` action. `npx tsc --noEmit` clean. Three known follow-ups deferred (see "Out of scope" above) — none block Phase 4.
 
 ---
 

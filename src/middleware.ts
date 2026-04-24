@@ -28,6 +28,15 @@ const { auth } = NextAuth(authConfig);
 // /t/acme/inbox?chip=messages&c=cus_123.
 const INBOX_LEGACY_RE = /^\/t\/([^/]+)\/(attention|approvals|messages|notifications|tasks)\/?$/;
 
+// Phase 3 (transformation) — customer detail collapsed the per-section
+// routes (/edit, /timeline) into anchor targets on the main detail
+// page. Old links + bookmarks keep working via 308: /edit lands on the
+// page with the Contact inline-edit already scrolled into view;
+// /timeline lands on the #activity anchor.
+//
+// Capture groups: slug, customer id, legacy segment (edit | timeline).
+const CUSTOMER_LEGACY_RE = /^\/t\/([^/]+)\/customers\/([^/]+)\/(edit|timeline)\/?$/;
+
 // Exact-match public paths. Anything in the marketing route group
 // (src/app/(marketing)/…) needs to be listed here so unauthenticated
 // visitors can actually navigate the site — previously only "/" was
@@ -83,6 +92,22 @@ export default auth((req) => {
     const url = req.nextUrl.clone();
     url.pathname = `/t/${slug}/inbox`;
     url.searchParams.set("chip", chip);
+    return NextResponse.redirect(url, 308);
+  }
+
+  // Phase 3 (transformation) — /customers/[id]/edit and /timeline are
+  // collapsed into anchor targets on the parent detail page.
+  // /edit → #overview (inline-edit cards live there)
+  // /timeline → #activity (unified TimelineStream)
+  // NOTE: fragments (#…) are not sent to the server, but NextResponse
+  // preserves them in the Location header so the browser scrolls to
+  // the right spot. We set it via the url object's `hash` property.
+  const customerLegacyMatch = pathname.match(CUSTOMER_LEGACY_RE);
+  if (customerLegacyMatch) {
+    const [, slug, cid, kind] = customerLegacyMatch;
+    const url = req.nextUrl.clone();
+    url.pathname = `/t/${slug}/customers/${cid}`;
+    url.hash = kind === "timeline" ? "activity" : "overview";
     return NextResponse.redirect(url, 308);
   }
 
