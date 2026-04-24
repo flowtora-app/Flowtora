@@ -43,25 +43,17 @@ import { SendMessageWidget } from "@/components/SendMessageWidget";
 import { loadSendContext } from "@/app/actions/message-templates";
 import { getGroupContext } from "@/lib/franchise";
 import { QuotePortalPreview } from "@/components/quotes/QuotePortalPreview";
-import { QuoteDetailTabs, type QuoteDetailTab } from "@/components/quotes/QuoteDetailTabs";
 import { AddLineItemBuilder } from "@/components/quotes/AddLineItemBuilder";
+import { AutoSaveForm } from "@/components/AutoSaveForm";
 import { Icon } from "@/components/shell/icons";
 
-// Inlined rather than imported from the client component — a value exported
-// from a "use client" module is a client reference and can't be called from
-// the server, even when it's pure. Keep the tab type in sync with
-// QuoteDetailTabs.tsx.
-function parseQuoteDetailTab(raw: string | undefined): QuoteDetailTab {
-  switch (raw) {
-    case "pricing":
-    case "notes":
-    case "sharing":
-    case "activity":
-      return raw;
-    default:
-      return "details";
-  }
-}
+// Phase 6 (transformation) — the old 5-tab editor (Details / Pricing /
+// Notes / Sharing / Activity) collapsed into a single scrollable page
+// with an always-visible customer-preview rail on the right. Autosave
+// replaces explicit Save buttons on the meta / pricing / deposit /
+// notes forms. `?tab=…` query strings from legacy bookmarks still
+// work (the page renders the same content regardless), so we don't
+// special-case them — they land on the right content anyway.
 
 export async function generateMetadata(
   { params }: { params: Promise<{ slug: string; id: string }> },
@@ -110,13 +102,16 @@ export default async function QuoteDetailPage({
   searchParams,
 }: {
   params: Promise<{ slug: string; id: string }>;
-  searchParams: Promise<{ error?: string; notice?: string; preview?: string; tab?: string }>;
+  searchParams: Promise<{ error?: string; notice?: string; tab?: string }>;
 }) {
   const { slug, id } = await params;
   const sp = await searchParams;
   const ctx = await requirePermission(slug, "quotes:view");
   const canManage = ctx.can("quotes:manage");
-  const activeTab = parseQuoteDetailTab(sp.tab);
+  // `sp.tab` is ignored — Phase 6 collapsed the tabs into a single page.
+  // Legacy bookmarks still resolve; anchors (#pricing, #sharing) could
+  // be added later if we want smooth-scroll targets.
+  void sp.tab;
 
   const quote = await db.quote.findFirst({
     where: { id, tenantId: ctx.tenant.id },
@@ -709,9 +704,10 @@ export default async function QuoteDetailPage({
     : 0;
   const canApplyRush = editable && rushPct > 0 && currentSubtotal > 0;
 
-  const previewOpen = sp.preview === "1";
-  const previewCloseHref = `/t/${slug}/quotes/${quote.id}`;
-  const previewOpenHref = `/t/${slug}/quotes/${quote.id}?preview=1${sp.tab ? `&tab=${encodeURIComponent(sp.tab)}` : ""}`;
+  // Preview is always visible in the right rail (Phase 6). The `?preview=1`
+  // query param from older bookmarks is ignored — the rail renders either
+  // way. Keeping the handler-free `previewItems` / `previewSections`
+  // projections below so we can feed them straight into the inline pane.
   const previewItems = quote.items.map((it) => {
     const opts = parseSelectedOptions(it.selectedOptions as unknown);
     return {
@@ -995,20 +991,8 @@ export default async function QuoteDetailPage({
                 {formatMoney(quote.total.toString(), ctx.tenant.currency)}
               </div>
             </div>
-            {canManage && (
+            {canManage && primaryCta && (
               <div className="flex items-center gap-2">
-                <Link
-                  href={previewOpenHref}
-                  className="ts-focus inline-flex items-center gap-1.5 rounded-md px-4 py-2 text-sm font-medium transition-colors"
-                  style={{
-                    background: "var(--surface-1)",
-                    border: "1px solid var(--border-default)",
-                    color: "var(--text-default)",
-                  }}
-                  title="Portal-style preview of this quote"
-                >
-                  Preview
-                </Link>
                 {primaryCta}
               </div>
             )}
@@ -1148,8 +1132,12 @@ export default async function QuoteDetailPage({
         </Card>
       )}
 
-      {/* MAIN WORKSPACE — line items (card-based editor) + sticky totals rail. */}
-      <div className="grid gap-6 lg:grid-cols-[minmax(0,1fr)_320px]">
+      {/* MAIN WORKSPACE — single-page editor on the left, always-visible
+          customer preview on the right (Phase 6). The preview was a
+          drawer behind a Preview button in Phase 5 and prior; giving it
+          a permanent home cuts one click off every review cycle and
+          makes autosave changes visible as the customer will see them. */}
+      <div className="grid gap-6 lg:grid-cols-[minmax(0,1fr)_380px]">
         <div className="min-w-0 space-y-6">
           <Card>
             <CardHeader
@@ -1347,105 +1335,16 @@ export default async function QuoteDetailPage({
               </details>
             )}
           </Card>
-        </div>
 
-        <aside className="space-y-4 lg:sticky lg:top-24 lg:self-start">
+          {/* Former "Details" tab — always visible. Expiration and sales rep
+              assignment, autosaved on blur / change. */}
           <Card>
-            <CardHeader title="Pricing summary" />
-            <div className="space-y-2 px-5 py-4 text-sm">
-              <Row label="Subtotal" value={formatMoney(quote.subtotal.toString(), ctx.tenant.currency)} />
-              {Number(quote.discountAmount) > 0 && (
-                <Row
-                  label={`Discount (${quote.discountType === "PERCENT" ? `${Number(quote.discountValue)}%` : humanize(quote.discountType)})`}
-                  value={`− ${formatMoney(quote.discountAmount.toString(), ctx.tenant.currency)}`}
-                  muted
-                />
-              )}
-              <Row
-                label={`Tax (${(Number(quote.taxRate) * 100).toFixed(Number(quote.taxRate) * 100 < 1 ? 3 : 2)}%)`}
-                value={formatMoney(quote.taxAmount.toString(), ctx.tenant.currency)}
-                muted
-              />
-              <div style={{ borderTop: "1px solid var(--border-subtle)" }} className="pt-2">
-                <Row
-                  label="Total"
-                  value={formatMoney(quote.total.toString(), ctx.tenant.currency)}
-                  bold
-                />
-              </div>
-
-              {Number(quote.optionalSubtotal) > 0 && (
-                <div
-                  className="mt-3 rounded-md px-3 py-2"
-                  style={{
-                    background: "var(--accent-surface)",
-                    border: "1px solid var(--border-subtle)",
-                  }}
-                >
-                  <div
-                    className="text-xs font-medium uppercase tracking-wide"
-                    style={{ color: "var(--accent-primary)" }}
-                  >
-                    Optional add-ons (not included)
-                  </div>
-                  <Row
-                    label="Optional subtotal"
-                    value={formatMoney(quote.optionalSubtotal.toString(), ctx.tenant.currency)}
-                  />
-                  <div className="mt-1 text-xs" style={{ color: "var(--text-muted)" }}>
-                    Customers can accept any of these from the share link. Accepted lines flip to required and the total re-computes.
-                  </div>
-                </div>
-              )}
-
-              {quote.depositType !== "NONE" && Number(quote.depositAmount) > 0 && (
-                <div
-                  className="mt-3 rounded-md px-3 py-2"
-                  style={{
-                    background: "var(--surface-1)",
-                    border: "1px solid var(--border-subtle)",
-                  }}
-                >
-                  <div
-                    className="text-xs font-medium uppercase tracking-wide"
-                    style={{ color: "var(--text-muted)" }}
-                  >
-                    Deposit required
-                  </div>
-                  <Row
-                    label={
-                      quote.depositType === "PERCENT"
-                        ? `Deposit (${Number(quote.depositValue)}% of total)`
-                        : "Deposit (flat)"
-                    }
-                    value={formatMoney(quote.depositAmount.toString(), ctx.tenant.currency)}
-                    bold
-                  />
-                  <Row
-                    label="Balance on completion"
-                    value={formatMoney(
-                      Math.max(0, Number(quote.total) - Number(quote.depositAmount)),
-                      ctx.tenant.currency,
-                    )}
-                    muted
-                  />
-                </div>
-              )}
-            </div>
-          </Card>
-        </aside>
-      </div>
-
-      {/* SECONDARY TABS — progressive disclosure for everything that isn't the
-          primary editing workflow. Tab state lives in ?tab= so refresh and
-          deep links are stable. */}
-      <div className="space-y-5 pt-2">
-        <QuoteDetailTabs active={activeTab} />
-
-        {activeTab === "details" && (
-          <Card>
-            <CardHeader title="Details" description="Expiration and sales rep assignment." />
-            <form action={saveMeta} className="grid grid-cols-1 gap-4 px-5 py-4 md:grid-cols-2">
+            <CardHeader title="Details" description="Expiration and sales rep assignment. Changes autosave." />
+            <AutoSaveForm
+              action={saveMeta}
+              label="Details"
+              className="grid grid-cols-1 gap-4 px-5 py-4 md:grid-cols-2"
+            >
               <Field
                 label="Expires on"
                 name="expiresAt"
@@ -1461,175 +1360,166 @@ export default async function QuoteDetailPage({
                   ...members.map((m) => ({ value: m.userId, label: m.name })),
                 ]}
               />
-              {editable && (
-                <div className="md:col-span-2">
-                  <Button type="submit">Save details</Button>
-                </div>
-              )}
-            </form>
+            </AutoSaveForm>
           </Card>
-        )}
 
-        {activeTab === "pricing" && (
-          <div className="space-y-5">
+          {/* Former "Pricing" tab — Discount & tax, Deposit, Margin, Save as template. */}
+          <Card>
+            <CardHeader title="Discount & tax" description="Applied to every non-optional line. Changes autosave." />
+            <AutoSaveForm
+              action={saveMeta}
+              label="Pricing"
+              className="grid grid-cols-1 gap-4 px-5 py-4 md:grid-cols-3"
+            >
+              <SelectField
+                label="Discount"
+                name="discountType"
+                defaultValue={quote.discountType}
+                options={[
+                  { value: "NONE", label: "No discount" },
+                  { value: "FIXED", label: "Flat amount" },
+                  { value: "PERCENT", label: "Percent" },
+                ]}
+              />
+              <Field
+                label="Discount value"
+                name="discountValue"
+                type="number"
+                step="0.01"
+                min="0"
+                defaultValue={quote.discountValue.toString()}
+                hint="Flat currency or 0–100 for %."
+              />
+              <Field
+                label="Tax rate (%)"
+                name="taxRatePercent"
+                type="number"
+                step="0.0001"
+                min="0"
+                defaultValue={(Number(quote.taxRate) * 100).toString()}
+              />
+            </AutoSaveForm>
+          </Card>
+
+          {canManage && (
             <Card>
-              <CardHeader title="Discount & tax" description="Applied to every non-optional line." />
-              <form action={saveMeta} className="grid grid-cols-1 gap-4 px-5 py-4 md:grid-cols-3">
+              <CardHeader
+                title="Deposit"
+                description="Amount required from the customer before production starts. Deposit flows into the order when this quote is approved. Autosaves."
+              />
+              <AutoSaveForm
+                action={saveDeposit}
+                label="Deposit"
+                className="grid grid-cols-1 gap-3 px-5 py-4 md:grid-cols-2"
+              >
                 <SelectField
-                  label="Discount"
-                  name="discountType"
-                  defaultValue={quote.discountType}
+                  label="Deposit type"
+                  name="depositType"
+                  defaultValue={quote.depositType}
                   options={[
-                    { value: "NONE", label: "No discount" },
+                    { value: "NONE", label: "No deposit" },
                     { value: "FIXED", label: "Flat amount" },
-                    { value: "PERCENT", label: "Percent" },
+                    { value: "PERCENT", label: "Percent of total" },
                   ]}
                 />
                 <Field
-                  label="Discount value"
-                  name="discountValue"
+                  label="Deposit value"
+                  name="depositValue"
                   type="number"
                   step="0.01"
                   min="0"
-                  defaultValue={quote.discountValue.toString()}
+                  defaultValue={quote.depositValue.toString()}
                   hint="Flat currency or 0–100 for %."
                 />
-                <Field
-                  label="Tax rate (%)"
-                  name="taxRatePercent"
-                  type="number"
-                  step="0.0001"
-                  min="0"
-                  defaultValue={(Number(quote.taxRate) * 100).toString()}
-                />
-                {editable && (
-                  <div className="md:col-span-3">
-                    <Button type="submit">Save pricing</Button>
+              </AutoSaveForm>
+            </Card>
+          )}
+
+          {canManage && (
+            <Card>
+              <CardHeader
+                title="Margin"
+                description="Staff-only. Based on cost snapshots taken when each line was added — historical quotes stay stable even if catalog costs change later."
+              />
+              <div className="grid grid-cols-1 gap-3 px-5 py-4 text-sm md:grid-cols-3">
+                <div
+                  className="rounded-md px-3 py-2"
+                  style={{
+                    background: "var(--surface-1)",
+                    border: "1px solid var(--border-subtle)",
+                  }}
+                >
+                  <div className="text-xs uppercase tracking-wide" style={{ color: "var(--text-muted)" }}>Cost</div>
+                  <div className="mt-1 text-lg font-semibold tabular-nums">
+                    {linesWithCost > 0 ? formatMoney(costBase, ctx.tenant.currency) : "—"}
+                  </div>
+                </div>
+                <div
+                  className="rounded-md px-3 py-2"
+                  style={{
+                    background: "var(--surface-1)",
+                    border: "1px solid var(--border-subtle)",
+                  }}
+                >
+                  <div className="text-xs uppercase tracking-wide" style={{ color: "var(--text-muted)" }}>Gross profit</div>
+                  <div className="mt-1 text-lg font-semibold tabular-nums">
+                    {grossProfit != null ? formatMoney(grossProfit, ctx.tenant.currency) : "—"}
+                  </div>
+                </div>
+                <div
+                  className="rounded-md px-3 py-2"
+                  style={{
+                    background: "var(--accent-surface)",
+                    border: "1px solid var(--border-subtle)",
+                  }}
+                >
+                  <div className="text-xs uppercase tracking-wide" style={{ color: "var(--accent-primary)" }}>Margin</div>
+                  <div className="mt-1 text-lg font-semibold tabular-nums" style={{ color: "var(--accent-primary)" }}>
+                    {margin != null ? `${margin.toFixed(1)}%` : "—"}
+                  </div>
+                </div>
+                {marginCoverageNote && (
+                  <div className="md:col-span-3 text-xs" style={{ color: "var(--text-muted)" }}>
+                    {marginCoverageNote}
                   </div>
                 )}
+              </div>
+            </Card>
+          )}
+
+          {canManage && (
+            <Card>
+              <CardHeader
+                title="Save as template"
+                description="Snapshot this quote's sections and line items into a reusable template. Future quotes created from the template are fully decoupled."
+              />
+              {/* NOT autosave — save-as-template creates a new template
+                  row every time, so we keep an explicit submit. */}
+              <form action={saveAsTpl} className="grid grid-cols-1 items-end gap-3 px-5 py-4 md:grid-cols-3">
+                <div className="md:col-span-1">
+                  <Field label="Template name" name="name" required placeholder="e.g. Standard vehicle wrap" />
+                </div>
+                <div className="md:col-span-2">
+                  <Field
+                    label="Internal description (optional)"
+                    name="description"
+                    placeholder="Who this template is for, when to pick it."
+                  />
+                </div>
+                <div className="md:col-span-3">
+                  <Button type="submit" variant="secondary">Save as template</Button>
+                </div>
               </form>
             </Card>
+          )}
 
-            {canManage && (
-              <Card>
-                <CardHeader
-                  title="Deposit"
-                  description="Amount required from the customer before production starts. Deposit flows into the order when this quote is approved."
-                />
-                <form action={saveDeposit} className="grid grid-cols-1 gap-3 px-5 py-4 md:grid-cols-2">
-                  <SelectField
-                    label="Deposit type"
-                    name="depositType"
-                    defaultValue={quote.depositType}
-                    options={[
-                      { value: "NONE", label: "No deposit" },
-                      { value: "FIXED", label: "Flat amount" },
-                      { value: "PERCENT", label: "Percent of total" },
-                    ]}
-                  />
-                  <Field
-                    label="Deposit value"
-                    name="depositValue"
-                    type="number"
-                    step="0.01"
-                    min="0"
-                    defaultValue={quote.depositValue.toString()}
-                    hint="Flat currency or 0–100 for %."
-                  />
-                  {editable && (
-                    <div className="md:col-span-2">
-                      <Button type="submit" variant="secondary">Save deposit</Button>
-                    </div>
-                  )}
-                </form>
-              </Card>
-            )}
-
-            {canManage && (
-              <Card>
-                <CardHeader
-                  title="Margin"
-                  description="Staff-only. Based on cost snapshots taken when each line was added — historical quotes stay stable even if catalog costs change later."
-                />
-                <div className="grid grid-cols-1 gap-3 px-5 py-4 text-sm md:grid-cols-3">
-                  <div
-                    className="rounded-md px-3 py-2"
-                    style={{
-                      background: "var(--surface-1)",
-                      border: "1px solid var(--border-subtle)",
-                    }}
-                  >
-                    <div className="text-xs uppercase tracking-wide" style={{ color: "var(--text-muted)" }}>Cost</div>
-                    <div className="mt-1 text-lg font-semibold tabular-nums">
-                      {linesWithCost > 0 ? formatMoney(costBase, ctx.tenant.currency) : "—"}
-                    </div>
-                  </div>
-                  <div
-                    className="rounded-md px-3 py-2"
-                    style={{
-                      background: "var(--surface-1)",
-                      border: "1px solid var(--border-subtle)",
-                    }}
-                  >
-                    <div className="text-xs uppercase tracking-wide" style={{ color: "var(--text-muted)" }}>Gross profit</div>
-                    <div className="mt-1 text-lg font-semibold tabular-nums">
-                      {grossProfit != null ? formatMoney(grossProfit, ctx.tenant.currency) : "—"}
-                    </div>
-                  </div>
-                  <div
-                    className="rounded-md px-3 py-2"
-                    style={{
-                      background: "var(--accent-surface)",
-                      border: "1px solid var(--border-subtle)",
-                    }}
-                  >
-                    <div className="text-xs uppercase tracking-wide" style={{ color: "var(--accent-primary)" }}>Margin</div>
-                    <div className="mt-1 text-lg font-semibold tabular-nums" style={{ color: "var(--accent-primary)" }}>
-                      {margin != null ? `${margin.toFixed(1)}%` : "—"}
-                    </div>
-                  </div>
-                  {marginCoverageNote && (
-                    <div className="md:col-span-3 text-xs" style={{ color: "var(--text-muted)" }}>
-                      {marginCoverageNote}
-                    </div>
-                  )}
-                </div>
-              </Card>
-            )}
-
-            {canManage && (
-              <Card>
-                <CardHeader
-                  title="Save as template"
-                  description="Snapshot this quote's sections and line items into a reusable template. Future quotes created from the template are fully decoupled."
-                />
-                <form action={saveAsTpl} className="grid grid-cols-1 items-end gap-3 px-5 py-4 md:grid-cols-3">
-                  <div className="md:col-span-1">
-                    <Field label="Template name" name="name" required placeholder="e.g. Standard vehicle wrap" />
-                  </div>
-                  <div className="md:col-span-2">
-                    <Field
-                      label="Internal description (optional)"
-                      name="description"
-                      placeholder="Who this template is for, when to pick it."
-                    />
-                  </div>
-                  <div className="md:col-span-3">
-                    <Button type="submit" variant="secondary">Save as template</Button>
-                  </div>
-                </form>
-              </Card>
-            )}
-          </div>
-        )}
-
-        {activeTab === "notes" && (
+          {/* Former "Notes" tab — customer-facing copy + internal notes, autosaved. */}
           <Card>
             <CardHeader
               title="Notes"
-              description="Customer-facing copy and internal context. Customer note and terms are shown on the share link; internal notes are staff-only."
+              description="Customer-facing copy and internal context. Customer note and terms are shown on the share link; internal notes are staff-only. Changes autosave."
             />
-            <form action={saveMeta} className="space-y-4 px-5 py-4">
+            <AutoSaveForm action={saveMeta} label="Notes" className="space-y-4 px-5 py-4">
               <TextArea
                 label="Customer-facing note"
                 name="customerNote"
@@ -1648,17 +1538,23 @@ export default async function QuoteDetailPage({
                 rows={3}
                 defaultValue={quote.notes ?? ""}
               />
-              {editable && (
-                <div>
-                  <Button type="submit">Save notes</Button>
-                </div>
-              )}
-            </form>
+            </AutoSaveForm>
           </Card>
-        )}
 
-        {activeTab === "sharing" && (
-          <div className="space-y-5">
+          {/* Former "Sharing" tab — collapsed into a <details> so it stays
+              out of the way until the quote is ready to send. Rendered
+              open by default for SENT/VIEWED so reps don't miss the
+              share link when following up. */}
+          <CollapsibleSection
+            id="sharing"
+            title="Sharing"
+            summary={
+              quote.shareToken
+                ? "Public link minted · rotate or revoke"
+                : "No public link minted yet"
+            }
+            defaultOpen={quote.status === "SENT" || quote.status === "VIEWED"}
+          >
             {canManage && (
               <Card>
                 <CardHeader
@@ -1715,17 +1611,22 @@ export default async function QuoteDetailPage({
                   customerId={quote.customerId}
                   customerEmail={quote.customer.email}
                   quoteId={quote.id}
-                  returnTo={`/t/${slug}/quotes/${quote.id}?tab=sharing`}
+                  returnTo={`/t/${slug}/quotes/${quote.id}`}
                   templates={sendCtx.templates}
                   bag={sendCtx.bag}
                 />
               </Card>
             )}
-          </div>
-        )}
+          </CollapsibleSection>
 
-        {activeTab === "activity" && (
-          <div className="space-y-5">
+          {/* Former "Activity" tab — timeline, revisions, comments. Tucked
+              behind a collapsible because it's reference, not editing. */}
+          <CollapsibleSection
+            id="activity"
+            title="Activity"
+            summary={`${quote.comments.length} comment${quote.comments.length === 1 ? "" : "s"}${hasRevisions ? ` · ${revisionChain.length} revisions` : ""}`}
+            defaultOpen={false}
+          >
             <Card>
               <CardHeader title="Timeline" description="Status milestones for this quote." />
               <div className="grid grid-cols-2 gap-3 px-5 py-4 text-xs sm:grid-cols-3 md:grid-cols-6">
@@ -1829,37 +1730,100 @@ export default async function QuoteDetailPage({
               memberMap={memberMap}
               canModerate={ctx.can("staff:manage")}
             />
-          </div>
-        )}
-      </div>
+          </CollapsibleSection>
+        </div>
 
-      {previewOpen && (
-        <QuotePortalPreview
-          closeHref={previewCloseHref}
-          tenantName={ctx.tenant.name}
-          number={quote.number}
-          status={quote.status}
-          customerName={quote.customer.name}
-          expiresAt={quote.expiresAt}
-          currency={ctx.tenant.currency}
-          subtotal={Number(quote.subtotal)}
-          discountType={quote.discountType}
-          discountValue={Number(quote.discountValue)}
-          discountAmount={Number(quote.discountAmount)}
-          taxRate={Number(quote.taxRate)}
-          taxAmount={Number(quote.taxAmount)}
-          total={Number(quote.total)}
-          optionalSubtotal={Number(quote.optionalSubtotal)}
-          depositType={quote.depositType}
-          depositValue={Number(quote.depositValue)}
-          depositAmount={Number(quote.depositAmount)}
-          customerNote={quote.customerNote}
-          terms={quote.terms}
-          items={previewItems}
-          sections={previewSections}
-        />
-      )}
+        {/* RIGHT RAIL — live customer preview. Always rendered; sticky on
+            wide screens so the editor and the preview stay side-by-side
+            while scrolling. On narrow screens the rail stacks below the
+            editor (grid collapses to 1 column). */}
+        <aside className="lg:sticky lg:top-24 lg:self-start">
+          <QuotePortalPreview
+            mode="inline"
+            tenantName={ctx.tenant.name}
+            number={quote.number}
+            status={quote.status}
+            customerName={quote.customer.name}
+            expiresAt={quote.expiresAt}
+            currency={ctx.tenant.currency}
+            subtotal={Number(quote.subtotal)}
+            discountType={quote.discountType}
+            discountValue={Number(quote.discountValue)}
+            discountAmount={Number(quote.discountAmount)}
+            taxRate={Number(quote.taxRate)}
+            taxAmount={Number(quote.taxAmount)}
+            total={Number(quote.total)}
+            optionalSubtotal={Number(quote.optionalSubtotal)}
+            depositType={quote.depositType}
+            depositValue={Number(quote.depositValue)}
+            depositAmount={Number(quote.depositAmount)}
+            customerNote={quote.customerNote}
+            terms={quote.terms}
+            items={previewItems}
+            sections={previewSections}
+          />
+        </aside>
+      </div>
     </div>
+  );
+}
+
+/**
+ * Collapsible wrapper used for the Sharing + Activity sections. Keeps
+ * the single-page editor focused on the most common workflow (edit
+ * lines, adjust pricing, write notes) and hides reference / outbound
+ * tasks one click away. Summary text shows what's inside without
+ * expanding — "Public link minted · rotate or revoke", "3 comments",
+ * etc. — so reps can scan the page at a glance.
+ */
+function CollapsibleSection({
+  id,
+  title,
+  summary,
+  defaultOpen,
+  children,
+}: {
+  id: string;
+  title: string;
+  summary: string;
+  defaultOpen: boolean;
+  children: React.ReactNode;
+}) {
+  return (
+    <details
+      id={id}
+      open={defaultOpen}
+      className="group rounded-lg [&>summary]:list-none [&>summary::-webkit-details-marker]:hidden"
+      style={{
+        background: "var(--surface-0)",
+        border: "1px solid var(--border-subtle)",
+      }}
+    >
+      <summary
+        className="flex cursor-pointer items-center justify-between gap-3 px-5 py-3"
+        style={{ color: "var(--text-default)" }}
+      >
+        <div className="flex items-center gap-3">
+          <span className="text-sm font-semibold">{title}</span>
+          <span className="text-xs" style={{ color: "var(--text-muted)" }}>
+            {summary}
+          </span>
+        </div>
+        <span
+          aria-hidden
+          className="transition-transform group-open:rotate-180"
+          style={{ color: "var(--text-muted)" }}
+        >
+          <Icon.ChevronDown size={16} />
+        </span>
+      </summary>
+      <div
+        className="space-y-5 px-1 pb-5 pt-1"
+        style={{ borderTop: "1px solid var(--border-subtle)" }}
+      >
+        {children}
+      </div>
+    </details>
   );
 }
 
