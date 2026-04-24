@@ -539,3 +539,11 @@ button.underline:not([class*="ts-btn"]):not(:disabled):hover {
   border: 2px solid var(--surface-0);
 }
 ::-webkit-scrollbar-thumb:hover { background: var(--border-strong); }
+
+/* Brief pop on a newly-added file tile in the proof uploader. Confirms
+   the drop/select landed without requiring a screen-reader alert. */
+@keyframes ts-tile-pop {
+  0%   { transform: scale(0.96); box-shadow: 0 0 0 3px var(--accent-surface); }
+  60%  { transform: scale(1.01); box-shadow: 0 0 0 3px var(--accent-surface); }
+  100% { transform: scale(1);    box-shadow: 0 0 0 0 transparent; }
+}

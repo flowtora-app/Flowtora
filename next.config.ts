@@ -35,7 +35,12 @@ const HSTS_HEADER = {
 
 const nextConfig: NextConfig = {
   experimental: {
-    serverActions: { bodySizeLimit: "5mb" },
+    // Bumped to accommodate the proof file uploader (create-version form
+    // posts artwork directly via a server action). The client-side cap is
+    // 20 MB per file × 10 files; request-level overhead + multipart padding
+    // brings the realistic ceiling to ~220 MB. Vercel's platform limit is
+    // still the effective ceiling on hosted deployments.
+    serverActions: { bodySizeLimit: "220mb" },
   },
   async headers() {
     return [

@@ -10,10 +10,18 @@ import { requirePermission } from "@/lib/tenant";
 import { logAudit } from "@/lib/audit";
 import { notifyMany } from "@/lib/notifications";
 import { PROOF_TRANSITIONS } from "@/lib/proofs";
+import { isStorageConfigured, publicUrlFor, putFile, StorageError } from "@/lib/storage";
 // Phase 15 Slice E — customer-facing "proof ready" email.
 import { sendCustomerEmail, proofReadyEmail } from "@/lib/customer-emails";
 import { appOrigin } from "@/lib/share";
 import { formatDate } from "@/lib/format";
+
+// Limits for the combined "create version + upload files" flow. Per-file
+// cap keeps browsers from stalling on huge PDFs over server actions; the
+// fleet-wide cap (MAX_FILES) matches the client uploader's guard so the
+// two can't disagree.
+const MAX_PROOF_UPLOAD_FILES = 10;
+const MAX_PROOF_UPLOAD_BYTES = 20 * 1024 * 1024; // 20 MB per file
 
 const optionalString = z.string().max(200).optional().or(z.literal(""));
 const optionalLong = z.string().max(4000).optional().or(z.literal(""));
@@ -143,6 +151,167 @@ export async function createProof(slug: string, formData: FormData) {
   });
 
   revalidatePath(`/t/${slug}/orders/${order.id}`);
+  redirect(`/t/${slug}/orders/${order.id}/proofs/${proof.id}`);
+}
+
+// ────────────────────────────────────────────────────────────
+// Combined: create proof shell + upload artwork in one submission
+// ────────────────────────────────────────────────────────────
+//
+// Used by the redesigned "Start new proof version" form, which lets the
+// designer drag-and-drop artwork alongside the version metadata. We create
+// the Proof row first (so every upload has a parent to attach to), then
+// stream each File to R2 and write a File row + ledger entry for each.
+//
+// Uploads go to the *public* R2 bucket because proof files are embedded
+// in customer portal pages and email proof-ready templates; signed URLs
+// would expire and break emailed previews. If a designer uploads truly
+// private artwork, archive + replace after send.
+
+export async function createProofWithFiles(slug: string, formData: FormData) {
+  const ctx = await requirePermission(slug, "proofs:manage");
+
+  const rawOrderId = (formData.get("orderId") as string | null) ?? "";
+  const parsed = createSchema.safeParse({
+    orderId:     rawOrderId,
+    title:       formData.get("title") ?? "",
+    description: formData.get("description") ?? "",
+  });
+  if (!parsed.success) {
+    redirect(`/t/${slug}/orders/${rawOrderId}/proofs/new?error=${encodeURIComponent("Invalid proof input.")}`);
+  }
+  const d = parsed.data;
+
+  const rawFiles = formData
+    .getAll("files")
+    .filter((v): v is File => v instanceof File && v.size > 0);
+
+  if (rawFiles.length > MAX_PROOF_UPLOAD_FILES) {
+    redirect(`/t/${slug}/orders/${d.orderId}/proofs/new?error=${encodeURIComponent(`Too many files — max ${MAX_PROOF_UPLOAD_FILES}.`)}`);
+  }
+  const oversized = rawFiles.find((f) => f.size > MAX_PROOF_UPLOAD_BYTES);
+  if (oversized) {
+    redirect(`/t/${slug}/orders/${d.orderId}/proofs/new?error=${encodeURIComponent(`"${oversized.name}" exceeds ${MAX_PROOF_UPLOAD_BYTES / (1024 * 1024)} MB.`)}`);
+  }
+
+  const order = await db.order.findFirst({
+    where: { id: d.orderId, tenantId: ctx.tenant.id },
+    select: { id: true },
+  });
+  if (!order) redirect(`/t/${slug}/orders?error=${encodeURIComponent("Order not found.")}`);
+
+  // If the designer included files but storage isn't wired up on this
+  // deploy, bail before creating the shell — otherwise we'd orphan a
+  // fileless proof the user didn't mean to create.
+  if (rawFiles.length > 0 && !isStorageConfigured()) {
+    redirect(`/t/${slug}/orders/${order.id}/proofs/new?error=${encodeURIComponent("File storage isn't configured on this deploy. Set the R2_* env vars and redeploy.")}`);
+  }
+
+  const proof = await db.$transaction(async (tx) => {
+    const prev = await tx.proof.findFirst({
+      where:    { orderId: order.id },
+      orderBy:  { version: "desc" },
+      select:   { version: true },
+    });
+    const version = (prev?.version ?? 0) + 1;
+    const created = await tx.proof.create({
+      data: {
+        tenantId:    ctx.tenant.id,
+        orderId:     order.id,
+        version,
+        title:       empty(d.title),
+        description: empty(d.description),
+        status:      "DRAFT",
+        createdBy:   ctx.userId,
+      },
+    });
+    await recordDecision({
+      tx,
+      tenantId:        ctx.tenant.id,
+      proofId:         created.id,
+      round:           1,
+      decision:        "CREATED",
+      decidedByUserId: ctx.userId,
+    });
+    return created;
+  });
+
+  // Upload every file sequentially. Sequential rather than Promise.all so
+  // we don't hammer R2 with 20 concurrent PUTs from one request; the
+  // total round-trip is still a few seconds for typical designer uploads.
+  let uploadedCount = 0;
+  let totalBytes = 0;
+  for (const file of rawFiles) {
+    try {
+      const { key, contentType, size } = await putFile({
+        tenantId:   ctx.tenant.id,
+        scope:      "proofs",
+        ownerId:    proof.id,
+        file,
+        visibility: "public",
+      });
+      const url = publicUrlFor(key);
+      const isImage = contentType.startsWith("image/");
+      const fileRow = await db.file.create({
+        data: {
+          tenantId:     ctx.tenant.id,
+          uploaderId:   ctx.userId,
+          filename:     file.name,
+          storageUrl:   url,
+          // For images the upload URL doubles as its own thumbnail — a
+          // dedicated thumbnailer can replace this later without schema
+          // changes (the field is already populated).
+          thumbnailUrl: isImage ? url : null,
+          mimeType:     contentType,
+          sizeBytes:    size,
+          kind:         "PROOF",
+          proofId:      proof.id,
+        },
+      });
+      await db.proofDecision.create({
+        data: {
+          tenantId:        ctx.tenant.id,
+          proofId:         proof.id,
+          round:           1,
+          decision:        "REVISED",
+          decidedByUserId: ctx.userId,
+          notes:           `+ ${file.name}`,
+          metadata:        { fileId: fileRow.id, kind: "PROOF", bytes: size, op: "created_with_version" },
+        },
+      });
+      uploadedCount += 1;
+      totalBytes += size;
+    } catch (err) {
+      if (err instanceof StorageError) {
+        console.error("[createProofWithFiles] storage error for", file.name, err.message);
+      } else {
+        console.error("[createProofWithFiles] upload failed for", file.name, err);
+      }
+    }
+  }
+
+  await logAudit({
+    tenantId:   ctx.tenant.id,
+    userId:     ctx.userId,
+    action:     "proof.created",
+    entityType: "Proof",
+    entityId:   proof.id,
+    metadata:   {
+      orderId:       order.id,
+      version:       proof.version,
+      uploadedFiles: uploadedCount,
+      totalBytes,
+    },
+  });
+
+  revalidatePath(`/t/${slug}/orders/${order.id}`);
+
+  if (rawFiles.length > 0 && uploadedCount === 0) {
+    // Files were attempted but all failed — the designer needs to see
+    // something actionable. Land them on the detail page with an error
+    // so they can retry via FilesCard without losing the shell.
+    redirect(`/t/${slug}/orders/${order.id}/proofs/${proof.id}?error=${encodeURIComponent("Version created, but the file upload failed. Try again from the files panel.")}`);
+  }
   redirect(`/t/${slug}/orders/${order.id}/proofs/${proof.id}`);
 }
 
