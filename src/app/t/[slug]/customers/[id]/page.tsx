@@ -35,6 +35,27 @@ import { NextActionPanel } from "@/components/crm/NextActionPanel";
 import { StageChangeCard } from "@/components/crm/StageChangeCard";
 import { TagEditor } from "@/components/crm/TagEditor";
 import { loadTenantTags } from "@/lib/customer-tags";
+import {
+  CustomerDetailTabs,
+  type CustomerDetailTab,
+} from "@/components/customers/CustomerDetailTabs";
+
+// Inlined rather than imported from the client component — a value exported
+// from a "use client" module is a client reference and can't be called from
+// the server.
+function parseCustomerDetailTab(raw: string | undefined): CustomerDetailTab {
+  switch (raw) {
+    case "work":
+    case "contacts":
+    case "communication":
+    case "tasks":
+    case "files":
+    case "activity":
+      return raw;
+    default:
+      return "overview";
+  }
+}
 
 export async function generateMetadata(
   { params }: { params: Promise<{ slug: string; id: string }> },
@@ -49,11 +70,16 @@ export async function generateMetadata(
 
 export default async function CustomerDetailPage({
   params,
+  searchParams,
 }: {
   params: Promise<{ slug: string; id: string }>;
+  searchParams: Promise<{ tab?: string }>;
 }) {
   const { slug, id } = await params;
+  const sp = await searchParams;
   const ctx = await requirePermission(slug, "customers:view");
+  const activeTab = parseCustomerDetailTab(sp.tab);
+
   const customer = await db.customer.findFirst({
     where: { id, tenantId: ctx.tenant.id },
     include: {
@@ -65,8 +91,6 @@ export default async function CustomerDetailPage({
       invoices: { orderBy: { updatedAt: "desc" }, take: 20 },
       files: { orderBy: { createdAt: "desc" } },
       portalTokens: { orderBy: { createdAt: "desc" } },
-      // Phase 14 — internal comment thread. Include deleted rows so the UI
-      // can render "(removed)" tombstones rather than silently dropping them.
       comments: { orderBy: { createdAt: "asc" }, take: 200 },
     },
   });
@@ -89,9 +113,6 @@ export default async function CustomerDetailPage({
         sender: { select: { name: true } },
       },
     }),
-    // Phase 16 — automated outbound emails (branded templates + webhooks)
-    // feed the unified communication history timeline. Cap at 100 to keep
-    // the page quick for long-tenured customers.
     db.emailEvent.findMany({
       where: { tenantId: ctx.tenant.id, customerId: customer.id },
       orderBy: { sentAt: "desc" },
@@ -105,8 +126,6 @@ export default async function CustomerDetailPage({
     }),
   ]);
 
-  // Resolve sender userIds on email events to name/email pairs in a single
-  // batch rather than N+1 lookups per row.
   const emailSenderIds = Array.from(new Set(emailEvents.map((e) => e.senderUserId).filter((x): x is string => Boolean(x))));
   const emailSenders = emailSenderIds.length
     ? await db.user.findMany({
@@ -120,7 +139,6 @@ export default async function CustomerDetailPage({
     sender: e.senderUserId ? emailSenderById.get(e.senderUserId) ?? null : null,
   }));
 
-  // Member id → display name for the timeline interaction rows.
   const memberNameById = new Map<string, string>(
     members.map((m) => [m.userId, m.name ?? m.email ?? "Staff"]),
   );
@@ -135,27 +153,18 @@ export default async function CustomerDetailPage({
   const canInvoice = ctx.can("invoices:manage");
   const canUploadFiles = ctx.can("files:upload");
 
-  // Phase 7 — opportunity health + next action.
-  //
-  // We already loaded interactions/tasks/quotes above, so in principle
-  // we could compute the health inputs inline without an extra trip.
-  // But `loadHealthBundle` batches four targeted aggregate queries and
-  // keeps the per-row cost identical whether we score 1 customer or
-  // 100 — using it here keeps one code path across list/kanban/detail
-  // and avoids subtle drift if the rules evolve.
   const healthBundle = await loadHealthBundle(ctx.tenant.id, [customer]);
   const healthInput = healthBundle.get(customer.id);
   const healthReport = healthInput
     ? computeOpportunityHealth(healthInput)
     : null;
 
-  // Latest sent quote — used by the next-action engine to decide
-  // whether to nudge ("you sent this 7d ago, no reply").
   const latestSentQuote = customer.quotes.find(
     (q) => q.status === "SENT" || q.status === "VIEWED" || q.status === "APPROVED",
   );
-  const overdueTaskCount = customer.tasks.filter(
-    (t) => !t.completedAt && t.dueDate && t.dueDate.getTime() < Date.now(),
+  const openTasks = customer.tasks.filter((t) => !t.completedAt);
+  const overdueTaskCount = openTasks.filter(
+    (t) => t.dueDate && t.dueDate.getTime() < Date.now(),
   ).length;
 
   const nextAction = healthReport
@@ -170,9 +179,6 @@ export default async function CustomerDetailPage({
         health: healthReport,
       })
     : null;
-  // Hide the panel outright for closed stages — there's no useful
-  // "next action" for a won or lost deal beyond the canonical ones
-  // the engine returns, and leaving the panel up adds visual noise.
   const showNextAction =
     nextAction && customer.stage !== "WON" && customer.stage !== "LOST";
 
@@ -181,71 +187,139 @@ export default async function CustomerDetailPage({
   const interactionAction = addInteraction.bind(null, slug);
   const taskAction = createTask.bind(null, slug);
 
+  const workCount =
+    customer.quotes.length + customer.orders.length + customer.invoices.length;
+  const ownerName = customer.ownerId ? memberMap.get(customer.ownerId)?.name ?? null : null;
+
+  const tabCounts: Partial<Record<CustomerDetailTab, number>> = {
+    work: workCount,
+    contacts: customer.contacts.length,
+    communication: unreadPortalMessages,
+    tasks: openTasks.length,
+    files: customer.files.length,
+  };
+
   return (
-    <div className="space-y-6">
-      {/* Header */}
-      <div className="flex items-start justify-between">
-        <div>
-          <div className="flex items-center gap-3">
-            <h1 className="text-2xl font-semibold">{customer.name}</h1>
-            <span className="rounded-full px-2 py-0.5 text-xs" style={{ background: stageColor(customer.stage), color: "white" }}>
-              {stageLabel(customer.stage)}
-            </span>
-            {healthReport && (
-              <HealthBadge
-                tier={healthReport.tier}
-                score={healthReport.score}
-                atRisk={healthReport.atRisk}
-              />
-            )}
-          </div>
-          <p className="mt-1 text-sm" style={{ color: "var(--muted)" }}>
-            {humanize(customer.kind)} · {humanize(customer.status)}
-            {customer.ownerId && memberMap.get(customer.ownerId) && (
-              <> · owner {memberMap.get(customer.ownerId)!.name}</>
-            )}
-            {customer.source && <> · source {customer.source}</>}
-          </p>
-          {customer.stage === "LOST" && customer.lostReason && (
-            <p
-              className="mt-2 inline-flex items-center gap-2 rounded-md px-2.5 py-1 text-xs"
-              style={{
-                background: "var(--danger-surface)",
-                color: "var(--danger-fg)",
-              }}
-            >
-              <span aria-hidden>⊘</span>
-              <span>
-                <strong>Lost reason:</strong>{" "}
-                {lostReasonLabel(customer.lostReason) ?? customer.lostReason}
-              </span>
-            </p>
-          )}
-        </div>
-        <div className="flex gap-2">
-          {canQuote && (
-            <Link href={`/t/${slug}/quotes/new?customerId=${customer.id}`}>
-              <Button type="button">New quote</Button>
-            </Link>
-          )}
-          <Link href={`/t/${slug}/customers/${customer.id}/timeline`}>
-            <Button type="button" variant="secondary">Timeline</Button>
-          </Link>
-          {canEdit && (
-            <Link href={`/t/${slug}/customers/${customer.id}/edit`}>
-              <Button type="button" variant="secondary">Edit</Button>
-            </Link>
-          )}
-          {canDelete && (
-            <form action={deleteCustomer.bind(null, slug, customer.id)}>
-              <Button type="submit" variant="danger">Delete</Button>
-            </form>
-          )}
-        </div>
+    <div className="space-y-5">
+      <div className="text-sm">
+        <Link href={`/t/${slug}/customers`} className="underline" style={{ color: "var(--text-muted)" }}>
+          ← Customers
+        </Link>
       </div>
 
-      {/* Phase 7 — "Next action" card. Prominent, above-the-fold
-          guidance on the single highest-leverage next step. */}
+      {/* Status-specific banners. Above the sticky header so they scroll away. */}
+      {customer.stage === "LOST" && customer.lostReason && (
+        <div
+          className="rounded-md px-4 py-3 text-sm"
+          style={{
+            background: "var(--danger-surface)",
+            color: "var(--danger-fg)",
+            border: "1px solid var(--danger-fg)",
+          }}
+        >
+          <div className="font-medium">
+            Lost: {lostReasonLabel(customer.lostReason) ?? customer.lostReason}
+          </div>
+        </div>
+      )}
+
+      {/* STICKY HEADER — name + stage + health + identity subline + est. value + primary CTA. */}
+      <header
+        className="sticky top-0 z-10 rounded-lg"
+        style={{
+          background: "var(--surface-0)",
+          border: "1px solid var(--border-subtle)",
+          boxShadow: "0 1px 2px rgb(0 0 0 / 0.04)",
+        }}
+      >
+        <div className="flex flex-wrap items-start justify-between gap-4 px-5 py-4">
+          <div className="min-w-0 flex-1">
+            <div className="flex flex-wrap items-center gap-2.5">
+              <h1 className="text-xl font-semibold" style={{ color: "var(--text-default)" }}>
+                {customer.name}
+              </h1>
+              <span
+                className="rounded-full px-2 py-0.5 text-[11px] font-medium"
+                style={{ background: stageColor(customer.stage), color: "white" }}
+              >
+                {stageLabel(customer.stage)}
+              </span>
+              {healthReport && (
+                <HealthBadge
+                  tier={healthReport.tier}
+                  score={healthReport.score}
+                  atRisk={healthReport.atRisk}
+                />
+              )}
+              {customer.status !== "ACTIVE" && (
+                <span
+                  className="rounded-full px-2 py-0.5 text-[11px]"
+                  style={{
+                    background: "var(--surface-1)",
+                    border: "1px solid var(--border-subtle)",
+                    color: "var(--text-muted)",
+                  }}
+                >
+                  {humanize(customer.status)}
+                </span>
+              )}
+            </div>
+            <div className="mt-1 text-sm" style={{ color: "var(--text-muted)" }}>
+              {humanize(customer.kind)}
+              {ownerName && <> · owner {ownerName}</>}
+              {customer.source && <> · source {customer.source}</>}
+              {customer.email && <> · {customer.email}</>}
+            </div>
+          </div>
+          <div className="flex items-center gap-5 shrink-0">
+            {customer.estimatedValue && (
+              <div className="text-right">
+                <div
+                  className="text-[10px] uppercase tracking-wide"
+                  style={{ color: "var(--text-muted)" }}
+                >
+                  Est. value
+                </div>
+                <div
+                  className="text-2xl font-bold tabular-nums leading-tight"
+                  style={{ color: "var(--text-default)" }}
+                >
+                  {formatMoney(customer.estimatedValue.toString(), ctx.tenant.currency)}
+                </div>
+                {customer.closeProbability != null && (
+                  <div className="text-[11px] tabular-nums" style={{ color: "var(--text-muted)" }}>
+                    {customer.closeProbability}% close probability
+                  </div>
+                )}
+              </div>
+            )}
+            {canQuote && (
+              <Link href={`/t/${slug}/quotes/new?customerId=${customer.id}`}>
+                <Button type="button">New quote</Button>
+              </Link>
+            )}
+          </div>
+        </div>
+      </header>
+
+      {/* Secondary actions row. */}
+      <div className="flex flex-wrap items-center gap-2">
+        <Link href={`/t/${slug}/customers/${customer.id}/timeline`}>
+          <Button type="button" variant="secondary">Timeline</Button>
+        </Link>
+        {canEdit && (
+          <Link href={`/t/${slug}/customers/${customer.id}/edit`}>
+            <Button type="button" variant="secondary">Edit</Button>
+          </Link>
+        )}
+        {canDelete && (
+          <form action={deleteCustomer.bind(null, slug, customer.id)}>
+            <Button type="submit" variant="danger">Delete</Button>
+          </form>
+        )}
+      </div>
+
+      {/* Next action — highest-leverage next step, above the tabs. */}
       {showNextAction && nextAction && (
         <NextActionPanel
           slug={slug}
@@ -255,9 +329,7 @@ export default async function CustomerDetailPage({
         />
       )}
 
-      {/* Phase 7 — guided stage conversion. Adapts the form to the
-          picked stage: canonical lost reasons for LOST, quote-required
-          guard for WON, reactivation prompt for LOST → active. */}
+      {/* Guided stage conversion. */}
       {canEdit && (
         <StageChangeCard
           slug={slug}
@@ -269,181 +341,341 @@ export default async function CustomerDetailPage({
         />
       )}
 
-      <div className="grid grid-cols-1 gap-6 lg:grid-cols-3">
-        {/* Left: profile + addresses */}
-        <div className="space-y-4 lg:col-span-1">
-          <Card>
-            <CardHeader title="Contact" />
-            <dl className="grid grid-cols-1 gap-y-2 px-5 py-4 text-sm">
-              <Row label="Email" value={customer.email} />
-              <Row label="Phone" value={customer.phone} />
-              <Row label="Website" value={customer.website} />
-              <Row label="Estimated value" value={formatMoney(customer.estimatedValue?.toString() ?? null, ctx.tenant.currency)} />
-              <Row label="Close probability" value={customer.closeProbability != null ? `${customer.closeProbability}%` : null} />
-            </dl>
-            {/* Phase 7 — inline tag editor. Suggestions come from the
-                tenant-wide tag catalogue so reps stay consistent. */}
-            <div
-              className="space-y-2 px-5 py-4"
-              style={{ borderTop: "1px solid var(--border-subtle)" }}
-            >
-              <div
-                className="text-[10px] font-semibold uppercase tracking-wider"
-                style={{ color: "var(--text-faint)" }}
-              >
-                Tags
-              </div>
-              <TagEditor
-                slug={slug}
-                customerId={customer.id}
-                tags={customer.tags}
-                suggestions={tagSuggestions}
-                canEdit={canEdit}
-              />
-            </div>
-          </Card>
+      {/* TABS */}
+      <div className="space-y-5 pt-2">
+        <CustomerDetailTabs active={activeTab} counts={tabCounts} />
 
-          {/* Phase 7 — transparent health breakdown. Each reason is a
-              plain-English string from the engine, so a rep can see
-              exactly why the score is what it is — no hidden weights. */}
-          {healthReport && <OpportunityHealthCard report={healthReport} />}
-
-          <Card>
-            <CardHeader title="Billing address" />
-            <Address
-              line1={customer.billingAddressLine1}
-              line2={customer.billingAddressLine2}
-              city={customer.billingCity}
-              region={customer.billingRegion}
-              postal={customer.billingPostalCode}
-              country={customer.billingCountry}
-            />
-          </Card>
-
-          <Card>
-            <CardHeader title="Install address" />
-            <Address
-              line1={customer.installAddressLine1}
-              line2={customer.installAddressLine2}
-              city={customer.installCity}
-              region={customer.installRegion}
-              postal={customer.installPostalCode}
-              country={customer.installCountry}
-            />
-          </Card>
-
-          {customer.notes && (
-            <Card>
-              <CardHeader title="Notes" />
-              <p className="whitespace-pre-wrap px-5 py-4 text-sm">{customer.notes}</p>
-            </Card>
-          )}
-
-          {/* Portal links — let customers view their records without a login. */}
-          <Card>
-            <CardHeader
-              title="Customer portal"
-              description="Token-based links for the customer"
-            />
-            <ul>
-              {customer.portalTokens.length === 0 && (
-                <li className="px-5 py-4 text-xs" style={{ color: "var(--muted)" }}>
-                  No portal links yet.
-                </li>
-              )}
-              {customer.portalTokens.map((t) => {
-                const active = isPortalTokenActive(t);
-                const base = process.env.APP_URL ?? "";
-                const url = `${base}${portalPath(t.token)}`;
-                const revoke = revokePortalToken.bind(null, slug, t.id);
-                const del = deletePortalToken.bind(null, slug, t.id);
-                return (
-                  <li
-                    key={t.id}
-                    className="space-y-2 px-5 py-3"
-                    style={{ borderTop: "1px solid var(--border)" }}
+        {activeTab === "overview" && (
+          <div className="grid grid-cols-1 gap-5 lg:grid-cols-3">
+            <div className="space-y-5 lg:col-span-1">
+              <Card>
+                <CardHeader title="Contact" />
+                <dl className="grid grid-cols-1 gap-y-2 px-5 py-4 text-sm">
+                  <Row label="Email" value={customer.email} />
+                  <Row label="Phone" value={customer.phone} />
+                  <Row label="Website" value={customer.website} />
+                  <Row
+                    label="Estimated value"
+                    value={formatMoney(customer.estimatedValue?.toString() ?? null, ctx.tenant.currency)}
+                  />
+                  <Row
+                    label="Close probability"
+                    value={customer.closeProbability != null ? `${customer.closeProbability}%` : null}
+                  />
+                </dl>
+                <div
+                  className="space-y-2 px-5 py-4"
+                  style={{ borderTop: "1px solid var(--border-subtle)" }}
+                >
+                  <div
+                    className="text-[10px] font-semibold uppercase tracking-wider"
+                    style={{ color: "var(--text-faint)" }}
                   >
-                    <div className="flex items-center justify-between gap-2">
-                      <div className="flex items-center gap-2">
-                        <span className="text-sm">{t.label ?? "Portal link"}</span>
-                        <span
-                          className="rounded-full px-2 py-0.5 text-xs"
-                          style={{
-                            background: active ? "#10b981" : "#6b7280",
-                            color: "white",
-                          }}
-                        >
-                          {portalTokenStatusLabel(t)}
+                    Tags
+                  </div>
+                  <TagEditor
+                    slug={slug}
+                    customerId={customer.id}
+                    tags={customer.tags}
+                    suggestions={tagSuggestions}
+                    canEdit={canEdit}
+                  />
+                </div>
+              </Card>
+
+              {healthReport && <OpportunityHealthCard report={healthReport} />}
+            </div>
+
+            <div className="space-y-5 lg:col-span-2">
+              <div className="grid grid-cols-1 gap-5 sm:grid-cols-2">
+                <Card>
+                  <CardHeader title="Billing address" />
+                  <Address
+                    line1={customer.billingAddressLine1}
+                    line2={customer.billingAddressLine2}
+                    city={customer.billingCity}
+                    region={customer.billingRegion}
+                    postal={customer.billingPostalCode}
+                    country={customer.billingCountry}
+                  />
+                </Card>
+                <Card>
+                  <CardHeader title="Install address" />
+                  <Address
+                    line1={customer.installAddressLine1}
+                    line2={customer.installAddressLine2}
+                    city={customer.installCity}
+                    region={customer.installRegion}
+                    postal={customer.installPostalCode}
+                    country={customer.installCountry}
+                  />
+                </Card>
+              </div>
+
+              {customer.notes && (
+                <Card>
+                  <CardHeader title="Notes" />
+                  <p className="whitespace-pre-wrap px-5 py-4 text-sm">{customer.notes}</p>
+                </Card>
+              )}
+
+              <Card>
+                <CardHeader
+                  title="Customer portal"
+                  description="Token-based links for the customer"
+                />
+                <ul>
+                  {customer.portalTokens.length === 0 && (
+                    <li className="px-5 py-4 text-xs" style={{ color: "var(--text-muted)" }}>
+                      No portal links yet.
+                    </li>
+                  )}
+                  {customer.portalTokens.map((t) => {
+                    const active = isPortalTokenActive(t);
+                    const base = process.env.APP_URL ?? "";
+                    const url = `${base}${portalPath(t.token)}`;
+                    const revoke = revokePortalToken.bind(null, slug, t.id);
+                    const del = deletePortalToken.bind(null, slug, t.id);
+                    return (
+                      <li
+                        key={t.id}
+                        className="space-y-2 px-5 py-3"
+                        style={{ borderTop: "1px solid var(--border-subtle)" }}
+                      >
+                        <div className="flex items-center justify-between gap-2">
+                          <div className="flex items-center gap-2">
+                            <span className="text-sm">{t.label ?? "Portal link"}</span>
+                            <span
+                              className="rounded-full px-2 py-0.5 text-xs"
+                              style={{
+                                background: active ? "#10b981" : "#6b7280",
+                                color: "white",
+                              }}
+                            >
+                              {portalTokenStatusLabel(t)}
+                            </span>
+                          </div>
+                          <div className="flex gap-2">
+                            {active && canEdit && (
+                              <form action={revoke}>
+                                <button type="submit" className="text-xs underline" style={{ color: "var(--danger-fg)" }}>
+                                  Revoke
+                                </button>
+                              </form>
+                            )}
+                            {canEdit && (
+                              <form action={del}>
+                                <button type="submit" className="text-xs underline" style={{ color: "var(--text-muted)" }}>
+                                  Delete
+                                </button>
+                              </form>
+                            )}
+                          </div>
+                        </div>
+                        <div className="text-xs" style={{ color: "var(--text-muted)" }}>
+                          {t.expiresAt ? <>Expires {formatDate(t.expiresAt)}</> : <>No expiry</>}
+                          {t.lastUsedAt && <> · Last used {formatDate(t.lastUsedAt)}</>}
+                        </div>
+                        <input
+                          readOnly
+                          className="w-full rounded-md bg-transparent px-2 py-1 text-xs"
+                          style={{ border: "1px solid var(--border-subtle)", color: "var(--text-muted)" }}
+                          defaultValue={url}
+                        />
+                      </li>
+                    );
+                  })}
+                </ul>
+                {canEdit && (
+                  <form
+                    action={issuePortalToken.bind(null, slug)}
+                    className="space-y-3 px-5 py-4"
+                    style={{ borderTop: "1px solid var(--border-subtle)" }}
+                  >
+                    <input type="hidden" name="customerId" value={customer.id} />
+                    <Field label="Label (optional)" name="label" placeholder="e.g. Jane @ ACME" />
+                    <Field label="Expires (optional)" name="expiresAt" type="date" />
+                    <Button type="submit" variant="secondary">Issue new portal link</Button>
+                  </form>
+                )}
+              </Card>
+            </div>
+          </div>
+        )}
+
+        {activeTab === "work" && (
+          <div className="space-y-5">
+            <Card>
+              <CardHeader
+                title="Quotes"
+                description={`${customer.quotes.length} on file`}
+                right={canQuote ? (
+                  <Link
+                    href={`/t/${slug}/quotes/new?customerId=${customer.id}`}
+                    className="text-xs underline"
+                    style={{ color: "var(--text-muted)" }}
+                  >
+                    New quote
+                  </Link>
+                ) : undefined}
+              />
+              <ul>
+                {customer.quotes.length === 0 && (
+                  <li className="px-5 py-4 text-sm" style={{ color: "var(--text-muted)" }}>
+                    No quotes yet.
+                  </li>
+                )}
+                {customer.quotes.map((q) => (
+                  <li
+                    key={q.id}
+                    className="flex items-center justify-between px-5 py-3"
+                    style={{ borderTop: "1px solid var(--border-subtle)" }}
+                  >
+                    <div className="flex items-center gap-3">
+                      <Link href={`/t/${slug}/quotes/${q.id}`} className="text-sm font-medium underline">
+                        {q.number}
+                      </Link>
+                      <span className="rounded-full px-2 py-0.5 text-xs" style={{ background: statusColor(q.status), color: "white" }}>
+                        {statusLabel(q.status)}
+                      </span>
+                      <span className="text-xs" style={{ color: "var(--text-muted)" }}>
+                        {q.expiresAt ? `expires ${formatDate(q.expiresAt)}` : "no expiry"}
+                      </span>
+                    </div>
+                    <div className="text-sm font-medium tabular-nums">
+                      {formatMoney(q.total.toString(), ctx.tenant.currency)}
+                    </div>
+                  </li>
+                ))}
+              </ul>
+            </Card>
+
+            <Card>
+              <CardHeader
+                title="Invoices"
+                description={`${customer.invoices.length} on file`}
+                right={canInvoice ? (
+                  <Link
+                    href={`/t/${slug}/invoices/new?customerId=${customer.id}`}
+                    className="text-xs underline"
+                    style={{ color: "var(--text-muted)" }}
+                  >
+                    New invoice
+                  </Link>
+                ) : undefined}
+              />
+              <ul>
+                {customer.invoices.length === 0 && (
+                  <li className="px-5 py-4 text-sm" style={{ color: "var(--text-muted)" }}>
+                    No invoices yet.
+                  </li>
+                )}
+                {customer.invoices.map((inv) => {
+                  const balance = Math.max(0, Number(inv.total) - Number(inv.amountPaid));
+                  return (
+                    <li
+                      key={inv.id}
+                      className="flex items-center justify-between px-5 py-3"
+                      style={{ borderTop: "1px solid var(--border-subtle)" }}
+                    >
+                      <div className="flex items-center gap-3">
+                        <Link href={`/t/${slug}/invoices/${inv.id}`} className="text-sm font-medium underline">
+                          {inv.number}
+                        </Link>
+                        <span className="rounded-full px-2 py-0.5 text-xs" style={{ background: invoiceStatusColor(inv.status), color: "white" }}>
+                          {invoiceStatusLabel(inv.status)}
+                        </span>
+                        <span className="text-xs" style={{ color: "var(--text-muted)" }}>
+                          {inv.dueDate ? `due ${formatDate(inv.dueDate)}` : "no due date"}
                         </span>
                       </div>
-                      <div className="flex gap-2">
-                        {active && canEdit && (
-                          <form action={revoke}>
-                            <button type="submit" className="text-xs underline" style={{ color: "#ff6b6b" }}>
-                              Revoke
-                            </button>
-                          </form>
-                        )}
-                        {canEdit && (
-                          <form action={del}>
-                            <button type="submit" className="text-xs underline" style={{ color: "var(--muted)" }}>
-                              Delete
-                            </button>
-                          </form>
+                      <div className="text-right text-sm">
+                        <div className="font-medium tabular-nums">{formatMoney(inv.total.toString(), ctx.tenant.currency)}</div>
+                        {balance > 0 && (
+                          <div className="text-xs tabular-nums" style={{ color: "var(--text-muted)" }}>
+                            {formatMoney(balance, ctx.tenant.currency)} due
+                          </div>
                         )}
                       </div>
-                    </div>
-                    <div className="text-xs" style={{ color: "var(--muted)" }}>
-                      {t.expiresAt ? <>Expires {formatDate(t.expiresAt)}</> : <>No expiry</>}
-                      {t.lastUsedAt && <> · Last used {formatDate(t.lastUsedAt)}</>}
-                    </div>
-                    <input
-                      readOnly
-                      className="w-full rounded-md bg-transparent px-2 py-1 text-xs"
-                      style={{ border: "1px solid var(--border)", color: "var(--muted)" }}
-                      defaultValue={url}
-                    />
-                  </li>
-                );
-              })}
-            </ul>
-            {canEdit && (
-              <form
-                action={issuePortalToken.bind(null, slug)}
-                className="space-y-3 px-5 py-4"
-                style={{ borderTop: "1px solid var(--border)" }}
-              >
-                <input type="hidden" name="customerId" value={customer.id} />
-                <Field label="Label (optional)" name="label" placeholder="e.g. Jane @ ACME" />
-                <Field label="Expires (optional)" name="expiresAt" type="date" />
-                <Button type="submit" variant="secondary">Issue new portal link</Button>
-              </form>
-            )}
-          </Card>
-        </div>
+                    </li>
+                  );
+                })}
+              </ul>
+            </Card>
 
-        {/* Right: contacts, activity, tasks */}
-        <div className="space-y-4 lg:col-span-2">
-          {/* Contacts */}
+            <Card>
+              <CardHeader title="Orders" description={`${customer.orders.length} on file`} />
+              <ul>
+                {customer.orders.length === 0 && (
+                  <li className="px-5 py-4 text-sm" style={{ color: "var(--text-muted)" }}>
+                    No orders yet.
+                  </li>
+                )}
+                {customer.orders.map((o) => (
+                  <li
+                    key={o.id}
+                    className="flex items-center justify-between px-5 py-3"
+                    style={{ borderTop: "1px solid var(--border-subtle)" }}
+                  >
+                    <div className="flex items-center gap-3">
+                      <Link href={`/t/${slug}/orders/${o.id}`} className="text-sm font-medium underline">
+                        {o.number}
+                      </Link>
+                      <span className="rounded-full px-2 py-0.5 text-xs" style={{ background: orderStatusColor(o.status), color: "white" }}>
+                        {orderStatusLabel(o.status)}
+                      </span>
+                      <span className="text-xs" style={{ color: "var(--text-muted)" }}>
+                        {o.dueDate ? `due ${formatDate(o.dueDate)}` : "no due date"}
+                      </span>
+                    </div>
+                    <div className="text-sm font-medium tabular-nums">
+                      {formatMoney(o.total.toString(), ctx.tenant.currency)}
+                    </div>
+                  </li>
+                ))}
+              </ul>
+            </Card>
+          </div>
+        )}
+
+        {activeTab === "contacts" && (
           <Card>
             <CardHeader title="Contacts" description={`${customer.contacts.length} on file`} />
             <ul>
+              {customer.contacts.length === 0 && (
+                <li className="px-5 py-4 text-sm" style={{ color: "var(--text-muted)" }}>
+                  No contacts yet.
+                </li>
+              )}
               {customer.contacts.map((c) => {
                 const remove = deleteContact.bind(null, slug, c.id);
                 return (
-                  <li key={c.id} className="flex items-center justify-between px-5 py-3" style={{ borderTop: "1px solid var(--border)" }}>
+                  <li
+                    key={c.id}
+                    className="flex items-center justify-between px-5 py-3"
+                    style={{ borderTop: "1px solid var(--border-subtle)" }}
+                  >
                     <div>
                       <div className="text-sm">
                         {c.firstName} {c.lastName ?? ""}
-                        {c.isPrimary && <span className="ml-2 rounded-full px-2 py-0.5 text-xs" style={{ background: "var(--accent)", color: "white" }}>Primary</span>}
+                        {c.isPrimary && (
+                          <span
+                            className="ml-2 rounded-full px-2 py-0.5 text-xs"
+                            style={{ background: "var(--accent-primary)", color: "white" }}
+                          >
+                            Primary
+                          </span>
+                        )}
                       </div>
-                      <div className="text-xs" style={{ color: "var(--muted)" }}>
+                      <div className="text-xs" style={{ color: "var(--text-muted)" }}>
                         {[c.title, c.email, c.phone].filter(Boolean).join(" · ") || "—"}
                       </div>
                     </div>
                     {canEdit && (
                       <form action={remove}>
-                        <button type="submit" className="text-xs underline" style={{ color: "#ff6b6b" }}>Remove</button>
+                        <button type="submit" className="text-xs underline" style={{ color: "var(--danger-fg)" }}>
+                          Remove
+                        </button>
                       </form>
                     )}
                   </li>
@@ -451,7 +683,11 @@ export default async function CustomerDetailPage({
               })}
             </ul>
             {canEdit && (
-              <form action={contactAction} className="space-y-3 px-5 py-4" style={{ borderTop: "1px solid var(--border)" }}>
+              <form
+                action={contactAction}
+                className="space-y-3 px-5 py-4"
+                style={{ borderTop: "1px solid var(--border-subtle)" }}
+              >
                 <input type="hidden" name="customerId" value={customer.id} />
                 <div className="grid grid-cols-2 gap-3">
                   <Field label="First name" name="firstName" required />
@@ -469,202 +705,236 @@ export default async function CustomerDetailPage({
               </form>
             )}
           </Card>
+        )}
 
-          {/* Unified communication history — merges automated emails, portal
-              messages, and logged interactions into a single timeline. The
-              "Activity" card below keeps the quick-log form and raw list. */}
-          <CustomerCommsTimeline
-            customerName={customer.name}
-            emailEvents={emailEventsForTimeline}
-            portalMessages={portalMessages}
-            interactions={customer.interactions}
-            memberNameById={memberNameById}
-          />
+        {activeTab === "communication" && (
+          <div className="space-y-5">
+            <CustomerCommsTimeline
+              customerName={customer.name}
+              emailEvents={emailEventsForTimeline}
+              portalMessages={portalMessages}
+              interactions={customer.interactions}
+              memberNameById={memberNameById}
+            />
 
-          {/* Activity */}
-          <Card>
-            <CardHeader title="Log activity" description="Quick-log a call, meeting, or note." />
-            <ul>
-              {customer.interactions.length === 0 && (
-                <li className="px-5 py-4 text-sm" style={{ color: "var(--muted)" }}>No activity yet.</li>
-              )}
-              {customer.interactions.slice(0, 5).map((it) => (
-                <li key={it.id} className="px-5 py-3" style={{ borderTop: "1px solid var(--border)" }}>
-                  <div className="text-xs" style={{ color: "var(--muted)" }}>
-                    {humanize(it.type)} · {formatDateTime(it.occurredAt)} · {memberMap.get(it.userId)?.name ?? "—"}
+            <Card>
+              <CardHeader title="Log activity" description="Quick-log a call, meeting, or note." />
+              {canEdit && (
+                <form
+                  action={interactionAction}
+                  className="space-y-3 px-5 py-4"
+                  style={{ borderTop: "1px solid var(--border-subtle)" }}
+                >
+                  <input type="hidden" name="customerId" value={customer.id} />
+                  <div className="grid grid-cols-[140px_1fr] gap-3">
+                    <SelectField
+                      label="Type"
+                      name="type"
+                      defaultValue="NOTE"
+                      options={[
+                        { value: "NOTE", label: "Note" },
+                        { value: "CALL", label: "Call" },
+                        { value: "EMAIL", label: "Email" },
+                        { value: "MEETING", label: "Meeting" },
+                        { value: "TEXT", label: "Text" },
+                      ]}
+                    />
+                    <Field label="Subject" name="subject" />
                   </div>
-                  {it.subject && <div className="mt-0.5 text-sm font-medium">{it.subject}</div>}
-                  {it.body && <div className="mt-0.5 whitespace-pre-wrap text-sm">{it.body}</div>}
-                </li>
-              ))}
-            </ul>
+                  <TextArea label="Details" name="body" rows={3} />
+                  <Button type="submit" variant="secondary">Log activity</Button>
+                </form>
+              )}
+            </Card>
+
             {canEdit && (
-              <form action={interactionAction} className="space-y-3 px-5 py-4" style={{ borderTop: "1px solid var(--border)" }}>
-                <input type="hidden" name="customerId" value={customer.id} />
-                <div className="grid grid-cols-[140px_1fr] gap-3">
-                  <SelectField
-                    label="Type"
-                    name="type"
-                    defaultValue="NOTE"
-                    options={[
-                      { value: "NOTE", label: "Note" },
-                      { value: "CALL", label: "Call" },
-                      { value: "EMAIL", label: "Email" },
-                      { value: "MEETING", label: "Meeting" },
-                      { value: "TEXT", label: "Text" },
-                    ]}
-                  />
-                  <Field label="Subject" name="subject" />
-                </div>
-                <TextArea label="Details" name="body" rows={3} />
-                <Button type="submit" variant="secondary">Log activity</Button>
-              </form>
+              <Card>
+                <CardHeader
+                  title="Send update"
+                  description="Pick a message template, customize, and record the send on this customer's timeline."
+                />
+                <SendMessageWidget
+                  slug={slug}
+                  customerId={customer.id}
+                  customerEmail={customer.email}
+                  returnTo={`/t/${slug}/customers/${customer.id}?tab=communication`}
+                  templates={sendCtx.templates}
+                  bag={sendCtx.bag}
+                />
+              </Card>
             )}
-          </Card>
 
-          {/* Quotes */}
-          <Card>
-            <CardHeader
-              title="Quotes"
-              description={`${customer.quotes.length} on file`}
-              right={canQuote ? (
-                <Link href={`/t/${slug}/quotes/new?customerId=${customer.id}`} className="text-xs underline" style={{ color: "var(--muted)" }}>
-                  New quote
-                </Link>
-              ) : undefined}
-            />
-            <ul>
-              {customer.quotes.length === 0 && (
-                <li className="px-5 py-4 text-sm" style={{ color: "var(--muted)" }}>No quotes yet.</li>
-              )}
-              {customer.quotes.map((q) => (
-                <li key={q.id} className="flex items-center justify-between px-5 py-3" style={{ borderTop: "1px solid var(--border)" }}>
-                  <div className="flex items-center gap-3">
-                    <Link href={`/t/${slug}/quotes/${q.id}`} className="text-sm font-medium underline">
-                      {q.number}
-                    </Link>
-                    <span className="rounded-full px-2 py-0.5 text-xs" style={{ background: statusColor(q.status), color: "white" }}>
-                      {statusLabel(q.status)}
+            <Card>
+              <CardHeader
+                title="Portal messages"
+                description="Messages sent by the customer from their portal. Reply sends a real email and updates their thread."
+                right={
+                  unreadPortalMessages > 0 ? (
+                    <span
+                      className="inline-flex h-5 min-w-[20px] items-center justify-center rounded-full px-1.5 text-[10px] font-bold text-white"
+                      style={{ background: "var(--danger-fg)" }}
+                    >
+                      {unreadPortalMessages}
                     </span>
-                    <span className="text-xs" style={{ color: "var(--muted)" }}>
-                      {q.expiresAt ? `expires ${formatDate(q.expiresAt)}` : "no expiry"}
-                    </span>
-                  </div>
-                  <div className="text-sm font-medium">
-                    {formatMoney(q.total.toString(), ctx.tenant.currency)}
-                  </div>
-                </li>
-              ))}
-            </ul>
-          </Card>
-
-          {/* Invoices */}
-          <Card>
-            <CardHeader
-              title="Invoices"
-              description={`${customer.invoices.length} on file`}
-              right={canInvoice ? (
-                <Link href={`/t/${slug}/invoices/new?customerId=${customer.id}`} className="text-xs underline" style={{ color: "var(--muted)" }}>
-                  New invoice
-                </Link>
-              ) : undefined}
-            />
-            <ul>
-              {customer.invoices.length === 0 && (
-                <li className="px-5 py-4 text-sm" style={{ color: "var(--muted)" }}>No invoices yet.</li>
+                  ) : undefined
+                }
+              />
+              {unreadPortalMessages > 0 && (
+                <form action={markPortalMessagesRead.bind(null, slug, customer.id)}>
+                  <input type="hidden" name="_noop" value="1" />
+                </form>
               )}
-              {customer.invoices.map((inv) => {
-                const balance = Math.max(0, Number(inv.total) - Number(inv.amountPaid));
-                return (
-                  <li key={inv.id} className="flex items-center justify-between px-5 py-3" style={{ borderTop: "1px solid var(--border)" }}>
-                    <div className="flex items-center gap-3">
-                      <Link href={`/t/${slug}/invoices/${inv.id}`} className="text-sm font-medium underline">
-                        {inv.number}
-                      </Link>
-                      <span className="rounded-full px-2 py-0.5 text-xs" style={{ background: invoiceStatusColor(inv.status), color: "white" }}>
-                        {invoiceStatusLabel(inv.status)}
-                      </span>
-                      <span className="text-xs" style={{ color: "var(--muted)" }}>
-                        {inv.dueDate ? `due ${formatDate(inv.dueDate)}` : "no due date"}
-                      </span>
-                    </div>
-                    <div className="text-right text-sm">
-                      <div className="font-medium">{formatMoney(inv.total.toString(), ctx.tenant.currency)}</div>
-                      {balance > 0 && (
-                        <div className="text-xs" style={{ color: "var(--muted)" }}>
-                          {formatMoney(balance, ctx.tenant.currency)} due
+              <div className="space-y-3 px-5 pb-4">
+                {portalMessages.length === 0 ? (
+                  <p className="py-4 text-sm" style={{ color: "var(--text-muted)" }}>
+                    No portal messages yet. When {customer.name} sends a message from
+                    their portal, it will appear here.
+                  </p>
+                ) : (
+                  <div className="max-h-80 space-y-3 overflow-y-auto py-1">
+                    {portalMessages.map((msg) => {
+                      const isInbound = msg.direction === "INBOUND";
+                      return (
+                        <div
+                          key={msg.id}
+                          className="rounded-lg px-4 py-3 text-sm"
+                          style={{
+                            background: isInbound ? "var(--surface-0)" : "var(--surface-2)",
+                            border: "1px solid var(--border-subtle)",
+                            marginLeft: isInbound ? 0 : "auto",
+                            maxWidth: isInbound ? "100%" : "85%",
+                          }}
+                        >
+                          <div
+                            className="mb-1 flex items-center justify-between gap-2 text-xs"
+                            style={{ color: "var(--text-muted)" }}
+                          >
+                            <span className="font-semibold" style={{ color: "var(--text-default)" }}>
+                              {isInbound ? customer.name : (msg.sender?.name ?? "You")}
+                              {isInbound && !msg.readAt && (
+                                <span
+                                  className="ml-2 rounded px-1 py-0.5 text-[10px] font-bold uppercase tracking-wide"
+                                  style={{ background: "var(--danger-fg)", color: "#fff" }}
+                                >
+                                  New
+                                </span>
+                              )}
+                            </span>
+                            <span>{formatDateTime(msg.createdAt)}</span>
+                          </div>
+                          {msg.subject && (
+                            <div className="mb-0.5 font-medium" style={{ color: "var(--text-default)" }}>
+                              {msg.subject}
+                            </div>
+                          )}
+                          <p className="whitespace-pre-wrap leading-relaxed" style={{ color: "var(--text-default)" }}>
+                            {msg.body}
+                          </p>
                         </div>
-                      )}
+                      );
+                    })}
+                  </div>
+                )}
+
+                {canEdit && customer.email && (
+                  <form
+                    action={replyToPortalMessage.bind(null, slug)}
+                    className="space-y-2 border-t pt-3"
+                    style={{ borderColor: "var(--border-subtle)" }}
+                  >
+                    <input type="hidden" name="customerId" value={customer.id} />
+                    <input type="hidden" name="toAddress" value={customer.email} />
+                    <div className="space-y-1">
+                      <label className="block text-xs font-medium" style={{ color: "var(--text-muted)" }}>
+                        Subject <span className="text-[10px] font-normal">(optional)</span>
+                      </label>
+                      <input
+                        type="text"
+                        name="subject"
+                        maxLength={300}
+                        placeholder="Re: your message"
+                        className="w-full rounded-lg px-3 py-2 text-sm outline-none"
+                        style={{
+                          background: "var(--input-bg)",
+                          border: "1px solid var(--border-default)",
+                          color: "var(--text-default)",
+                        }}
+                      />
                     </div>
-                  </li>
-                );
-              })}
-            </ul>
-          </Card>
+                    <div className="space-y-1">
+                      <label className="block text-xs font-medium" style={{ color: "var(--text-muted)" }}>
+                        Reply <span className="text-[10px] text-red-500">*</span>
+                      </label>
+                      <textarea
+                        name="body"
+                        rows={3}
+                        required
+                        maxLength={4000}
+                        placeholder="Type your reply…"
+                        className="w-full resize-y rounded-lg px-3 py-2 text-sm outline-none"
+                        style={{
+                          background: "var(--input-bg)",
+                          border: "1px solid var(--border-default)",
+                          color: "var(--text-default)",
+                        }}
+                      />
+                    </div>
+                    <div className="flex justify-end">
+                      <button
+                        type="submit"
+                        className="rounded-lg px-4 py-1.5 text-sm font-semibold transition-opacity hover:opacity-90"
+                        style={{ background: "var(--accent-primary)", color: "white" }}
+                      >
+                        Send reply
+                      </button>
+                    </div>
+                  </form>
+                )}
+                {canEdit && !customer.email && (
+                  <p className="text-xs italic" style={{ color: "var(--text-muted)" }}>
+                    Add an email address to this customer to enable replies.
+                  </p>
+                )}
+              </div>
+            </Card>
+          </div>
+        )}
 
-          {/* Orders */}
+        {activeTab === "tasks" && (
           <Card>
-            <CardHeader title="Orders" description={`${customer.orders.length} on file`} />
-            <ul>
-              {customer.orders.length === 0 && (
-                <li className="px-5 py-4 text-sm" style={{ color: "var(--muted)" }}>No orders yet.</li>
-              )}
-              {customer.orders.map((o) => (
-                <li key={o.id} className="flex items-center justify-between px-5 py-3" style={{ borderTop: "1px solid var(--border)" }}>
-                  <div className="flex items-center gap-3">
-                    <Link href={`/t/${slug}/orders/${o.id}`} className="text-sm font-medium underline">
-                      {o.number}
-                    </Link>
-                    <span className="rounded-full px-2 py-0.5 text-xs" style={{ background: orderStatusColor(o.status), color: "white" }}>
-                      {orderStatusLabel(o.status)}
-                    </span>
-                    <span className="text-xs" style={{ color: "var(--muted)" }}>
-                      {o.dueDate ? `due ${formatDate(o.dueDate)}` : "no due date"}
-                    </span>
-                  </div>
-                  <div className="text-sm font-medium">
-                    {formatMoney(o.total.toString(), ctx.tenant.currency)}
-                  </div>
-                </li>
-              ))}
-            </ul>
-          </Card>
-
-          {/* Files */}
-          <FilesCard
-            slug={slug}
-            files={customer.files}
-            parent={{ kind: "customer", id: customer.id }}
-            canUpload={canUploadFiles}
-            memberMap={memberMap}
-            backUrl={`/t/${slug}/customers/${customer.id}`}
-            defaultKind="REFERENCE"
-          />
-
-          {/* Tasks */}
-          <Card>
-            <CardHeader title="Tasks" description={`${customer.tasks.filter(t => !t.completedAt).length} open`} />
+            <CardHeader title="Tasks" description={`${openTasks.length} open · ${customer.tasks.length} total`} />
             <ul>
               {customer.tasks.length === 0 && (
-                <li className="px-5 py-4 text-sm" style={{ color: "var(--muted)" }}>No tasks.</li>
+                <li className="px-5 py-4 text-sm" style={{ color: "var(--text-muted)" }}>
+                  No tasks.
+                </li>
               )}
               {customer.tasks.map((t) => {
                 const toggle = toggleTask.bind(null, slug, t.id);
                 const remove = deleteTask.bind(null, slug, t.id);
                 return (
-                  <li key={t.id} className="flex items-start justify-between gap-3 px-5 py-3" style={{ borderTop: "1px solid var(--border)" }}>
+                  <li
+                    key={t.id}
+                    className="flex items-start justify-between gap-3 px-5 py-3"
+                    style={{ borderTop: "1px solid var(--border-subtle)" }}
+                  >
                     <form action={toggle} className="mt-0.5">
                       <button type="submit" aria-label="toggle">
-                        <span style={{
-                          display: "inline-block", width: 16, height: 16, borderRadius: 4,
-                          border: "1px solid var(--border)",
-                          background: t.completedAt ? "var(--accent)" : "transparent",
-                        }} />
+                        <span
+                          style={{
+                            display: "inline-block",
+                            width: 16,
+                            height: 16,
+                            borderRadius: 4,
+                            border: "1px solid var(--border-default)",
+                            background: t.completedAt ? "var(--accent-primary)" : "transparent",
+                          }}
+                        />
                       </button>
                     </form>
                     <div className="flex-1">
                       <div className={`text-sm ${t.completedAt ? "line-through opacity-60" : ""}`}>{t.title}</div>
-                      <div className="text-xs" style={{ color: "var(--muted)" }}>
+                      <div className="text-xs" style={{ color: "var(--text-muted)" }}>
                         {[
                           t.assignedTo ? memberMap.get(t.assignedTo)?.name : null,
                           t.dueDate ? `due ${formatDate(t.dueDate)} (${relativeDays(t.dueDate)})` : null,
@@ -675,7 +945,9 @@ export default async function CustomerDetailPage({
                     </div>
                     {canEdit && (
                       <form action={remove}>
-                        <button type="submit" className="text-xs underline" style={{ color: "#ff6b6b" }}>Delete</button>
+                        <button type="submit" className="text-xs underline" style={{ color: "var(--danger-fg)" }}>
+                          Delete
+                        </button>
                       </form>
                     )}
                   </li>
@@ -683,7 +955,11 @@ export default async function CustomerDetailPage({
               })}
             </ul>
             {canEdit && (
-              <form action={taskAction} className="space-y-3 px-5 py-4" style={{ borderTop: "1px solid var(--border)" }}>
+              <form
+                action={taskAction}
+                className="space-y-3 px-5 py-4"
+                style={{ borderTop: "1px solid var(--border-subtle)" }}
+              >
                 <input type="hidden" name="customerId" value={customer.id} />
                 <Field label="Title" name="title" required />
                 <div className="grid grid-cols-3 gap-3">
@@ -691,7 +967,10 @@ export default async function CustomerDetailPage({
                     label="Assignee"
                     name="assignedTo"
                     defaultValue=""
-                    options={[{ value: "", label: "Unassigned" }, ...members.map((m) => ({ value: m.userId, label: m.name }))]}
+                    options={[
+                      { value: "", label: "Unassigned" },
+                      ...members.map((m) => ({ value: m.userId, label: m.name })),
+                    ]}
                   />
                   <Field label="Due date" name="dueDate" type="date" />
                   <SelectField
@@ -710,181 +989,40 @@ export default async function CustomerDetailPage({
               </form>
             )}
           </Card>
-        </div>
-      </div>
-
-      {/* Phase 14 — send a canned update to the customer. */}
-      {canEdit && (
-        <Card>
-          <CardHeader
-            title="Send update"
-            description="Pick a message template, customize, and record the send on this customer's timeline."
-          />
-          <SendMessageWidget
-            slug={slug}
-            customerId={customer.id}
-            customerEmail={customer.email}
-            returnTo={`/t/${slug}/customers/${customer.id}`}
-            templates={sendCtx.templates}
-            bag={sendCtx.bag}
-          />
-        </Card>
-      )}
-
-      {/* Phase 16 — two-way portal message thread. */}
-      <Card>
-        <CardHeader
-          title="Portal messages"
-          description="Messages sent by the customer from their portal. Reply sends a real email and updates their thread."
-          right={
-            unreadPortalMessages > 0 ? (
-              <span
-                className="inline-flex h-5 min-w-[20px] items-center justify-center rounded-full px-1.5 text-[10px] font-bold text-white"
-                style={{ background: "var(--danger)" }}
-              >
-                {unreadPortalMessages}
-              </span>
-            ) : undefined
-          }
-        />
-        {/* Mark unread messages as read when staff opens this card */}
-        {unreadPortalMessages > 0 && (
-          <form action={markPortalMessagesRead.bind(null, slug, customer.id)}>
-            <input type="hidden" name="_noop" value="1" />
-          </form>
         )}
-        <div className="px-5 pb-4 space-y-3">
-          {portalMessages.length === 0 ? (
-            <p className="py-4 text-sm" style={{ color: "var(--text-muted)" }}>
-              No portal messages yet. When {customer.name} sends a message from
-              their portal, it will appear here.
-            </p>
-          ) : (
-            <div className="space-y-3 max-h-80 overflow-y-auto py-1">
-              {portalMessages.map((msg) => {
-                const isInbound = msg.direction === "INBOUND";
-                return (
-                  <div
-                    key={msg.id}
-                    className="rounded-lg px-4 py-3 text-sm"
-                    style={{
-                      background: isInbound ? "var(--surface-0)" : "var(--surface-2)",
-                      border: "1px solid var(--border-subtle)",
-                      marginLeft: isInbound ? 0 : "auto",
-                      maxWidth: isInbound ? "100%" : "85%",
-                    }}
-                  >
-                    <div
-                      className="mb-1 flex items-center justify-between gap-2 text-xs"
-                      style={{ color: "var(--text-muted)" }}
-                    >
-                      <span className="font-semibold" style={{ color: "var(--text-default)" }}>
-                        {isInbound ? customer.name : (msg.sender?.name ?? "You")}
-                        {isInbound && !msg.readAt && (
-                          <span
-                            className="ml-2 rounded px-1 py-0.5 text-[10px] font-bold uppercase tracking-wide"
-                            style={{ background: "var(--danger)", color: "#fff" }}
-                          >
-                            New
-                          </span>
-                        )}
-                      </span>
-                      <span>{formatDateTime(msg.createdAt)}</span>
-                    </div>
-                    {msg.subject && (
-                      <div className="mb-0.5 font-medium" style={{ color: "var(--text-strong)" }}>
-                        {msg.subject}
-                      </div>
-                    )}
-                    <p className="whitespace-pre-wrap leading-relaxed" style={{ color: "var(--text-default)" }}>
-                      {msg.body}
-                    </p>
-                  </div>
-                );
-              })}
-            </div>
-          )}
 
-          {/* Reply form — only visible when portal access is active */}
-          {canEdit && customer.email && (
-            <form
-              action={replyToPortalMessage.bind(null, slug)}
-              className="space-y-2 pt-2 border-t"
-              style={{ borderColor: "var(--border-subtle)" }}
-            >
-              <input type="hidden" name="customerId" value={customer.id} />
-              <input type="hidden" name="toAddress" value={customer.email} />
-              <div className="space-y-1">
-                <label className="block text-xs font-medium" style={{ color: "var(--text-muted)" }}>
-                  Subject <span className="text-[10px] font-normal">(optional)</span>
-                </label>
-                <input
-                  type="text"
-                  name="subject"
-                  maxLength={300}
-                  placeholder="Re: your message"
-                  className="w-full rounded-lg px-3 py-2 text-sm outline-none"
-                  style={{
-                    background: "var(--input-bg)",
-                    border: "1px solid var(--border-default)",
-                    color: "var(--text-default)",
-                  }}
-                />
-              </div>
-              <div className="space-y-1">
-                <label className="block text-xs font-medium" style={{ color: "var(--text-muted)" }}>
-                  Reply <span className="text-[10px] text-red-500">*</span>
-                </label>
-                <textarea
-                  name="body"
-                  rows={3}
-                  required
-                  maxLength={4000}
-                  placeholder="Type your reply…"
-                  className="w-full resize-y rounded-lg px-3 py-2 text-sm outline-none"
-                  style={{
-                    background: "var(--input-bg)",
-                    border: "1px solid var(--border-default)",
-                    color: "var(--text-default)",
-                  }}
-                />
-              </div>
-              <div className="flex justify-end">
-                <button
-                  type="submit"
-                  className="rounded-lg px-4 py-1.5 text-sm font-semibold transition-opacity hover:opacity-90"
-                  style={{ background: "var(--accent)", color: "var(--accent-fg)" }}
-                >
-                  Send reply
-                </button>
-              </div>
-            </form>
-          )}
-          {canEdit && !customer.email && (
-            <p className="text-xs italic" style={{ color: "var(--text-muted)" }}>
-              Add an email address to this customer to enable replies.
-            </p>
-          )}
-        </div>
-      </Card>
+        {activeTab === "files" && (
+          <FilesCard
+            slug={slug}
+            files={customer.files}
+            parent={{ kind: "customer", id: customer.id }}
+            canUpload={canUploadFiles}
+            memberMap={memberMap}
+            backUrl={`/t/${slug}/customers/${customer.id}?tab=files`}
+            defaultKind="REFERENCE"
+          />
+        )}
 
-      {/* Phase 14 — internal team thread attached to this customer. */}
-      <CommentThread
-        slug={slug}
-        parentKind="customer"
-        parentId={customer.id}
-        comments={customer.comments}
-        currentUserId={ctx.userId}
-        memberMap={memberMap}
-        canModerate={ctx.can("staff:manage")}
-      />
+        {activeTab === "activity" && (
+          <div className="space-y-5">
+            <CommentThread
+              slug={slug}
+              parentKind="customer"
+              parentId={customer.id}
+              comments={customer.comments}
+              currentUserId={ctx.userId}
+              memberMap={memberMap}
+              canModerate={ctx.can("staff:manage")}
+            />
 
-      {/* Phase E — audit-driven activity feed for this customer. */}
-      <ActivityTimeline
-        tenantId={ctx.tenant.id}
-        entityType="Customer"
-        entityId={customer.id}
-      />
+            <ActivityTimeline
+              tenantId={ctx.tenant.id}
+              entityType="Customer"
+              entityId={customer.id}
+            />
+          </div>
+        )}
+      </div>
     </div>
   );
 }
@@ -892,8 +1030,8 @@ export default async function CustomerDetailPage({
 function Row({ label, value }: { label: string; value: React.ReactNode }) {
   return (
     <div className="flex justify-between gap-4">
-      <dt className="text-xs" style={{ color: "var(--muted)" }}>{label}</dt>
-      <dd className="text-right">{value || <span style={{ color: "var(--muted)" }}>—</span>}</dd>
+      <dt className="text-xs" style={{ color: "var(--text-muted)" }}>{label}</dt>
+      <dd className="text-right">{value || <span style={{ color: "var(--text-muted)" }}>—</span>}</dd>
     </div>
   );
 }
@@ -904,7 +1042,7 @@ function Address(props: {
   postal: string | null; country: string | null;
 }) {
   const empty = !props.line1 && !props.city && !props.country;
-  if (empty) return <p className="px-5 py-4 text-sm" style={{ color: "var(--muted)" }}>—</p>;
+  if (empty) return <p className="px-5 py-4 text-sm" style={{ color: "var(--text-muted)" }}>—</p>;
   return (
     <p className="whitespace-pre-line px-5 py-4 text-sm">
       {[
