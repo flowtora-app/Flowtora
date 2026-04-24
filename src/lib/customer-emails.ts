@@ -93,7 +93,7 @@ export function proofReadyEmail(opts: CommonBrand & {
     `  • Request changes with notes on what to adjust`,
     `  • Leave a comment or question for our team`,
   ];
-  if (opts.url)   textLines.push(``, `Review your proof:`, opts.url);
+  if (opts.url)   textLines.push(``, `👉 CLICK HERE TO VIEW YOUR PROOF:`, opts.url);
   if (opts.dueAt) textLines.push(``, `Please respond by ${opts.dueAt} so we can keep production on schedule.`);
   if (opts.notes) textLines.push(``, `A note from the team:`, `"${opts.notes}"`);
   textLines.push(``, signoff(opts));
@@ -151,11 +151,26 @@ export function proofReadyEmail(opts: CommonBrand & {
        </div>`
     : "";
 
-  const fallbackLink = opts.url
-    ? `<p style="color:#888;font-size:12px;margin:18px 0 0;word-break:break-all">
-         If the button above doesn’t work, paste this link into your browser:<br/>
-         <a href="${esc(opts.url)}" style="color:#555">${esc(opts.url)}</a>
-       </p>`
+  // Big, unmistakably-clickable CTA. Some email clients strip the <p><a>
+  // button pattern so we also render the URL as an underlined text link
+  // underneath — belt-and-braces so customers always see something
+  // obviously clickable.
+  const ctaBlock = opts.url
+    ? `
+      <div style="margin:22px 0 6px 0;text-align:center">
+        <div style="font-size:13px;font-weight:600;color:#111;margin:0 0 10px;text-transform:uppercase;letter-spacing:0.06em">
+          👉 Click the button below to view your proof
+        </div>
+        <a href="${esc(opts.url)}" target="_blank"
+           style="display:inline-block;background:#2563eb;color:#ffffff !important;text-decoration:none;padding:16px 32px;border-radius:10px;font-size:17px;font-weight:700;letter-spacing:0.2px;box-shadow:0 4px 14px rgba(37,99,235,0.32)">
+          Click here to view your proof →
+        </a>
+        <div style="margin:12px 0 0;font-size:13px;color:#444">
+          Or open this link directly:
+          <a href="${esc(opts.url)}" target="_blank" style="color:#2563eb;text-decoration:underline;font-weight:600;word-break:break-all">${esc(opts.url)}</a>
+        </div>
+      </div>
+    `
     : "";
 
   const html = wrapHtml(opts, `
@@ -166,11 +181,10 @@ export function proofReadyEmail(opts: CommonBrand & {
       is ready for your review. Please take a look and let us know how it looks — your feedback is
       what keeps this job moving.
     </p>
-    ${opts.url ? button(opts.url, "Review & respond to proof") : ""}
+    ${ctaBlock}
     ${actionsPanel}
     ${dueBlock}
     ${notesBlock}
-    ${fallbackLink}
   `);
 
   return {
