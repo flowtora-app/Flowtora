@@ -268,7 +268,7 @@ export default async function ExpenseDetailPage({
 
             <div>
               <div className="mb-1 text-sm">Receipt</div>
-              <ReceiptUploadInput name="receiptUrl" initial={expense.receiptUrl} />
+              <ReceiptUploadInput slug={slug} name="receiptUrl" initial={expense.receiptUrl} />
             </div>
 
             <div className="flex items-center gap-2">

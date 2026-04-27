@@ -512,6 +512,7 @@ function PhotosPanel({
           <form action={addInstallPhoto.bind(null, slug, eventId)} className="space-y-2">
             <input type="hidden" name="redirectTo" value={`/t/${slug}/installs/${eventId}/field?tab=photos`} />
             <PhotoCaptureInput
+              slug={slug}
               nameUrl="url"
               nameWidth="widthPx"
               nameHeight="heightPx"

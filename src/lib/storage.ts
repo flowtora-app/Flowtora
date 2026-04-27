@@ -132,7 +132,9 @@ export type StorageScope =
   | "receipts"
   | "proofs"
   | "install-photos"
-  | "customer-files";
+  | "customer-files"
+  | "avatars"
+  | "tenant-files";
 
 function safeFilename(name: string): string {
   const trimmed = name.trim().slice(-MAX_FILENAME_LENGTH);

@@ -1,6 +1,7 @@
 import type { File as FileRow } from "@prisma/client";
 import { Card, CardHeader } from "@/components/Card";
 import { Button, Field, SelectField, TextArea } from "@/components/Field";
+import { TenantFileUploadField } from "@/components/TenantFileUploadField";
 import { archiveFile, createFile, deleteFile, restoreFile } from "@/app/actions/files";
 import {
   ACTIVE_FILE_KINDS,
@@ -79,10 +80,7 @@ export function FilesCard({
         title={title}
         description={
           `${active.length} ${active.length === 1 ? "file" : "files"}` +
-          (archived.length > 0 ? ` · ${archived.length} archived` : "") +
-          (suppressUploadForm
-            ? ""
-            : ` · URLs only for now — blob uploads land in Phase 14.`)
+          (archived.length > 0 ? ` · ${archived.length} archived` : "")
         }
       />
 
@@ -161,27 +159,14 @@ export function FilesCard({
         <form action={action} className="space-y-3 px-5 py-4" style={{ borderTop: "1px solid var(--border)" }}>
           <input type="hidden" name={`${parent.kind}Id`} value={parent.id} />
           <input type="hidden" name="backUrl" value={backUrl} />
+          <TenantFileUploadField slug={slug} />
           <div className="grid grid-cols-2 gap-3">
-            <Field label="Filename" name="filename" required placeholder="logo-v2.pdf" />
             <SelectField
               label="Kind"
               name="kind"
               defaultValue={defaultKind}
               options={ACTIVE_FILE_KINDS.map((k) => ({ value: k.value, label: k.label }))}
             />
-          </div>
-          <Field
-            label="Public URL"
-            name="storageUrl"
-            type="url"
-            required
-            placeholder="https://…"
-            hint="Paste a hosted URL. Direct uploads come in Phase 14."
-          />
-          <div className="grid grid-cols-4 gap-3">
-            <Field label="MIME type" name="mimeType" placeholder="image/png" />
-            <Field label="Size (bytes)" name="sizeBytes" type="number" min="0" />
-            <Field label="Thumbnail URL" name="thumbnailUrl" type="url" />
             <Field
               label="Iteration #"
               name="assetVersion"

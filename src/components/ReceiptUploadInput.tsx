@@ -1,50 +1,63 @@
 "use client";
 
 import * as React from "react";
+import { uploadExpenseReceipt } from "@/app/actions/uploads";
 
-// Phase 14 — receipt upload.
+// Receipt upload — picks a file and uploads to R2 immediately, writing
+// the resulting public URL into a hidden `receiptUrl` field so the
+// outer expense form persists it on submit.
 //
-// Mirrors the Phase 13 PhotoCaptureInput pattern: until we have a real
-// blob store wired, the user picks a local file and we store it as a
-// client-downscaled JPEG data URL in a hidden field. Reversing this to
-// a hosted URL later is a single-field swap on the server action.
-//
-// Receipts want a little more detail than install photos (people squint
-// at line items), so we keep them a touch larger — 1800px wide @ q=0.85.
-// Typical result: 300–500KB, well under MAX_RECEIPT_BYTES (600KB) on
-// the server.
-//
-// The component also accepts an initial URL so the edit page can show
-// whatever receipt is already attached. When present, the user can
-// either replace it or remove it.
+// Image receipts get a client-side downscale before the upload to keep
+// payloads small (a raw 12MP iPhone photo is ~5MB; 1800px JPEG @0.85
+// is ~300–500KB). PDFs are uploaded as-is.
 
 const MAX_WIDTH = 1800;
 const JPEG_QUALITY = 0.85;
 
+type Status =
+  | { kind: "idle" }
+  | { kind: "processing" }
+  | { kind: "uploading" }
+  | { kind: "error"; message: string };
+
 export function ReceiptUploadInput({
+  slug,
   name,
   initial,
 }: {
-  /** Form field name the hidden input will use. */
+  /** Tenant slug — needed by the server action for permission scope. */
+  slug: string;
+  /** Form field name for the hidden URL input. */
   name: string;
-  /** Existing receipt URL/dataUrl, if any. */
+  /** Existing receipt URL, if any. */
   initial?: string | null;
 }) {
   const [value, setValue] = React.useState<string>(initial ?? "");
-  const [status, setStatus] = React.useState<"idle" | "reading" | "error">("idle");
+  const [status, setStatus] = React.useState<Status>({ kind: "idle" });
 
   const onFile = async (file: File) => {
-    setStatus("reading");
     try {
-      const dataUrl = await readFileDownscaled(file);
-      setValue(dataUrl);
-      setStatus("idle");
+      let upload: File = file;
+      if (file.type.startsWith("image/")) {
+        setStatus({ kind: "processing" });
+        upload = await downscaleImage(file);
+      }
+      setStatus({ kind: "uploading" });
+      const fd = new FormData();
+      fd.append("file", upload);
+      const result = await uploadExpenseReceipt(slug, fd);
+      if (result.ok) {
+        setValue(result.url);
+        setStatus({ kind: "idle" });
+      } else {
+        setStatus({ kind: "error", message: result.error });
+      }
     } catch {
-      setStatus("error");
+      setStatus({ kind: "error", message: "Couldn't read that file." });
     }
   };
 
-  const isImage = value.startsWith("data:image/") || /\.(png|jpe?g|gif|webp)(\?|$)/i.test(value);
+  const isImage = /\.(png|jpe?g|gif|webp)(\?|$)/i.test(value);
 
   return (
     <div className="space-y-2">
@@ -62,11 +75,12 @@ export function ReceiptUploadInput({
           <span>{value ? "Replace receipt" : "Attach receipt"}</span>
           <input
             type="file"
-            accept="image/*"
+            accept="image/*,application/pdf"
             className="hidden"
             onChange={(e) => {
               const f = e.target.files?.[0];
-              if (f) onFile(f);
+              if (f) void onFile(f);
+              e.target.value = "";
             }}
           />
         </label>
@@ -80,11 +94,14 @@ export function ReceiptUploadInput({
             Remove
           </button>
         )}
-        {status === "reading" && (
+        {status.kind === "processing" && (
           <span className="text-xs" style={{ color: "var(--muted)" }}>Processing…</span>
         )}
-        {status === "error" && (
-          <span className="text-xs" style={{ color: "#ef4444" }}>Couldn&apos;t read that file.</span>
+        {status.kind === "uploading" && (
+          <span className="text-xs" style={{ color: "var(--muted)" }}>Uploading…</span>
+        )}
+        {status.kind === "error" && (
+          <span className="text-xs" style={{ color: "#ef4444" }}>{status.message}</span>
         )}
       </div>
 
@@ -99,7 +116,7 @@ export function ReceiptUploadInput({
       )}
       {value && !isImage && (
         <div className="text-xs" style={{ color: "var(--muted)" }}>
-          Linked: <span style={{ color: "var(--text)" }}>{value.length > 80 ? value.slice(0, 80) + "…" : value}</span>
+          Linked: <a href={value} target="_blank" rel="noopener noreferrer" style={{ color: "var(--text)" }}>{value.length > 80 ? value.slice(0, 80) + "…" : value}</a>
         </div>
       )}
 
@@ -108,13 +125,12 @@ export function ReceiptUploadInput({
   );
 }
 
-/** Read a File into a canvas scaled to MAX_WIDTH, return JPEG data URL. */
-function readFileDownscaled(file: File): Promise<string> {
+/** Downscale an image File to a JPEG within MAX_WIDTH; preserves the original filename stem. */
+function downscaleImage(file: File): Promise<File> {
   return new Promise((resolve, reject) => {
     const fr = new FileReader();
     fr.onerror = () => reject(fr.error);
     fr.onload = () => {
-      const src = fr.result as string;
       const img = new Image();
       img.onload = () => {
         const scale = Math.min(1, MAX_WIDTH / img.naturalWidth);
@@ -124,14 +140,17 @@ function readFileDownscaled(file: File): Promise<string> {
         c.width = w; c.height = h;
         const ctx = c.getContext("2d")!;
         ctx.drawImage(img, 0, 0, w, h);
-        try {
-          resolve(c.toDataURL("image/jpeg", JPEG_QUALITY));
-        } catch (err) {
-          reject(err);
-        }
+        c.toBlob((blob) => {
+          if (!blob) {
+            reject(new Error("encode failed"));
+            return;
+          }
+          const stem = file.name.replace(/\.[^.]+$/, "") || "receipt";
+          resolve(new File([blob], `${stem}.jpg`, { type: "image/jpeg" }));
+        }, "image/jpeg", JPEG_QUALITY);
       };
       img.onerror = () => reject(new Error("bad image"));
-      img.src = src;
+      img.src = fr.result as string;
     };
     fr.readAsDataURL(file);
   });

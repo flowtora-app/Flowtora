@@ -2,79 +2,42 @@
 
 import * as React from "react";
 
-// Phase 15 Slice B — customer portal file upload.
+// Customer portal file upload input — renders a real <input type="file">
+// inside the parent <form>. The parent's server action receives the file
+// directly via FormData (Next.js server actions handle multipart natively),
+// uploads it to R2, and creates the File row.
 //
-// Mirrors ReceiptUploadInput (Phase 14) but lets customers upload
-// non-image files too: briefs, site photos, existing logo/brand packs,
-// reference images. We store in a hidden field as either:
-//   • a downscaled JPEG data URL (for photos — most customer uploads
-//     are photos from a phone, so we scale to keep uploads reasonable),
-//   • or a raw data URL for other mime types up to MAX_RAW_BYTES.
-//
-// When real blob storage lands this whole thing becomes a signed URL
-// + metadata handoff; for now we accept the size trade-off because it
-// keeps the portal self-contained.
-//
-// Upload limits:
-//   • Images: downscaled to 1800px wide, ~400KB typical.
-//   • Other files: capped hard at 4MB so the form POST doesn't blow
-//     past Next.js's default server-action body limit.
-//
-// The server action expects a single `data` field (data URL) plus a
-// `filename` field. The component exposes both via hidden inputs so
-// the caller just includes <CustomerFileUploadInput /> inside a form
-// pointing at the action.
+// Image previews use a local Object URL so the customer can confirm what
+// they picked before clicking Upload. We don't downscale here — the
+// customer hasn't committed yet, and modern phone photos compressed by
+// the browser's image picker are usually small enough.
 
-const MAX_WIDTH = 1800;
-const JPEG_QUALITY = 0.85;
-const MAX_RAW_BYTES = 4 * 1024 * 1024; // 4 MB
+const MAX_BYTES = 25 * 1024 * 1024; // 25 MB
 
 export function CustomerFileUploadInput({
-  nameData = "data",
-  nameFilename = "filename",
-  nameMime = "mimeType",
+  name = "file",
 }: {
-  nameData?: string;
-  nameFilename?: string;
-  nameMime?: string;
+  name?: string;
 }) {
-  const [value, setValue] = React.useState<string>("");
-  const [filename, setFilename] = React.useState<string>("");
-  const [mimeType, setMimeType] = React.useState<string>("");
-  const [status, setStatus] = React.useState<"idle" | "reading" | "error" | "too-large">("idle");
+  const [file, setFile] = React.useState<File | null>(null);
+  const [tooLarge, setTooLarge] = React.useState(false);
+  const inputRef = React.useRef<HTMLInputElement>(null);
+
+  const previewUrl = React.useMemo(() => {
+    if (!file || !file.type.startsWith("image/")) return null;
+    return URL.createObjectURL(file);
+  }, [file]);
+
+  React.useEffect(() => {
+    if (!previewUrl) return;
+    return () => URL.revokeObjectURL(previewUrl);
+  }, [previewUrl]);
 
   const reset = () => {
-    setValue("");
-    setFilename("");
-    setMimeType("");
-    setStatus("idle");
+    setFile(null);
+    setTooLarge(false);
+    if (inputRef.current) inputRef.current.value = "";
   };
-
-  const onFile = async (file: File) => {
-    setFilename(file.name);
-    setMimeType(file.type || "application/octet-stream");
-    setStatus("reading");
-    try {
-      if (file.type.startsWith("image/")) {
-        const dataUrl = await readFileDownscaled(file);
-        setValue(dataUrl);
-        setStatus("idle");
-        return;
-      }
-      if (file.size > MAX_RAW_BYTES) {
-        setStatus("too-large");
-        setValue("");
-        return;
-      }
-      const dataUrl = await readFileRaw(file);
-      setValue(dataUrl);
-      setStatus("idle");
-    } catch {
-      setStatus("error");
-    }
-  };
-
-  const isImage = value.startsWith("data:image/");
 
   return (
     <div className="space-y-2">
@@ -89,17 +52,27 @@ export function CustomerFileUploadInput({
           }}
         >
           <span aria-hidden>📎</span>
-          <span>{value ? "Replace file" : "Choose file"}</span>
+          <span>{file ? "Replace file" : "Choose file"}</span>
           <input
+            ref={inputRef}
             type="file"
+            name={name}
             className="hidden"
             onChange={(e) => {
               const f = e.target.files?.[0];
-              if (f) onFile(f);
+              if (!f) return;
+              if (f.size > MAX_BYTES) {
+                setTooLarge(true);
+                setFile(null);
+                e.target.value = "";
+                return;
+              }
+              setTooLarge(false);
+              setFile(f);
             }}
           />
         </label>
-        {value && (
+        {file && (
           <button
             type="button"
             onClick={reset}
@@ -112,80 +85,31 @@ export function CustomerFileUploadInput({
             Remove
           </button>
         )}
-        {status === "reading" && (
-          <span className="text-xs" style={{ color: "var(--text-muted)" }}>Processing…</span>
-        )}
-        {status === "error" && (
+        {tooLarge && (
           <span className="text-xs" style={{ color: "#ef4444" }}>
-            Couldn&apos;t read that file.
-          </span>
-        )}
-        {status === "too-large" && (
-          <span className="text-xs" style={{ color: "#ef4444" }}>
-            File is too large (4 MB max).
+            File is too large (25 MB max).
           </span>
         )}
       </div>
 
-      {value && isImage && (
+      {previewUrl && (
         <div
           className="overflow-hidden rounded-md"
           style={{ border: "1px solid var(--border-subtle)", maxWidth: 280 }}
         >
           {/* eslint-disable-next-line @next/next/no-img-element */}
           <img
-            src={value}
+            src={previewUrl}
             alt="Preview"
             style={{ display: "block", width: "100%", height: "auto" }}
           />
         </div>
       )}
-      {value && !isImage && (
+      {file && !previewUrl && (
         <div className="text-xs" style={{ color: "var(--text-muted)" }}>
-          Selected: <span style={{ color: "var(--text-default)" }}>{filename}</span>
+          Selected: <span style={{ color: "var(--text-default)" }}>{file.name}</span>
         </div>
       )}
-
-      <input type="hidden" name={nameData} value={value} />
-      <input type="hidden" name={nameFilename} value={filename} />
-      <input type="hidden" name={nameMime} value={mimeType} />
     </div>
   );
-}
-
-function readFileDownscaled(file: File): Promise<string> {
-  return new Promise((resolve, reject) => {
-    const fr = new FileReader();
-    fr.onerror = () => reject(fr.error);
-    fr.onload = () => {
-      const src = fr.result as string;
-      const img = new Image();
-      img.onload = () => {
-        const scale = Math.min(1, MAX_WIDTH / img.naturalWidth);
-        const w = Math.round(img.naturalWidth * scale);
-        const h = Math.round(img.naturalHeight * scale);
-        const c = document.createElement("canvas");
-        c.width = w; c.height = h;
-        const ctx = c.getContext("2d")!;
-        ctx.drawImage(img, 0, 0, w, h);
-        try {
-          resolve(c.toDataURL("image/jpeg", JPEG_QUALITY));
-        } catch (err) {
-          reject(err);
-        }
-      };
-      img.onerror = () => reject(new Error("bad image"));
-      img.src = src;
-    };
-    fr.readAsDataURL(file);
-  });
-}
-
-function readFileRaw(file: File): Promise<string> {
-  return new Promise((resolve, reject) => {
-    const fr = new FileReader();
-    fr.onerror = () => reject(fr.error);
-    fr.onload = () => resolve(fr.result as string);
-    fr.readAsDataURL(file);
-  });
 }

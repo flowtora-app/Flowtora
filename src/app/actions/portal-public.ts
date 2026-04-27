@@ -9,6 +9,12 @@ import { logAudit } from "@/lib/audit";
 import { createOrderFromQuoteInTx } from "@/app/actions/orders";
 import { notifyMany } from "@/lib/notifications";
 import { computeQuoteTotals } from "@/lib/quotes";
+import {
+  isStorageConfigured,
+  publicUrlFor,
+  putFile,
+  StorageError,
+} from "@/lib/storage";
 
 // Filter out synthetic user ids like "portal:<tokenId>" — those aren't real
 // staff users and will never log in to receive notifications.
@@ -592,48 +598,25 @@ export async function respondToProofShare(shareTokenId: string, formData: FormDa
 }
 
 // ────────────────────────────────────────────────────────────
-// Phase 15 Slice B — Customer file upload from portal
+// Customer file upload from portal
 // ────────────────────────────────────────────────────────────
 //
 // The customer can attach files to an order from the portal order
 // detail page: briefs, site photos, existing branding, proof markup
-// annotations. The file is stored as a data URL in File.storageUrl
-// (same pattern as ReceiptUploadInput until real blob storage lands).
-//
-// Limits:
-//   • MAX_UPLOAD_BYTES on the server even though the client does its
-//     own downscaling — we never trust the client. 6MB is comfortably
-//     above a 1800px-wide JPEG and well below Next.js's default body
-//     limit for server actions.
-//   • FILENAME_MAX — keeps log lines / list rows from breaking layout.
+// annotations. The browser posts a real <input type="file"> via the
+// server action's multipart FormData — we stream the bytes straight
+// to R2 and persist the resulting public URL in File.storageUrl.
 //
 // Notifies the salesRep, productionManager, and installer assigned to
 // the order (overlapping with other customer-action notifications).
 // Deduplication is handled by `notifyMany`.
 
-const MAX_UPLOAD_BYTES  = 6 * 1024 * 1024; // 6 MB
-const FILENAME_MAX      = 120;
-
-const uploadSchema = z.object({
-  data:     z.string().min(1).max(10 * 1024 * 1024), // hard ceiling well over MAX_UPLOAD_BYTES
-  filename: z.string().min(1).max(FILENAME_MAX),
-  mimeType: z.string().max(200).optional().or(z.literal("")),
-  notes:    optionalLong,
-});
-
-// Roughly approximate data URL size in bytes. For base64 payloads the
-// raw byte count is 3/4 of the base64 character count, minus padding.
-function approxDataUrlBytes(dataUrl: string): number {
-  const comma = dataUrl.indexOf(",");
-  if (comma < 0) return dataUrl.length;
-  const body = dataUrl.slice(comma + 1);
-  const pad = body.endsWith("==") ? 2 : body.endsWith("=") ? 1 : 0;
-  return Math.floor((body.length * 3) / 4) - pad;
-}
+const MAX_UPLOAD_BYTES = 25 * 1024 * 1024; // 25 MB
+const FILENAME_MAX     = 120;
 
 function sanitizeFilename(raw: string): string {
   // Strip path separators and trim whitespace — guard against someone
-  // submitting "../../etc/passwd" or similar in the filename field.
+  // submitting "../../etc/passwd" or similar.
   return raw
     .split(/[\\/]/)
     .pop()!
@@ -650,11 +633,23 @@ export async function uploadPortalFile(
   const ctx = await resolvePortalToken(token);
   if (!ctx) redirect(`/portal/expired`);
 
-  const parsed = uploadSchema.safeParse(Object.fromEntries(formData.entries()));
-  if (!parsed.success) {
-    redirect(`${portalPath(token, `orders/${orderId}`)}?error=${encodeURIComponent("Please attach a file before uploading.")}`);
+  const file = formData.get("file");
+  const notes = (formData.get("notes") as string | null) ?? "";
+  const back = portalPath(token, `orders/${orderId}`);
+
+  if (!(file instanceof File) || file.size === 0) {
+    redirect(`${back}?error=${encodeURIComponent("Please attach a file before uploading.")}`);
   }
-  const d = parsed.data;
+  if (file.size > MAX_UPLOAD_BYTES) {
+    redirect(`${back}?error=${encodeURIComponent("File is too large (25 MB max).")}`);
+  }
+  const filename = sanitizeFilename(file.name);
+  if (!filename) {
+    redirect(`${back}?error=${encodeURIComponent("Invalid filename.")}`);
+  }
+  if (!isStorageConfigured()) {
+    redirect(`${back}?error=${encodeURIComponent("File hosting isn't configured. Contact support.")}`);
+  }
 
   // Order must belong to this customer.
   const order = await db.order.findFirst({
@@ -668,25 +663,31 @@ export async function uploadPortalFile(
     redirect(`${portalPath(token)}?error=${encodeURIComponent("Order not found.")}`);
   }
 
-  if (!d.data.startsWith("data:")) {
-    redirect(`${portalPath(token, `orders/${orderId}`)}?error=${encodeURIComponent("Invalid file payload.")}`);
-  }
-  if (approxDataUrlBytes(d.data) > MAX_UPLOAD_BYTES) {
-    redirect(`${portalPath(token, `orders/${orderId}`)}?error=${encodeURIComponent("File is too large (6 MB max).")}`);
+  let url: string;
+  let size: number;
+  let mime: string;
+  try {
+    const result = await putFile({
+      tenantId: ctx.tenant.id,
+      scope: "customer-files",
+      ownerId: order.id,
+      file,
+      visibility: "public",
+    });
+    url = publicUrlFor(result.key);
+    size = result.size;
+    mime = result.contentType;
+  } catch (err) {
+    if (err instanceof StorageError) {
+      redirect(`${back}?error=${encodeURIComponent(err.message)}`);
+    }
+    console.error("[uploadPortalFile] put failed:", err);
+    redirect(`${back}?error=${encodeURIComponent("Upload failed. Try again.")}`);
   }
 
-  const filename = sanitizeFilename(d.filename);
-  if (!filename) {
-    redirect(`${portalPath(token, `orders/${orderId}`)}?error=${encodeURIComponent("Invalid filename.")}`);
-  }
+  const isImage = mime.startsWith("image/");
 
-  // Fall back to parsing the mime hint out of the data URL prefix (e.g.
-  // "data:image/jpeg;base64,...") when the client didn't send an explicit
-  // type — a few legacy browsers still emit blank `file.type` for photos.
-  const mime = empty(d.mimeType) ?? (d.data.slice(5, d.data.indexOf(";")) || null);
-  const isImage = mime?.startsWith("image/") ?? false;
-
-  const file = await db.file.create({
+  const fileRow = await db.file.create({
     data: {
       tenantId:   ctx.tenant.id,
       // We stamp the synthetic "portal:<tokenId>" so the staff-side "uploaded
@@ -695,31 +696,30 @@ export async function uploadPortalFile(
       // can get without inventing a customer-user bridge.
       uploaderId: `portal:${ctx.token.id}`,
       filename,
-      storageUrl: d.data,
-      mimeType:   mime,
-      sizeBytes:  approxDataUrlBytes(d.data),
+      storageUrl: url,
+      mimeType:   mime || null,
+      sizeBytes:  size,
       kind:       "CUSTOMER_UPLOAD",
       customerId: ctx.customer.id,
       orderId:    order.id,
-      // For image uploads the data URL is also the thumbnail — cheaper
-      // than generating a separate one until we have a blob store.
-      thumbnailUrl: isImage ? d.data : null,
-      notes:      empty(d.notes),
+      // R2 serves the full image, so the thumbnail field can point at the
+      // same URL — saves us thumbnail generation until we need it.
+      thumbnailUrl: isImage ? url : null,
+      notes:      empty(notes),
     },
   });
-
   await logAudit({
     tenantId:   ctx.tenant.id,
     userId:     null,
     action:     "portal.file_uploaded",
     entityType: "File",
-    entityId:   file.id,
+    entityId:   fileRow.id,
     metadata:   {
       portalTokenId: ctx.token.id,
       customerId:    ctx.customer.id,
       orderId:       order.id,
       filename,
-      sizeBytes:     approxDataUrlBytes(d.data),
+      sizeBytes:     size,
     },
   });
 
@@ -735,7 +735,7 @@ export async function uploadPortalFile(
       title:      `${ctx.customer.name} uploaded a file to order ${order.number}`,
       body:       filename,
       entityType: "File",
-      entityId:   file.id,
+      entityId:   fileRow.id,
       link:       `/t/${ctx.tenant.slug}/orders/${order.id}`,
     },
   );

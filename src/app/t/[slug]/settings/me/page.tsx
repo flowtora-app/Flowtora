@@ -6,7 +6,16 @@ import { requireTenant } from "@/lib/tenant";
 import { saveUserProfile } from "@/app/actions/account-profile";
 import { Button, Field } from "@/components/Field";
 import { Card, CardHeader } from "@/components/Card";
+import { AvatarUploader } from "@/components/AvatarUploader";
 import { formatDateTime } from "@/lib/format";
+
+function deriveInitials(name: string | null, email: string): string {
+  const source = (name?.trim() || email).trim();
+  const parts = source.split(/\s+/).filter(Boolean);
+  if (parts.length === 0) return "?";
+  if (parts.length === 1) return parts[0]!.slice(0, 2).toUpperCase();
+  return (parts[0]![0]! + parts[1]![0]!).toUpperCase();
+}
 
 // Me › Profile — personal, user-scoped settings.
 //
@@ -94,13 +103,10 @@ export default async function MeProfilePage({
             placeholder="What should teammates call you?"
             maxLength={80}
           />
-          <Field
-            label="Avatar URL"
-            name="image"
-            type="url"
-            defaultValue={user.image ?? ""}
-            placeholder="https://…"
-            hint="Paste a direct link to an image (square, 256×256 or larger). Leave blank to use your initials."
+          <AvatarUploader
+            slug={slug}
+            initialUrl={user.image ?? null}
+            initials={deriveInitials(user.name, user.email)}
           />
           <div className="flex justify-end">
             <Button type="submit">Save profile</Button>

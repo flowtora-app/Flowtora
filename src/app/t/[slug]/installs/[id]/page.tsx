@@ -1022,6 +1022,7 @@ export default async function InstallEventDetailPage({
                 <div className="col-span-2">
                   <div className="mb-1 text-sm">Photo</div>
                   <PhotoCaptureInput
+                    slug={slug}
                     nameUrl="url"
                     nameWidth="widthPx"
                     nameHeight="heightPx"

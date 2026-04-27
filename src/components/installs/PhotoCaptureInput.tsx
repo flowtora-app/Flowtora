@@ -1,24 +1,29 @@
 "use client";
 
 import * as React from "react";
+import { uploadInstallPhoto } from "@/app/actions/uploads";
 
-// Phase 13 — photo capture input.
+// Photo capture input — picks a file (or shoots one with the back
+// camera on mobile), downscales client-side, and uploads to R2 via the
+// `uploadInstallPhoto` server action. The resulting public URL plus
+// dimensions land in hidden inputs so the outer install form persists
+// them on submit.
 //
-// We don't have an S3 pipeline wired up for install photos yet. Rather
-// than block Phase 13 on infrastructure, the field page stores photos as
-// inline data URLs (JPEG, aggressively downscaled client-side) in a
-// hidden input. The server action accepts data:image URLs for this
-// reason. A later phase can add an /api/uploads endpoint and swap the
-// hidden `url` field for a storage key — no other code changes needed.
-//
-// Downsizing matters: a raw 12MP iPhone photo is ~5MB; a 1600px-wide JPEG
-// at q=0.82 is ~200KB, which Postgres swallows happily and still looks
-// sharp.
+// Downsizing matters: a raw 12MP iPhone photo is ~5MB; 1600px wide JPEG
+// at q=0.82 is ~200KB and still looks sharp.
 
 const MAX_WIDTH = 1600;
 const JPEG_QUALITY = 0.82;
 
+type Status =
+  | { kind: "idle" }
+  | { kind: "processing" }
+  | { kind: "uploading" }
+  | { kind: "ready"; w: number; h: number }
+  | { kind: "error"; message: string };
+
 export function PhotoCaptureInput({
+  slug,
   nameUrl,
   nameWidth,
   nameHeight,
@@ -26,6 +31,7 @@ export function PhotoCaptureInput({
   capture,
   disabled,
 }: {
+  slug: string;
   nameUrl: string;
   nameWidth: string;
   nameHeight: string;
@@ -34,20 +40,32 @@ export function PhotoCaptureInput({
 }) {
   const [preview, setPreview] = React.useState<string>("");
   const [dims, setDims] = React.useState<{ w: number; h: number } | null>(null);
-  const [status, setStatus] = React.useState<"idle" | "reading" | "ready" | "error">("idle");
+  const [status, setStatus] = React.useState<Status>({ kind: "idle" });
 
   const onFile = async (file: File) => {
-    setStatus("reading");
     try {
-      const dataUrl = await readFileDownscaled(file);
-      const d = await measure(dataUrl);
-      setPreview(dataUrl);
-      setDims(d);
-      setStatus("ready");
+      setStatus({ kind: "processing" });
+      const { blob, w, h } = await downscaleToJpeg(file);
+      const stem = file.name.replace(/\.[^.]+$/, "") || "photo";
+      const upload = new File([blob], `${stem}.jpg`, { type: "image/jpeg" });
+
+      setStatus({ kind: "uploading" });
+      const fd = new FormData();
+      fd.append("file", upload);
+      const result = await uploadInstallPhoto(slug, fd);
+      if (result.ok) {
+        setPreview(result.url);
+        setDims({ w, h });
+        setStatus({ kind: "ready", w, h });
+      } else {
+        setPreview("");
+        setDims(null);
+        setStatus({ kind: "error", message: result.error });
+      }
     } catch {
       setPreview("");
       setDims(null);
-      setStatus("error");
+      setStatus({ kind: "error", message: "Couldn't read that file." });
     }
   };
 
@@ -74,19 +92,23 @@ export function PhotoCaptureInput({
             className="hidden"
             onChange={(e) => {
               const f = e.target.files?.[0];
-              if (f) onFile(f);
+              if (f) void onFile(f);
+              e.target.value = "";
             }}
           />
         </label>
-        {status === "reading" && (
+        {status.kind === "processing" && (
           <span className="text-xs" style={{ color: "var(--text-muted)" }}>Processing…</span>
         )}
-        {status === "error" && (
-          <span className="text-xs" style={{ color: "var(--danger-fg)" }}>Couldn&apos;t read that file.</span>
+        {status.kind === "uploading" && (
+          <span className="text-xs" style={{ color: "var(--text-muted)" }}>Uploading…</span>
         )}
-        {status === "ready" && dims && (
+        {status.kind === "error" && (
+          <span className="text-xs" style={{ color: "var(--danger-fg)" }}>{status.message}</span>
+        )}
+        {status.kind === "ready" && (
           <span className="text-xs" style={{ color: "var(--text-muted)" }}>
-            {dims.w}×{dims.h}
+            {status.w}×{status.h}
           </span>
         )}
       </div>
@@ -108,13 +130,12 @@ export function PhotoCaptureInput({
   );
 }
 
-/** Read a File, render into a canvas scaled to MAX_WIDTH, return JPEG data URL. */
-function readFileDownscaled(file: File): Promise<string> {
+/** Downscale to JPEG via canvas; returns the blob and final dimensions. */
+function downscaleToJpeg(file: File): Promise<{ blob: Blob; w: number; h: number }> {
   return new Promise((resolve, reject) => {
     const fr = new FileReader();
     fr.onerror = () => reject(fr.error);
     fr.onload = () => {
-      const src = fr.result as string;
       const img = new Image();
       img.onload = () => {
         const scale = Math.min(1, MAX_WIDTH / img.naturalWidth);
@@ -124,24 +145,21 @@ function readFileDownscaled(file: File): Promise<string> {
         c.width = w; c.height = h;
         const ctx = c.getContext("2d")!;
         ctx.drawImage(img, 0, 0, w, h);
-        try {
-          resolve(c.toDataURL("image/jpeg", JPEG_QUALITY));
-        } catch (err) {
-          reject(err);
-        }
+        c.toBlob(
+          (blob) => {
+            if (!blob) {
+              reject(new Error("encode failed"));
+              return;
+            }
+            resolve({ blob, w, h });
+          },
+          "image/jpeg",
+          JPEG_QUALITY,
+        );
       };
       img.onerror = () => reject(new Error("bad image"));
-      img.src = src;
+      img.src = fr.result as string;
     };
     fr.readAsDataURL(file);
-  });
-}
-
-function measure(dataUrl: string): Promise<{ w: number; h: number }> {
-  return new Promise((resolve, reject) => {
-    const img = new Image();
-    img.onload = () => resolve({ w: img.naturalWidth, h: img.naturalHeight });
-    img.onerror = () => reject(new Error("bad image"));
-    img.src = dataUrl;
   });
 }

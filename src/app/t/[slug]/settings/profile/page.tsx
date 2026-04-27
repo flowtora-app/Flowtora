@@ -2,6 +2,7 @@ import { requirePermission } from "@/lib/tenant";
 import { saveProfile } from "@/app/actions/settings";
 import { Button, Field, SelectField } from "@/components/Field";
 import { Card, CardHeader } from "@/components/Card";
+import { LogoUploader } from "@/components/onboarding/LogoUploader";
 import { TIMEZONE_GROUPS, isKnownTimezone } from "@/lib/i18n/timezones";
 import { ALL_CURRENCIES, isKnownCurrency } from "@/lib/i18n/currencies";
 
@@ -29,7 +30,7 @@ export default async function ProfileSettings({
       <CardHeader title="Shop profile" description="Shown on quotes, invoices, and the customer portal." />
       <form action={action} className="space-y-4 px-5 py-5">
         <Field label="Shop name" name="name" required defaultValue={tenant.name} />
-        <Field label="Logo URL" name="logoUrl" type="url" defaultValue={tenant.logoUrl ?? ""} />
+        <LogoUploader slug={slug} initialUrl={tenant.logoUrl ?? null} />
         {/* Phase 15 Slice D — brand accent color drives the portal & share
             link accent. Stored as #RRGGBB; the portal layout ignores anything
             that doesn't match the hex shape so a typo can't break layout. */}
