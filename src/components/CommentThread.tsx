@@ -1,5 +1,6 @@
 import { Card, CardHeader } from "@/components/Card";
 import { Button, TextArea } from "@/components/Field";
+import { SubmitButton } from "@/components/ui/SubmitButton";
 import { formatDateTime } from "@/lib/format";
 import { createComment, deleteComment } from "@/app/actions/comments";
 import type { CommentParentKind } from "@/lib/comments";
@@ -111,13 +112,13 @@ export function CommentThread({
                   </div>
                   {canDelete && (
                     <form action={del}>
-                      <button
-                        type="submit"
+                      <SubmitButton
                         className="text-xs underline"
                         style={{ color: "var(--muted)" }}
+                        pendingLabel={<span className="text-xs">Deleting…</span>}
                       >
                         Delete
-                      </button>
+                      </SubmitButton>
                     </form>
                   )}
                 </div>

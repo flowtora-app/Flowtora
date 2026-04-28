@@ -1,4 +1,7 @@
+"use client";
+
 import * as React from "react";
+import { useFormStatus } from "react-dom";
 
 const inputStyle: React.CSSProperties = {
   background: "var(--panel)",
@@ -92,20 +95,63 @@ export function TextArea(
 export function Button({
   variant = "primary",
   className = "",
+  loading,
+  type,
+  disabled,
+  children,
   ...rest
-}: React.ButtonHTMLAttributes<HTMLButtonElement> & { variant?: "primary" | "secondary" | "danger" }) {
+}: React.ButtonHTMLAttributes<HTMLButtonElement> & {
+  variant?: "primary" | "secondary" | "danger";
+  loading?: boolean;
+}) {
+  // Auto-pick up the parent form's pending state when this is a submit
+  // button — every server-action form in the app gets a free spinner
+  // without each call site wiring up loading state by hand.
+  const { pending } = useFormStatus();
+  const isLoading = loading ?? (type === "submit" && pending);
+  const isDisabled = disabled || isLoading;
+
   const style: React.CSSProperties =
     variant === "primary"
       ? { background: "var(--accent)", color: "white" }
       : variant === "danger"
       ? { background: "#3a1517", color: "#ff8b8b", border: "1px solid #5b2024" }
       : { border: "1px solid var(--border)", color: "var(--text)" };
+
   return (
     <button
       {...rest}
-      className={`rounded-md px-4 py-2 text-sm font-medium ${className}`}
+      type={type}
+      disabled={isDisabled}
+      aria-busy={isLoading || undefined}
+      className={`relative rounded-md px-4 py-2 text-sm font-medium ${isDisabled ? "cursor-not-allowed opacity-60" : ""} ${className}`}
       style={style}
-    />
+    >
+      {isLoading && (
+        <span className="absolute inset-0 inline-flex items-center justify-center" aria-hidden>
+          <FieldSpinner />
+        </span>
+      )}
+      <span style={{ visibility: isLoading ? "hidden" : "visible" }}>
+        {children}
+      </span>
+    </button>
+  );
+}
+
+function FieldSpinner() {
+  return (
+    <svg
+      width="14"
+      height="14"
+      viewBox="0 0 24 24"
+      fill="none"
+      className="animate-spin"
+      aria-hidden
+    >
+      <circle cx="12" cy="12" r="9" stroke="currentColor" strokeOpacity="0.25" strokeWidth="3" />
+      <path d="M21 12a9 9 0 0 0-9-9" stroke="currentColor" strokeWidth="3" strokeLinecap="round" />
+    </svg>
   );
 }
 

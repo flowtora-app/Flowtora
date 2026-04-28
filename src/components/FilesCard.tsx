@@ -1,6 +1,7 @@
 import type { File as FileRow } from "@prisma/client";
 import { Card, CardHeader } from "@/components/Card";
 import { Button, Field, SelectField, TextArea } from "@/components/Field";
+import { SubmitButton } from "@/components/ui/SubmitButton";
 import { TenantFileUploadField } from "@/components/TenantFileUploadField";
 import { archiveFile, createFile, deleteFile, restoreFile } from "@/app/actions/files";
 import {
@@ -258,23 +259,23 @@ function FileRowItem({
         <div className="flex flex-shrink-0 flex-col items-end gap-1">
           {showArchive && (
             <form action={archive}>
-              <button type="submit" className="text-xs underline" style={{ color: "var(--muted)" }}>
+              <SubmitButton className="text-xs underline" style={{ color: "var(--muted)" }} pendingLabel={<span className="text-xs">Archiving…</span>}>
                 Archive
-              </button>
+              </SubmitButton>
             </form>
           )}
           {showRestore && (
             <form action={restore}>
-              <button type="submit" className="text-xs underline" style={{ color: "var(--muted)" }}>
+              <SubmitButton className="text-xs underline" style={{ color: "var(--muted)" }} pendingLabel={<span className="text-xs">Restoring…</span>}>
                 Restore
-              </button>
+              </SubmitButton>
             </form>
           )}
           {showDelete && (
             <form action={remove}>
-              <button type="submit" className="text-xs underline" style={{ color: "#ff6b6b" }}>
+              <SubmitButton className="text-xs underline" style={{ color: "#ff6b6b" }} pendingLabel={<span className="text-xs">Removing…</span>}>
                 Remove
-              </button>
+              </SubmitButton>
             </form>
           )}
         </div>

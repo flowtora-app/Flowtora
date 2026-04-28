@@ -1,4 +1,5 @@
 import Link from "next/link";
+import { SubmitButton } from "@/components/ui/SubmitButton";
 import { dismissActivationBanner } from "@/app/actions/activation";
 
 // Phase 4 Slice D — persistent "finish setup" banner.
@@ -75,13 +76,13 @@ export function FinishSetupBanner({
           <span aria-hidden>→</span>
         </Link>
         <form action={dismissAction}>
-          <button
-            type="submit"
+          <SubmitButton
             className="text-xs underline"
             style={{ color: "var(--text-muted)" }}
+            pendingLabel={<span className="text-xs">Dismissing…</span>}
           >
             Remind me later
-          </button>
+          </SubmitButton>
         </form>
       </div>
     </div>

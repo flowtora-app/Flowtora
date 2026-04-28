@@ -203,26 +203,35 @@ function BulkBar({
 }) {
   const [tagOpen, setTagOpen] = React.useState(false);
   const [tag, setTag] = React.useState("");
+  const [pendingAction, setPendingAction] = React.useState<string | null>(null);
+  const isPending = pendingAction !== null;
   const serialized = ids.join(",");
 
-  const setStatus = async (status: "ACTIVE" | "INACTIVE" | "ARCHIVED") => {
-    const fd = new FormData();
-    fd.set("ids", serialized);
-    fd.set("status", status);
-    await bulkSetCustomerStatus(slug, fd);
-    onAfter();
+  const run = async (key: string, work: () => Promise<void>) => {
+    if (isPending) return;
+    setPendingAction(key);
+    try { await work(); onAfter(); } finally { setPendingAction(null); }
   };
+
+  const setStatus = (status: "ACTIVE" | "INACTIVE" | "ARCHIVED") =>
+    run(`status:${status}`, async () => {
+      const fd = new FormData();
+      fd.set("ids", serialized);
+      fd.set("status", status);
+      await bulkSetCustomerStatus(slug, fd);
+    });
 
   const tagSubmit = async (e: React.FormEvent<HTMLFormElement>) => {
     e.preventDefault();
     if (!tag.trim()) return;
-    const fd = new FormData();
-    fd.set("ids", serialized);
-    fd.set("tag", tag.trim());
-    await bulkTagCustomers(slug, fd);
-    setTag("");
-    setTagOpen(false);
-    onAfter();
+    await run("tag", async () => {
+      const fd = new FormData();
+      fd.set("ids", serialized);
+      fd.set("tag", tag.trim());
+      await bulkTagCustomers(slug, fd);
+      setTag("");
+      setTagOpen(false);
+    });
   };
 
   return (
@@ -234,6 +243,7 @@ function BulkBar({
             value={tag}
             onChange={(e) => setTag(e.target.value)}
             placeholder="Tag name"
+            disabled={isPending}
             className="ts-focus rounded-md px-2 py-1 text-xs outline-none"
             style={{
               background: "var(--surface-0)",
@@ -242,19 +252,16 @@ function BulkBar({
               width: 140,
             }}
           />
-          <button
-            type="submit"
-            className="ts-focus rounded-md px-2 py-1 text-xs font-semibold"
-            style={{ background: "var(--accent-primary)", color: "var(--accent-fg)" }}
-          >
+          <BulkButton type="submit" loading={pendingAction === "tag"} disabled={isPending} accent>
             Apply
-          </button>
+          </BulkButton>
           <button
             type="button"
             onClick={() => {
               setTagOpen(false);
               setTag("");
             }}
+            disabled={isPending}
             className="ts-focus rounded-md px-2 py-1 text-xs"
             style={{ color: "var(--text-muted)" }}
           >
@@ -263,10 +270,10 @@ function BulkBar({
         </form>
       ) : (
         <>
-          <BulkButton onClick={() => setTagOpen(true)}>Add tag</BulkButton>
-          <BulkButton onClick={() => setStatus("ACTIVE")}>Mark active</BulkButton>
-          <BulkButton onClick={() => setStatus("INACTIVE")}>Mark inactive</BulkButton>
-          <BulkButton onClick={() => setStatus("ARCHIVED")} destructive>
+          <BulkButton onClick={() => setTagOpen(true)} disabled={isPending}>Add tag</BulkButton>
+          <BulkButton onClick={() => setStatus("ACTIVE")}   loading={pendingAction === "status:ACTIVE"}   disabled={isPending}>Mark active</BulkButton>
+          <BulkButton onClick={() => setStatus("INACTIVE")} loading={pendingAction === "status:INACTIVE"} disabled={isPending}>Mark inactive</BulkButton>
+          <BulkButton onClick={() => setStatus("ARCHIVED")} loading={pendingAction === "status:ARCHIVED"} disabled={isPending} destructive>
             Archive
           </BulkButton>
         </>
@@ -279,25 +286,47 @@ function BulkButton({
   onClick,
   children,
   destructive,
+  accent,
+  loading,
+  disabled,
+  type = "button",
 }: {
-  onClick: () => void;
+  onClick?: () => void;
   children: React.ReactNode;
   destructive?: boolean;
+  accent?: boolean;
+  loading?: boolean;
+  disabled?: boolean;
+  type?: "button" | "submit";
 }) {
+  const isInactive = loading || disabled;
   return (
     <button
-      type="button"
+      type={type}
       onClick={onClick}
-      className="ts-focus rounded-md px-2.5 py-1 text-xs font-medium transition-colors hover:brightness-110"
+      disabled={isInactive}
+      aria-busy={loading || undefined}
+      className="ts-focus relative rounded-md px-2.5 py-1 text-xs font-medium transition-colors hover:brightness-110"
       style={{
-        background: "var(--surface-0)",
+        background: accent ? "var(--accent-primary)" : "var(--surface-0)",
         border: `1px solid ${
-          destructive ? "var(--danger-fg)" : "var(--border-default)"
+          accent ? "var(--accent-primary)" : destructive ? "var(--danger-fg)" : "var(--border-default)"
         }`,
-        color: destructive ? "var(--danger-fg)" : "var(--text-default)",
+        color: accent ? "var(--accent-fg)" : destructive ? "var(--danger-fg)" : "var(--text-default)",
+        cursor: isInactive ? "not-allowed" : "pointer",
+        opacity: isInactive ? 0.6 : 1,
+        fontWeight: accent ? 600 : 500,
       }}
     >
-      {children}
+      {loading && (
+        <span className="absolute inset-0 inline-flex items-center justify-center" aria-hidden>
+          <svg width="12" height="12" viewBox="0 0 24 24" fill="none" className="animate-spin">
+            <circle cx="12" cy="12" r="9" stroke="currentColor" strokeOpacity="0.25" strokeWidth="3" />
+            <path d="M21 12a9 9 0 0 0-9-9" stroke="currentColor" strokeWidth="3" strokeLinecap="round" />
+          </svg>
+        </span>
+      )}
+      <span style={{ visibility: loading ? "hidden" : "visible" }}>{children}</span>
     </button>
   );
 }

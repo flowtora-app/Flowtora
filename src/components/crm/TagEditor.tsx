@@ -1,6 +1,7 @@
 "use client";
 
 import * as React from "react";
+import { SubmitButton } from "@/components/ui/SubmitButton";
 import { addTag, removeTag } from "@/app/actions/customers";
 
 // Phase 7 — inline tag editor.
@@ -159,14 +160,14 @@ function TagChip({
         <form action={remove} className="inline">
           <input type="hidden" name="customerId" value={customerId} />
           <input type="hidden" name="tag" value={tag} />
-          <button
-            type="submit"
+          <SubmitButton
             aria-label={`Remove tag ${tag}`}
             className="-mr-0.5 inline-flex h-4 w-4 items-center justify-center rounded-full hover:brightness-125"
             style={{ color: "var(--accent-primary)", opacity: 0.7 }}
+            pendingLabel={<span style={{ fontSize: 10 }}>…</span>}
           >
             ×
-          </button>
+          </SubmitButton>
         </form>
       )}
     </span>

@@ -176,30 +176,40 @@ function InvoiceBulkBar({
   ids: string[];
   onAfter: () => void;
 }) {
+  const [pendingAction, setPendingAction] = React.useState<string | null>(null);
+  const isPending = pendingAction !== null;
   const serialized = ids.join(",");
 
-  const sendReminders = async () => {
-    if (!confirm(`Send reminder emails for ${ids.length} invoices?`)) return;
-    const fd = new FormData();
-    fd.set("ids", serialized);
-    await bulkSendInvoiceReminders(slug, fd);
-    onAfter();
+  const run = async (key: string, work: () => Promise<void>) => {
+    if (isPending) return;
+    setPendingAction(key);
+    try { await work(); onAfter(); } finally { setPendingAction(null); }
   };
 
-  const setStatus = async (status: "VOID" | "DRAFT") => {
+  const sendReminders = () => {
+    if (!confirm(`Send reminder emails for ${ids.length} invoices?`)) return;
+    return run("reminders", async () => {
+      const fd = new FormData();
+      fd.set("ids", serialized);
+      await bulkSendInvoiceReminders(slug, fd);
+    });
+  };
+
+  const setStatus = (status: "VOID" | "DRAFT") => {
     if (status === "VOID" && !confirm(`Void ${ids.length} invoices?`)) return;
-    const fd = new FormData();
-    fd.set("ids", serialized);
-    fd.set("status", status);
-    await bulkChangeInvoiceStatus(slug, fd);
-    onAfter();
+    return run(`status:${status}`, async () => {
+      const fd = new FormData();
+      fd.set("ids", serialized);
+      fd.set("status", status);
+      await bulkChangeInvoiceStatus(slug, fd);
+    });
   };
 
   return (
     <>
-      <BulkButton onClick={sendReminders}>Send reminders</BulkButton>
-      <BulkButton onClick={() => setStatus("DRAFT")}>Back to draft</BulkButton>
-      <BulkButton onClick={() => setStatus("VOID")} destructive>
+      <BulkButton onClick={sendReminders} loading={pendingAction === "reminders"} disabled={isPending}>Send reminders</BulkButton>
+      <BulkButton onClick={() => setStatus("DRAFT")} loading={pendingAction === "status:DRAFT"} disabled={isPending}>Back to draft</BulkButton>
+      <BulkButton onClick={() => setStatus("VOID")} loading={pendingAction === "status:VOID"} disabled={isPending} destructive>
         Void
       </BulkButton>
     </>
@@ -210,25 +220,42 @@ function BulkButton({
   onClick,
   children,
   destructive,
+  loading,
+  disabled,
 }: {
   onClick: () => void;
   children: React.ReactNode;
   destructive?: boolean;
+  loading?: boolean;
+  disabled?: boolean;
 }) {
+  const isInactive = loading || disabled;
   return (
     <button
       type="button"
       onClick={onClick}
-      className="ts-focus rounded-md px-2.5 py-1 text-xs font-medium transition-colors hover:brightness-110"
+      disabled={isInactive}
+      aria-busy={loading || undefined}
+      className="ts-focus relative rounded-md px-2.5 py-1 text-xs font-medium transition-colors hover:brightness-110"
       style={{
         background: "var(--surface-0)",
         border: `1px solid ${
           destructive ? "var(--danger-fg)" : "var(--border-default)"
         }`,
         color: destructive ? "var(--danger-fg)" : "var(--text-default)",
+        cursor: isInactive ? "not-allowed" : "pointer",
+        opacity: isInactive ? 0.6 : 1,
       }}
     >
-      {children}
+      {loading && (
+        <span className="absolute inset-0 inline-flex items-center justify-center" aria-hidden>
+          <svg width="12" height="12" viewBox="0 0 24 24" fill="none" className="animate-spin">
+            <circle cx="12" cy="12" r="9" stroke="currentColor" strokeOpacity="0.25" strokeWidth="3" />
+            <path d="M21 12a9 9 0 0 0-9-9" stroke="currentColor" strokeWidth="3" strokeLinecap="round" />
+          </svg>
+        </span>
+      )}
+      <span style={{ visibility: loading ? "hidden" : "visible" }}>{children}</span>
     </button>
   );
 }

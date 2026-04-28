@@ -1,5 +1,6 @@
 import { Card, CardHeader } from "@/components/Card";
 import { Button, Field, SelectField, TextArea } from "@/components/Field";
+import { SubmitButton } from "@/components/ui/SubmitButton";
 import { formatDateTime } from "@/lib/format";
 import {
   addAdhocInstallChecklistItem,
@@ -78,7 +79,18 @@ export function ChecklistCard({
             >
               {canManage ? (
                 <form action={toggle} className="mt-0.5">
-                  <button type="submit" aria-label="toggle complete">
+                  <SubmitButton aria-label="toggle complete" pendingLabel={
+                    <span
+                      style={{
+                        display: "inline-block",
+                        width: 16,
+                        height: 16,
+                        borderRadius: 4,
+                        border: "1px solid var(--border)",
+                        background: "var(--surface-3)",
+                      }}
+                    />
+                  }>
                     <span
                       style={{
                         display: "inline-block",
@@ -89,7 +101,7 @@ export function ChecklistCard({
                         background: it.completedAt ? "var(--accent)" : "transparent",
                       }}
                     />
-                  </button>
+                  </SubmitButton>
                 </form>
               ) : (
                 <span
@@ -122,9 +134,9 @@ export function ChecklistCard({
               </div>
               {canManage && (
                 <form action={remove}>
-                  <button type="submit" className="text-xs underline" style={{ color: "#ff6b6b" }}>
+                  <SubmitButton className="text-xs underline" style={{ color: "#ff6b6b" }} pendingLabel={<span className="text-xs">Removing…</span>}>
                     Remove
-                  </button>
+                  </SubmitButton>
                 </form>
               )}
             </li>

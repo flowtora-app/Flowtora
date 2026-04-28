@@ -1,4 +1,7 @@
+"use client";
+
 import * as React from "react";
+import { useFormStatus } from "react-dom";
 import { cn } from "@/lib/cn";
 
 // Button — the single source of truth for any clickable action in the
@@ -16,6 +19,12 @@ import { cn } from "@/lib/cn";
 // Icons via `leftIcon` / `rightIcon`. When `loading` is true the button
 // is disabled and a spinner overlays the content — we keep the content
 // mounted-but-invisible so the button doesn't shift width mid-click.
+//
+// Auto-loading: when this Button is `type="submit"` and a parent form
+// is currently submitting, we read `useFormStatus()` and flip `loading`
+// to `true` automatically. This means every form submit across the app
+// shows a spinner without each call site wiring up state. Pass an
+// explicit `loading={false}` if you ever need to opt out.
 //
 // Hover is driven by CSS classes (.ts-btn-*) instead of a brightness
 // filter — filter doesn't move pure-white surfaces in light mode, so
@@ -52,7 +61,7 @@ export const Button = React.forwardRef<HTMLButtonElement, ButtonProps>(function 
   {
     variant = "primary",
     size = "md",
-    loading = false,
+    loading,
     leftIcon,
     rightIcon,
     fullWidth,
@@ -60,18 +69,28 @@ export const Button = React.forwardRef<HTMLButtonElement, ButtonProps>(function 
     className,
     children,
     style,
+    type,
     ...rest
   },
   ref,
 ) {
-  const isDisabled = disabled || loading;
+  // useFormStatus() returns pending=false when this button isn't inside
+  // a submitting form, so calling it unconditionally is safe. We only
+  // surface that pending state for submit buttons — other types (e.g. a
+  // Cancel button rendered alongside) shouldn't spin while the form
+  // submits.
+  const formStatus = useFormStatus();
+  const autoPending = type === "submit" && formStatus.pending;
+  const isLoading = loading ?? autoPending;
+  const isDisabled = disabled || isLoading;
   const isLink = variant === "link";
 
   return (
     <button
       ref={ref}
+      type={type}
       disabled={isDisabled}
-      aria-busy={loading || undefined}
+      aria-busy={isLoading || undefined}
       className={cn(
         "ts-focus ts-btn relative inline-flex items-center justify-center rounded-md font-medium select-none transition-colors",
         VARIANT_CLASS[variant],
@@ -86,7 +105,7 @@ export const Button = React.forwardRef<HTMLButtonElement, ButtonProps>(function 
       }}
       {...rest}
     >
-      {loading && (
+      {isLoading && (
         <span className="absolute inset-0 inline-flex items-center justify-center" aria-hidden>
           <Spinner />
         </span>
@@ -95,7 +114,7 @@ export const Button = React.forwardRef<HTMLButtonElement, ButtonProps>(function 
         className="inline-flex items-center"
         style={{
           gap: size === "sm" ? "0.375rem" : "0.5rem",
-          visibility: loading ? "hidden" : "visible",
+          visibility: isLoading ? "hidden" : "visible",
         }}
       >
         {leftIcon && <span className="inline-flex shrink-0">{leftIcon}</span>}
