@@ -31,6 +31,17 @@ import { MemberWelcomeCard } from "@/components/onboarding/MemberWelcomeCard";
 // density eases up as the account grows. Badge counts stay as props —
 // the Sidebar stays dumb about how "attention" is computed.
 
+// Force this layout to re-run on every request. Two reasons:
+//   1. The onboarding gate below redirects when tenant.onboardingCompletedAt
+//      is null. Without force-dynamic, the App Router can serve a cached
+//      segment on client-side navigation (e.g. switching tenants) and
+//      skip the redirect — the user lands on the dashboard for an
+//      un-onboarded tenant until they hard-reload.
+//   2. The badge counts (attention, unread) are user-specific and
+//      tenant-specific; caching them across requests would surface
+//      another tenant's numbers in the worst case.
+export const dynamic = "force-dynamic";
+
 export default async function TenantLayout({
   children,
   params,
