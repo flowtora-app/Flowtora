@@ -138,5 +138,15 @@ export default auth((req) => {
 });
 
 export const config = {
-  matcher: ["/((?!_next/static|_next/image|favicon.ico).*)"],
+  // Skip middleware on:
+  //   • Next internals (_next/static, _next/image)
+  //   • The legacy favicon.ico path
+  //   • Anything ending in a common static-asset extension (images,
+  //     fonts, manifests, sourcemaps, etc.) so files dropped into
+  //     /public/ — like the brand logo PNGs — are served directly
+  //     instead of being treated as authenticated app routes and
+  //     307-redirected to /login for visitors on public pages.
+  matcher: [
+    "/((?!_next/static|_next/image|favicon.ico|.*\\.(?:png|jpg|jpeg|gif|svg|webp|ico|avif|css|js|woff|woff2|ttf|otf|map|webmanifest|txt)$).*)",
+  ],
 };
