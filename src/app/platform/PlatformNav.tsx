@@ -201,11 +201,6 @@ export function PlatformNav({
             <Icon.SignOut size={14} style={{ color: "var(--text-muted)", flexShrink: 0 }} />
           </button>
         </form>
-
-        <Link href="/select-tenant" className="ts-nav-foot ts-focus">
-          <Icon.ArrowLeft size={14} />
-          <span className="flex-1">Back to app</span>
-        </Link>
       </div>
     </aside>
   );
