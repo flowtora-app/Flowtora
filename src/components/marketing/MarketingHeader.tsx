@@ -4,7 +4,7 @@ import * as React from "react";
 import Link from "next/link";
 import { usePathname } from "next/navigation";
 import { cn } from "@/lib/cn";
-import { Logomark } from "@/components/brand/BrandMark";
+import { Logomark, Wordmark } from "@/components/brand/BrandMark";
 import { MarketingThemeToggle } from "./MarketingThemeToggle";
 
 // MarketingHeader — sticky top bar for public-facing pages.
@@ -129,12 +129,7 @@ export function MarketingHeader({ authed = false }: { authed?: boolean }) {
       <div className="mx-auto flex h-16 w-full max-w-6xl items-center justify-between gap-6 px-6">
         <Link href="/" className="flex items-center gap-2">
           <Logomark />
-          <span
-            className="text-base font-semibold tracking-tight"
-            style={{ color: "var(--text-default)" }}
-          >
-            Flowtora
-          </span>
+          <Wordmark style={{ fontSize: 16 }} />
         </Link>
 
         {/* Desktop nav */}
@@ -313,12 +308,7 @@ function MobileSlideOver({
             className="flex items-center gap-2"
           >
             <Logomark size={28} />
-            <span
-              className="text-base font-semibold tracking-tight"
-              style={{ color: "var(--text-default)" }}
-            >
-              Flowtora
-            </span>
+            <Wordmark style={{ fontSize: 16 }} />
           </Link>
           <button
             type="button"
