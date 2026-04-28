@@ -4146,3 +4146,62 @@ model NotificationBrand {
   updatedAt   DateTime @updatedAt
   updatedById String?
 }
+
+// ────────────────────────────────────────────────────────────
+// First-party analytics — visitor page-view log for the marketing
+// surface only. Tenant app pages, platform admin pages, auth pages,
+// portal/share surfaces are not tracked here.
+//
+// Privacy notes:
+//   - No raw IP is stored. We hash with a daily-rotating salt so the
+//     same visitor on different days produces different hashes —
+//     gives us within-day session de-dup without persistent PII.
+//   - User-agent is truncated to 200 chars.
+//   - Only tracks visitors who clicked "Accept" on the cookie
+//     banner; declined visitors never hit the beacon.
+//
+// Geo fields are populated from Vercel's free `x-vercel-ip-*`
+// request headers (country / region / city / latitude / longitude).
+// They're nullable so a missing or unknown geo doesn't break inserts.
+// ────────────────────────────────────────────────────────────
+model PageView {
+  id String @id @default(cuid())
+
+  // Path the visitor was on (origin-less, e.g. "/pricing"). Query
+  // strings stripped before insert so we don't fragment metrics.
+  path String
+
+  // Where they came from. Null = direct / typed-in / no referrer header.
+  // Origin-only when present (e.g. "https://google.com") so we don't
+  // leak the originating page's full URL into our DB.
+  referrerHost String?
+
+  // Vercel geolocation snapshot. ISO country code (2 letters), and
+  // city / region as supplied by edge — both can be null on cellular
+  // / VPN traffic where Vercel can't resolve.
+  country  String?
+  region   String?
+  city     String?
+  // Decimal lat/lon — used to drop the dot on the live map.
+  latitude  Float?
+  longitude Float?
+
+  // Truncated UA (max 200 chars) for desktop/mobile breakdown.
+  userAgent String?
+
+  // Browser-generated session UUID — stored in localStorage on the
+  // visitor's device. Lets us compute "live visitors" (distinct
+  // sessionIds in the last 5 min) without persistent identifiers.
+  sessionId String
+
+  // SHA-256(ip + dailySalt) — opaque identifier for same-day de-dup
+  // without storing the raw IP. Rotates daily so cross-day tracking
+  // is impossible.
+  ipHash String?
+
+  createdAt DateTime @default(now())
+
+  @@index([createdAt])
+  @@index([sessionId])
+  @@index([path])
+}
