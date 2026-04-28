@@ -11,6 +11,7 @@ import { Card, CardHeader } from "@/components/Card";
 import { db } from "@/lib/db";
 import { stripe } from "@/lib/stripe";
 import { getPublishedPlans } from "@/lib/plans";
+import { getStorageUsage, formatBytes } from "@/lib/storage-quota";
 import type Stripe from "stripe";
 import type { Plan } from "@prisma/client";
 
@@ -249,13 +250,14 @@ export default async function BillingSettings({
   // 3. Re-read tenant with pricingPlan relation + all published plans
   //    + live Stripe data. All in parallel — page renders after the
   //    slowest of them.
-  const [freshTenant, publishedPlans, liveSub] = await Promise.all([
+  const [freshTenant, publishedPlans, liveSub, storage] = await Promise.all([
     db.tenant.findUnique({
       where: { id: tenant.id },
       include: { pricingPlan: true },
     }),
     getPublishedPlans(),
     loadLiveSubscription(tenant.stripeSubscriptionId),
+    getStorageUsage(tenant.id, tenant.plan),
   ]);
   const invoices = await loadInvoices(tenant.stripeCustomerId);
   const t = freshTenant ?? tenant;
@@ -460,6 +462,77 @@ export default async function BillingSettings({
               )}
             </div>
           </div>
+        </div>
+      </Card>
+
+      {/* ── Storage usage ───────────────────────────────────── */}
+      <Card>
+        <CardHeader
+          title="File storage"
+          description={
+            storage.quotaBytes === Infinity
+              ? "Unlimited on your plan."
+              : `${formatBytes(storage.usedBytes)} of ${formatBytes(storage.quotaBytes)} used.`
+          }
+        />
+        <div className="px-5 py-5">
+          {storage.quotaBytes === Infinity ? (
+            <div
+              className="text-sm"
+              style={{ color: "var(--text-muted)" }}
+            >
+              You've stored {formatBytes(storage.usedBytes)} so far. No cap on
+              your tier.
+            </div>
+          ) : (
+            <>
+              <div
+                className="h-2 w-full overflow-hidden rounded-full"
+                style={{ background: "var(--surface-3)" }}
+              >
+                <div
+                  className="h-full rounded-full transition-[width]"
+                  style={{
+                    width: `${Math.round(storage.percentUsed * 100)}%`,
+                    background: storage.exceeded
+                      ? "var(--danger)"
+                      : storage.percentUsed > 0.85
+                      ? "var(--warning)"
+                      : "var(--accent-primary)",
+                    transitionDuration: "var(--duration-base)",
+                  }}
+                />
+              </div>
+              <div
+                className="mt-3 flex items-center justify-between text-xs"
+                style={{ color: "var(--text-muted)" }}
+              >
+                <span>
+                  {Math.round(storage.percentUsed * 100)}% used ·{" "}
+                  {formatBytes(Math.max(0, storage.quotaBytes - storage.usedBytes))}{" "}
+                  remaining
+                </span>
+                {storage.exceeded ? (
+                  <span style={{ color: "var(--danger-fg)", fontWeight: 600 }}>
+                    Quota exceeded — uploads are blocked.
+                  </span>
+                ) : storage.percentUsed > 0.85 ? (
+                  <span style={{ color: "var(--warning-fg)" }}>
+                    Almost full
+                  </span>
+                ) : null}
+              </div>
+              {(storage.exceeded || storage.percentUsed > 0.85) && (
+                <div className="mt-4">
+                  <Button variant="primary">
+                    <a href="#plans" style={{ color: "inherit" }}>
+                      Upgrade for more storage
+                    </a>
+                  </Button>
+                </div>
+              )}
+            </>
+          )}
         </div>
       </Card>
 

@@ -47,7 +47,8 @@ export type LimitKey =
   | "maxUsers"
   | "maxLocations"
   | "maxProducts"
-  | "maxCustomers";
+  | "maxCustomers"
+  | "storageQuotaGB"; // total file storage in gigabytes — -1 = unlimited
 
 type PlanEntitlements = {
   features: Record<FeatureKey, boolean>;
@@ -81,6 +82,7 @@ export const PLAN_ENTITLEMENTS: Record<Plan, PlanEntitlements> = {
       maxLocations: 1,
       maxProducts: 50,
       maxCustomers: 200,
+      storageQuotaGB: 5,
     },
   },
   GROWTH: {
@@ -101,6 +103,7 @@ export const PLAN_ENTITLEMENTS: Record<Plan, PlanEntitlements> = {
       maxLocations: 1,
       maxProducts: 500,
       maxCustomers: 2000,
+      storageQuotaGB: 50,
     },
   },
   PRO: {
@@ -121,6 +124,7 @@ export const PLAN_ENTITLEMENTS: Record<Plan, PlanEntitlements> = {
       maxLocations: 10,
       maxProducts: null,
       maxCustomers: null,
+      storageQuotaGB: 200,
     },
   },
   ENTERPRISE: {
@@ -141,6 +145,7 @@ export const PLAN_ENTITLEMENTS: Record<Plan, PlanEntitlements> = {
       maxLocations: null,
       maxProducts: null,
       maxCustomers: null,
+      storageQuotaGB: null,
     },
   },
 };

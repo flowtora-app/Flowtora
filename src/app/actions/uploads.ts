@@ -9,6 +9,7 @@ import {
   putFile,
   StorageError,
 } from "@/lib/storage";
+import { checkStorageQuota } from "@/lib/storage-quota";
 
 // Server-side uploaders for tenant-owned image and file assets. Each
 // client component posts a multipart form-data with a `file` field via
@@ -77,6 +78,12 @@ export async function uploadTenantLogo(
     };
   }
 
+  // Plan-level storage cap. Counted as a soft gate — the tenant gets
+  // a clear "quota exceeded, upgrade to X" message instead of a vague
+  // 500 from the storage layer mid-upload.
+  const quota = await checkStorageQuota(ctx.tenant.id, ctx.tenant.plan, file.size);
+  if (quota) return { ok: false, error: quota.error };
+
   // Fail fast with a clear message if R2 isn't configured — otherwise
   // the SDK throws a vague error that surfaces as a 500 in the UI.
   if (!isStorageConfigured()) {
@@ -134,6 +141,10 @@ export async function uploadExpenseReceipt(
   if (!isPdf && !ALLOWED_IMAGE_MIME.has(file.type)) {
     return { ok: false, error: "Use a PNG/JPEG/WebP image or a PDF." };
   }
+
+  const quota = await checkStorageQuota(ctx.tenant.id, ctx.tenant.plan, file.size);
+  if (quota) return { ok: false, error: quota.error };
+
   if (!isStorageConfigured()) return notConfigured();
 
   try {
@@ -179,6 +190,10 @@ export async function uploadInstallPhoto(
   if (!ALLOWED_IMAGE_MIME.has(file.type)) {
     return { ok: false, error: "Use a PNG/JPEG/WebP/HEIC image." };
   }
+
+  const quota = await checkStorageQuota(ctx.tenant.id, ctx.tenant.plan, file.size);
+  if (quota) return { ok: false, error: quota.error };
+
   if (!isStorageConfigured()) return notConfigured();
 
   try {
@@ -221,6 +236,10 @@ export async function uploadTenantFile(
   if (file.size > MAX_TENANT_FILE_BYTES) {
     return { ok: false, error: "File must be 25 MB or smaller." };
   }
+
+  const quota = await checkStorageQuota(ctx.tenant.id, ctx.tenant.plan, file.size);
+  if (quota) return { ok: false, error: quota.error };
+
   if (!isStorageConfigured()) return notConfigured();
 
   try {
@@ -282,6 +301,10 @@ export async function uploadUserAvatar(
   if (!ALLOWED_LOGO_MIME.has(file.type)) {
     return { ok: false, error: "Use PNG, JPEG, WebP, GIF, or SVG." };
   }
+
+  const quota = await checkStorageQuota(ctx.tenant.id, ctx.tenant.plan, file.size);
+  if (quota) return { ok: false, error: quota.error };
+
   if (!isStorageConfigured()) return notConfigured();
 
   try {

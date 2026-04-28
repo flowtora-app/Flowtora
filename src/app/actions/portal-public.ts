@@ -15,6 +15,7 @@ import {
   putFile,
   StorageError,
 } from "@/lib/storage";
+import { checkStorageQuota } from "@/lib/storage-quota";
 
 // Filter out synthetic user ids like "portal:<tokenId>" — those aren't real
 // staff users and will never log in to receive notifications.
@@ -647,6 +648,15 @@ export async function uploadPortalFile(
   if (!filename) {
     redirect(`${back}?error=${encodeURIComponent("Invalid filename.")}`);
   }
+
+  // Tenant's plan-level storage quota. The customer can't see the
+  // tenant's plan, so the message stays neutral — they're nudged to
+  // contact the shop rather than learn about pricing tiers.
+  const quota = await checkStorageQuota(ctx.tenant.id, ctx.tenant.plan, file.size);
+  if (quota) {
+    redirect(`${back}?error=${encodeURIComponent("This shop's storage is full. Please contact them directly to share the file.")}`);
+  }
+
   if (!isStorageConfigured()) {
     redirect(`${back}?error=${encodeURIComponent("File hosting isn't configured. Contact support.")}`);
   }
