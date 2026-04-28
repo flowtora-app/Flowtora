@@ -37,7 +37,7 @@ export async function inviteMember(slug: string, formData: FormData) {
   // Hard cap: plan's maxUsers covers active memberships + outstanding invites.
   // We count pending invites so a shop can't front-load invites to exceed
   // the cap once they all accept. Returns Infinity for unlimited plans.
-  const cap = planLimit(ctx.tenant.plan, "maxUsers");
+  const cap = await planLimit(ctx.tenant.id, ctx.tenant.plan, "maxUsers");
   if (Number.isFinite(cap)) {
     const [memberCount, pendingInviteCount] = await Promise.all([
       db.membership.count({ where: { tenantId: ctx.tenant.id, status: "ACTIVE" } }),

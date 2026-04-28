@@ -6,15 +6,18 @@
 // which only exists as a per-tenant override today).
 //
 // Callers use `isEntitled(tenantId, plan, "featureKey")` to ask
-// "is this tenant allowed to use this?" — signature unchanged.
-// `planLimit(plan, "maxUsers")` reads hard numeric caps and is not
-// part of the DB flip yet (it reads PLAN_ENTITLEMENTS only).
+// "is this tenant allowed to use this?" for boolean gates, and
+// `planLimit(tenantId, plan, "maxUsers")` for numeric caps. Both are
+// async and DB-backed — the admin-editable PlanFeatureValue table is
+// the source of truth, with PLAN_ENTITLEMENTS only kicking in as a
+// fallback for legacy tenants without a pricingPlanId.
 //
-// Resolution order inside `isEntitled`:
-//   1. Per-tenant FeatureFlag row (tenantId=X, key=Y)
-//   2. Global FeatureFlag row (tenantId=null, key=Y)
-//   3. Tenant's PricingPlan feature grant (DB, cached)
-//   4. PLAN_ENTITLEMENTS[plan].features[key] (legacy fallback)
+// Resolution order:
+//   isEntitled (BOOLEAN gates)             planLimit (NUMBER caps)
+//   1. Per-tenant FeatureFlag override     1. PricingPlan grant (DB, cached)
+//   2. Global FeatureFlag override         2. PLAN_ENTITLEMENTS legacy fallback
+//   3. PricingPlan grant (DB, cached)
+//   4. PLAN_ENTITLEMENTS legacy fallback
 //
 // Adding a new entitlement:
 //   - Extend FeatureKey or LimitKey below
@@ -133,19 +136,74 @@ export const PLAN_ENTITLEMENTS: Record<Plan, PlanEntitlements> = {
 };
 
 /**
- * Read a hard numeric cap for a plan. Returns `Infinity` for unlimited
- * so callers can write `count >= planLimit(...)` without special-casing.
+ * Read a hard numeric cap for a tenant. Returns `Infinity` for unlimited
+ * so callers can write `count >= cap` without special-casing.
  *
- * Not DB-backed yet — limits live in the PlanFeatureValue table as
- * NUMBER cells (maxUsers / maxLocations) but the call sites that read
- * these synchronously don't have a tenantId context. Future work:
- * make planLimit(tenantId, plan, key) async with the same DB-first,
- * map-fallback structure isEntitled uses.
+ * DB-first, hardcoded-map fallback — same four-tier resolution as
+ * `isEntitled()` but for NUMBER limit cells (maxUsers, maxLocations,
+ * maxProducts, maxCustomers). Reads from the `PlanFeatureValue` row
+ * matching the tenant's `pricingPlanId`; if the tenant has no
+ * pricingPlanId (legacy / not-yet-subscribed) or the key isn't in the
+ * matrix, falls through to `PLAN_ENTITLEMENTS[plan].limits[key]`.
+ *
+ * Convention in the DB cells:
+ *   valueNumber === -1  → Infinity  (unlimited)
+ *   valueNumber == null → fall through to hardcoded map
+ *   otherwise           → use the number as-is
  */
-export function planLimit(plan: Plan, key: LimitKey): number {
+export async function planLimit(
+  tenantId: string,
+  plan: Plan,
+  key: LimitKey,
+): Promise<number> {
+  const tenant = await db.tenant.findUnique({
+    where: { id: tenantId },
+    select: { pricingPlanId: true },
+  });
+
+  if (tenant?.pricingPlanId) {
+    const limits = await getPlanLimitGrants(tenant.pricingPlanId);
+    if (key in limits) {
+      const v = limits[key]!;
+      return v === -1 ? Infinity : v;
+    }
+  }
+
   const raw = PLAN_ENTITLEMENTS[plan].limits[key];
   return raw === null ? Infinity : raw;
 }
+
+// Cached per pricingPlanId — same TTL/tags as the boolean grants so
+// admin edits to a number cell propagate immediately on save.
+const getPlanLimitGrants = unstable_cache(
+  async (pricingPlanId: string): Promise<Record<string, number>> => {
+    const rows = await db.planFeatureValue.findMany({
+      where: {
+        planId: pricingPlanId,
+        feature: {
+          enforcement: "GATE",
+          valueType: "NUMBER",
+        },
+      },
+      select: {
+        valueNumber: true,
+        feature: { select: { key: true } },
+      },
+    });
+    const out: Record<string, number> = {};
+    for (const r of rows) {
+      if (r.valueNumber !== null) {
+        out[r.feature.key] = r.valueNumber;
+      }
+    }
+    return out;
+  },
+  ["plan-limit-grants"],
+  {
+    tags: [PRICING_CACHE_TAGS.published, PRICING_CACHE_TAGS.all],
+    revalidate: 3600,
+  },
+);
 
 // ─────────────────────────────────────────────────────────────
 // DB-backed plan feature grants. Cached per pricingPlanId so
