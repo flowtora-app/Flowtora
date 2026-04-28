@@ -83,11 +83,25 @@ const GROUPS: NavGroup[] = [
 
 export interface PlatformNavProps {
   roleLabel: string;
+  /** Display name of the signed-in admin. Falls back to email if absent. */
+  userName: string | null;
+  /** Email of the signed-in admin — used for the initials fallback + secondary line. */
+  userEmail: string;
+  /** Optional avatar URL. When present, replaces the initials chip. */
+  userImage: string | null;
   signOutAction: () => void | Promise<void>;
 }
 
-export function PlatformNav({ roleLabel, signOutAction }: PlatformNavProps) {
+export function PlatformNav({
+  roleLabel,
+  userName,
+  userEmail,
+  userImage,
+  signOutAction,
+}: PlatformNavProps) {
   const pathname = usePathname();
+  const initials = deriveInitials(userName ?? userEmail);
+  const displayName = userName?.trim() || userEmail;
 
   return (
     <aside
@@ -112,38 +126,6 @@ export function PlatformNav({ roleLabel, signOutAction }: PlatformNavProps) {
         <Wordmark style={{ fontSize: 16, letterSpacing: "-0.01em" }} />
       </Link>
 
-      {/* ── Platform context row ───────────────────────────────────── */}
-      <div
-        className="shrink-0 px-3 py-2.5"
-        style={{ borderBottom: "1px solid var(--border-subtle)" }}
-      >
-        <div className="flex items-center gap-2">
-          <span
-            className="inline-flex h-5 w-5 shrink-0 items-center justify-center rounded"
-            style={{
-              background: "var(--accent-surface)",
-              color: "var(--accent-primary)",
-            }}
-          >
-            <Icon.Shield size={12} />
-          </span>
-          <div className="min-w-0">
-            <div
-              className="truncate text-[12px] font-medium leading-tight"
-              style={{ color: "var(--text-default)" }}
-            >
-              Platform
-            </div>
-            <div
-              className="truncate text-[10px] leading-tight"
-              style={{ color: "var(--text-muted)" }}
-            >
-              {roleLabel}
-            </div>
-          </div>
-        </div>
-      </div>
-
       {/* ── Nav ─────────────────────────────────────────────────────── */}
       <nav
         className="flex-1 overflow-y-auto px-2.5 py-3"
@@ -167,19 +149,78 @@ export function PlatformNav({ roleLabel, signOutAction }: PlatformNavProps) {
         className="shrink-0 space-y-1 px-2.5 py-2.5"
         style={{ borderTop: "1px solid var(--border-subtle)" }}
       >
+        {/* User identity + sign-out — Discord/Slack-style footer card.
+            The whole row submits the sign-out form; the right-side
+            arrow telegraphs that intent. */}
+        <form action={signOutAction}>
+          <button
+            type="submit"
+            className="ts-focus flex w-full items-center gap-2 rounded-md px-2 py-1.5 text-left transition-colors"
+            style={{ background: "transparent" }}
+            title="Sign out"
+            onMouseEnter={(e) => {
+              e.currentTarget.style.background = "var(--surface-3)";
+            }}
+            onMouseLeave={(e) => {
+              e.currentTarget.style.background = "transparent";
+            }}
+          >
+            <span
+              className="flex h-8 w-8 shrink-0 items-center justify-center overflow-hidden rounded-full text-[12px] font-semibold"
+              style={{
+                background: "var(--accent-surface)",
+                color: "var(--accent-primary)",
+                border: "1px solid var(--border-subtle)",
+              }}
+            >
+              {userImage ? (
+                // eslint-disable-next-line @next/next/no-img-element
+                <img
+                  src={userImage}
+                  alt=""
+                  style={{ width: "100%", height: "100%", objectFit: "cover" }}
+                />
+              ) : (
+                initials
+              )}
+            </span>
+            <span className="min-w-0 flex-1">
+              <span
+                className="block truncate text-[13px] font-semibold leading-tight"
+                style={{ color: "var(--text-default)" }}
+              >
+                {displayName}
+              </span>
+              <span
+                className="block truncate text-[11px] leading-tight"
+                style={{ color: "var(--text-muted)" }}
+              >
+                {roleLabel}
+              </span>
+            </span>
+            <Icon.SignOut size={14} style={{ color: "var(--text-muted)", flexShrink: 0 }} />
+          </button>
+        </form>
+
         <Link href="/select-tenant" className="ts-nav-foot ts-focus">
           <Icon.ArrowLeft size={14} />
           <span className="flex-1">Back to app</span>
         </Link>
-        <form action={signOutAction}>
-          <button type="submit" className="ts-nav-foot ts-focus w-full">
-            <Icon.SignOut size={14} />
-            <span className="flex-1 text-left">Sign out</span>
-          </button>
-        </form>
       </div>
     </aside>
   );
+}
+
+function deriveInitials(source: string): string {
+  const trimmed = source.trim();
+  if (!trimmed) return "?";
+  // For an email, drop the domain and split on dots/dashes/spaces so
+  // "sarah.foo@flowtora.com" → "SF" instead of "SA".
+  const stem = trimmed.includes("@") ? trimmed.split("@")[0]! : trimmed;
+  const parts = stem.split(/[\s._-]+/).filter(Boolean);
+  if (parts.length === 0) return stem.slice(0, 2).toUpperCase();
+  if (parts.length === 1) return parts[0]!.slice(0, 2).toUpperCase();
+  return (parts[0]![0]! + parts[parts.length - 1]![0]!).toUpperCase();
 }
 
 /* ──────────────────────────────────────────────────────────────── */

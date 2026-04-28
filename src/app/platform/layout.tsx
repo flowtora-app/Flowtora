@@ -14,6 +14,9 @@ export default async function PlatformLayout({ children }: { children: React.Rea
     <div className="flex min-h-screen">
       <PlatformNav
         roleLabel={roleLabel}
+        userName={session.user.name ?? null}
+        userEmail={session.user.email ?? ""}
+        userImage={session.user.image ?? null}
         signOutAction={async () => {
           "use server";
           await signOut({ redirectTo: "/" });
