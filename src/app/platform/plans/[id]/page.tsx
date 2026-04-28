@@ -2,7 +2,6 @@ import Link from "next/link";
 import { notFound } from "next/navigation";
 import { db } from "@/lib/db";
 import { requirePlatformStaff } from "@/lib/platform";
-import { Card, CardHeader } from "@/components/Card";
 import {
   savePlanDetails,
   savePlanPricing,
@@ -19,34 +18,24 @@ import {
   deletePlanAddOn,
 } from "@/app/actions/plan-addons";
 import { syncPlanToStripe } from "@/app/actions/stripe-sync";
+import { formatMoney } from "@/lib/format";
 
-// /platform/plans/[id] — plan editor (M3).
+import { PlanHeaderBar } from "@/components/platform/PlanHeaderBar";
+import { PlanTabs, type PlanTabKey, type PlanTab } from "@/components/platform/PlanTabs";
+import { PlanCardPreview, type PlanCardData } from "@/components/platform/PlanCardPreview";
+
+// /platform/plans/[id] — plan editor (transformation rewrite).
 //
-// Four tabs surface different slices of the PricingPlan row:
-//   • details    — identity (slug, name, copy, CTA, highlight, order)
-//   • pricing    — numeric prices + Stripe linkage
-//   • features   — matrix of PlanFeatureValue cells, grouped
-//   • marketing  — landing / pricing copy + visibility toggles
+// Six URL-driven tabs (?tab=):
+//   Overview · Pricing · Features · Add-ons · Marketing · Advanced
 //
-// Tab is selected via `?tab=…`; every form posts through a server
-// action that redirects back with `?ok=1` or `?error=…`. The action
-// already flushes both the marketing cache tags and the static route
-// cache — no client-side dance required.
-//
-// Publish / Unpublish / Archive / Delete live in the page header, each
-// behind its own tiny form so we get CSRF-safe server-action posts
-// without any JS.
+// Sticky header on top with identity + chips + Publish/Archive quick
+// actions. All server actions kept exactly as before; this is a layout
+// + UX redesign, not a wiring change.
 
 export const dynamic = "force-dynamic";
 
-type Tab = "details" | "pricing" | "features" | "addons" | "marketing";
-const TABS: { id: Tab; label: string }[] = [
-  { id: "details", label: "Details" },
-  { id: "pricing", label: "Pricing" },
-  { id: "features", label: "Features" },
-  { id: "addons", label: "Add-ons" },
-  { id: "marketing", label: "Marketing" },
-];
+const TAB_KEYS: PlanTabKey[] = ["overview", "pricing", "features", "addons", "marketing", "advanced"];
 
 type SP = { tab?: string; ok?: string; error?: string; published?: string };
 
@@ -61,10 +50,11 @@ export default async function PlatformPlanEditorPage({
   const sp = await searchParams;
   const ctx = await requirePlatformStaff();
 
-  // Validate tab, default to details if missing/bogus.
-  const activeTab: Tab = (TABS.find((t) => t.id === sp.tab)?.id ?? "details") as Tab;
+  const activeTab: PlanTabKey =
+    (TAB_KEYS as readonly string[]).includes(sp.tab ?? "")
+      ? (sp.tab as PlanTabKey)
+      : "overview";
 
-  // Fetch the plan + all the nested state the editor tabs need.
   const plan = await db.pricingPlan.findUnique({
     where: { id },
     include: {
@@ -77,179 +67,209 @@ export default async function PlatformPlanEditorPage({
   });
   if (!plan) notFound();
 
-  // Feature library (master list) — used by the features tab to render
-  // a cell for every feature even if the plan has no value yet.
   const allFeatures = await db.planFeature.findMany({
     orderBy: [{ groupSortOrder: "asc" }, { sortOrder: "asc" }],
   });
-
-  // Cell lookup: featureId → PlanFeatureValue (or undefined).
   const valueByFeature = new Map(plan.featureValues.map((fv) => [fv.featureId, fv]));
+
+  // Tenant counts split by status — needed for the Overview metrics.
+  const tenantStatus = await db.tenant.groupBy({
+    by: ["status"],
+    where: { pricingPlanId: plan.id },
+    _count: { _all: true },
+  });
+  const counts = { active: 0, trial: 0, pastDue: 0 };
+  for (const row of tenantStatus) {
+    if (row.status === "ACTIVE")        counts.active  = row._count._all;
+    else if (row.status === "TRIAL")    counts.trial   = row._count._all;
+    else if (row.status === "PAST_DUE") counts.pastDue = row._count._all;
+  }
 
   const canWrite = ctx.canWrite;
 
+  const monthly = plan.priceMonthly == null ? null : Number(plan.priceMonthly);
+  const annual  = plan.priceAnnual  == null ? null : Number(plan.priceAnnual);
+  const mrr     = plan.isContactSales || monthly == null ? 0 : monthly * counts.active;
+
+  // Build feature bullets for the live plan-card preview.
+  // Rule: include any feature with truthy bool, non-null number, or non-empty text.
+  const featureBullets: string[] = [];
+  for (const f of allFeatures) {
+    const v = valueByFeature.get(f.id);
+    if (!v) continue;
+    if (f.valueType === "BOOLEAN" && v.valueBool) {
+      featureBullets.push(f.label);
+    } else if (f.valueType === "NUMBER" && v.valueNumber != null) {
+      const n = v.valueNumber === -1 ? "Unlimited" : v.valueNumber.toString();
+      featureBullets.push(`${n} ${f.label.toLowerCase()}`);
+    } else if (f.valueType === "TEXT" && v.valueText) {
+      featureBullets.push(`${f.label}: ${v.valueText}`);
+    }
+  }
+
+  const cardData: PlanCardData = {
+    name: plan.name,
+    slug: plan.slug,
+    subtitle: plan.subtitle,
+    description: plan.description,
+    badge: plan.badge,
+    highlight: plan.highlight,
+    status: plan.status,
+    isContactSales: plan.isContactSales,
+    priceMonthly: monthly,
+    priceAnnual: annual,
+    currency: plan.currency || "USD",
+    ctaLabel: plan.ctaLabel,
+    trialDays: plan.trialDays,
+    featureBullets,
+  };
+
+  // Header chips.
+  const statusTone: "default" | "accent" | "success" | "warning" | "danger" | "neutral" =
+    plan.status === "PUBLISHED" ? "success" :
+    plan.status === "DRAFT"     ? "neutral" :
+    plan.status === "HIDDEN"    ? "warning" :
+    "neutral";
+
+  const headerChips: { label: string; tone: "default" | "accent" | "success" | "warning" | "danger" | "neutral"; dot?: boolean; title?: string }[] = [
+    { label: plan.status, tone: statusTone, dot: true, title: "Plan status" },
+    { label: plan.isContactSales ? "Contact-sales" : (monthly != null ? `${formatMoney(monthly, plan.currency || "USD")}/mo` : "No price"), tone: "default", title: "Sticker price" },
+    { label: `${counts.active} tenants`, tone: "default", title: `${counts.active} active · ${counts.trial} trial · ${counts.pastDue} past-due` },
+    { label: `${plan._count.versions} versions`, tone: "neutral", title: "Published versions" },
+    ...(plan._count.overrides > 0 ? [{ label: `${plan._count.overrides} overrides`, tone: "accent" as const, title: "Per-tenant price overrides on this plan" }] : []),
+  ];
+
+  // Quick action cluster — Publish / Unpublish / Archive / Delete.
+  const headerActions = canWrite ? (
+    <>
+      {plan.status !== "PUBLISHED" && (
+        <form action={publishPlan.bind(null, plan.id)}>
+          <ActionButton tone="accent">Publish</ActionButton>
+        </form>
+      )}
+      {plan.status === "PUBLISHED" && (
+        <form action={unpublishPlan.bind(null, plan.id)}>
+          <ActionButton tone="neutral">Unpublish</ActionButton>
+        </form>
+      )}
+      {plan.status !== "ARCHIVED" && (
+        <form action={archivePlan.bind(null, plan.id)}>
+          <ActionButton tone="neutral">Archive</ActionButton>
+        </form>
+      )}
+      {plan.status === "DRAFT" &&
+        plan._count.tenants === 0 &&
+        plan._count.versions === 0 &&
+        plan._count.overrides === 0 && (
+          <form action={deletePlan.bind(null, plan.id)}>
+            <ActionButton tone="danger">Delete</ActionButton>
+          </form>
+      )}
+    </>
+  ) : null;
+
+  // Tab bar with attention badges.
+  const missingDescription = !plan.description && !plan.marketingCopy;
+  const tabs: PlanTab[] = [
+    { key: "overview", label: "Overview" },
+    {
+      key: "pricing",
+      label: "Pricing & billing",
+      badge: !plan.isContactSales && monthly == null ? "!" : undefined,
+      badgeTone: "warning",
+    },
+    {
+      key: "features",
+      label: "Features & limits",
+      badge: plan._count.tenants > 0 && plan.featureValues.length === 0 ? "!" : undefined,
+      badgeTone: "warning",
+    },
+    {
+      key: "addons",
+      label: "Add-ons",
+      badge: plan.addOns.length > 0 ? plan.addOns.length : undefined,
+      badgeTone: "neutral",
+    },
+    {
+      key: "marketing",
+      label: "Marketing",
+      badge: missingDescription ? "!" : undefined,
+      badgeTone: "warning",
+    },
+    { key: "advanced", label: "Advanced" },
+  ];
+
   return (
-    <div className="space-y-6">
-      {/* ── Breadcrumb + header ── */}
-      <div className="flex items-start justify-between gap-4">
-        <div>
-          <Link
-            href="/platform/plans"
-            className="text-xs"
-            style={{ color: "var(--text-muted)" }}
-          >
-            ← Plans
-          </Link>
-          <h1 className="mt-1 flex items-center gap-3 text-2xl font-semibold">
-            {plan.name}
-            <StatusChip status={plan.status} />
-            {plan.highlight && (
-              <span
-                className="rounded-full px-2 py-0.5 text-[10px] font-medium uppercase tracking-wider"
-                style={{ background: "var(--accent-surface)", color: "var(--accent-primary)" }}
-              >
-                Highlighted
-              </span>
-            )}
-          </h1>
-          <p className="mt-1 text-sm" style={{ color: "var(--text-muted)" }}>
-            <span className="font-mono text-xs">{plan.slug}</span>
-            {" · "}
-            {plan._count.tenants} tenant{plan._count.tenants === 1 ? "" : "s"}
-            {" · "}
-            <Link
-              href={`/platform/plans/${plan.id}/versions`}
-              className="underline"
-              style={{ color: "var(--text-muted)" }}
-            >
-              {plan._count.versions} version{plan._count.versions === 1 ? "" : "s"}
-            </Link>
-            {plan._count.overrides > 0 && ` · ${plan._count.overrides} price override${plan._count.overrides === 1 ? "" : "s"}`}
-          </p>
-        </div>
+    <div>
+      <PlanHeaderBar
+        name={plan.name}
+        slug={plan.slug}
+        badge={plan.badge}
+        highlighted={plan.highlight}
+        chips={headerChips}
+        subline={`Last updated ${plan.updatedAt.toISOString().slice(0, 10)}${plan.publishedAt ? ` · Published ${plan.publishedAt.toISOString().slice(0, 10)}` : ""}`}
+        actions={headerActions}
+      />
 
-        {canWrite && (
-          <div className="flex flex-wrap gap-2">
-            {plan.status !== "PUBLISHED" && (
-              <form action={publishPlan.bind(null, plan.id)}>
-                <SolidButton tone="accent">Publish</SolidButton>
-              </form>
-            )}
-            {plan.status === "PUBLISHED" && (
-              <form action={unpublishPlan.bind(null, plan.id)}>
-                <SolidButton tone="neutral">Unpublish</SolidButton>
-              </form>
-            )}
-            {plan.status !== "ARCHIVED" && (
-              <form action={archivePlan.bind(null, plan.id)}>
-                <SolidButton tone="neutral">Archive</SolidButton>
-              </form>
-            )}
-            {plan.status === "DRAFT" &&
-              plan._count.tenants === 0 &&
-              plan._count.versions === 0 &&
-              plan._count.overrides === 0 && (
-                <form action={deletePlan.bind(null, plan.id)}>
-                  <SolidButton tone="danger">Delete</SolidButton>
-                </form>
-              )}
-          </div>
+      {/* Banners */}
+      <div className="mt-4 space-y-2">
+        {sp.ok && (
+          <Banner tone="success" title="Saved" body={
+            sp.published === "1"
+              ? "Plan published. Marketing pages have been flushed."
+              : sp.ok === "stripe-synced"
+              ? "Synced to Stripe. Product and Price IDs updated."
+              : "Changes saved."
+          } />
+        )}
+        {sp.error && <Banner tone="danger" title="Action failed" body={decodeURIComponent(sp.error)} />}
+
+        {plan.status !== "PUBLISHED" && !plan.isContactSales && monthly == null && (
+          <Banner
+            tone="warning"
+            title="Plan can't be published yet"
+            body="Set a monthly price on the Pricing tab, or mark as contact-sales."
+          />
         )}
       </div>
 
-      {/* ── Banners ── */}
-      {sp.ok && (
-        <Banner tone="ok">
-          {sp.published === "1"
-            ? `Plan published. Marketing pages have been flushed.`
-            : sp.ok === "stripe-synced"
-            ? `Synced to Stripe. Product and Price IDs updated.`
-            : "Saved."}
-        </Banner>
-      )}
-      {sp.error && <Banner tone="error">{sp.error}</Banner>}
-
-      {/* ── Publish-blocker hint when price missing ── */}
-      {plan.status !== "PUBLISHED" &&
-        !plan.isContactSales &&
-        plan.priceMonthly == null && (
-          <div
-            className="rounded-md px-4 py-3 text-sm"
-            style={{
-              background: "var(--warning-surface)",
-              color: "var(--warning-fg)",
-              border: "1px solid var(--warning-fg)",
-            }}
-          >
-            This plan can&apos;t be published yet — set a monthly price on the{" "}
-            <Link
-              href={`/platform/plans/${plan.id}?tab=pricing`}
-              className="underline"
-            >
-              Pricing tab
-            </Link>
-            , or mark it as contact-sales.
-          </div>
-        )}
-
-      {/* ── Tabs ── */}
-      <div
-        className="flex gap-1 border-b"
-        style={{ borderColor: "var(--border-subtle)" }}
-      >
-        {TABS.map((t) => {
-          const active = t.id === activeTab;
-          return (
-            <Link
-              key={t.id}
-              href={`/platform/plans/${plan.id}?tab=${t.id}`}
-              scroll={false}
-              className="px-4 py-2 text-sm font-medium"
-              style={{
-                color: active ? "var(--text-default)" : "var(--text-muted)",
-                borderBottom: active
-                  ? "2px solid var(--accent-primary)"
-                  : "2px solid transparent",
-                marginBottom: "-1px",
-              }}
-            >
-              {t.label}
-            </Link>
-          );
-        })}
+      {/* Tabs */}
+      <div className="mt-6">
+        <PlanTabs planId={plan.id} active={activeTab} tabs={tabs} />
       </div>
 
-      {/* ── Tab bodies ── */}
-      {activeTab === "details" && (
-        <DetailsTab plan={plan} canWrite={canWrite} />
+      {/* Tab body */}
+      {activeTab === "overview"  && (
+        <OverviewTab plan={plan} counts={counts} mrr={mrr} cardData={cardData} canWrite={canWrite} />
       )}
-      {activeTab === "pricing" && (
-        <PricingTab plan={plan} canWrite={canWrite} />
+      {activeTab === "pricing"   && (
+        <PricingTab plan={plan} cardData={cardData} canWrite={canWrite} />
       )}
-      {activeTab === "features" && (
-        <FeaturesTab
-          plan={plan}
-          features={allFeatures}
-          valueByFeature={valueByFeature}
-          canWrite={canWrite}
-        />
+      {activeTab === "features"  && (
+        <FeaturesTab plan={plan} features={allFeatures} valueByFeature={valueByFeature} canWrite={canWrite} />
       )}
-      {activeTab === "addons" && (
+      {activeTab === "addons"    && (
         <AddOnsTab plan={plan} addOns={plan.addOns} canWrite={canWrite} />
       )}
       {activeTab === "marketing" && (
-        <MarketingTab plan={plan} canWrite={canWrite} />
+        <MarketingTab plan={plan} cardData={cardData} canWrite={canWrite} />
+      )}
+      {activeTab === "advanced"  && (
+        <AdvancedTab plan={plan} canWrite={canWrite} />
       )}
     </div>
   );
 }
 
-/* ──────────────────────────────────────────────────────────────
-   Details tab
-   ────────────────────────────────────────────────────────────── */
+// ────────────────────────────────────────────────────────────────
+// OVERVIEW TAB
+// ────────────────────────────────────────────────────────────────
 
-function DetailsTab({
+function OverviewTab({
   plan,
+  counts,
+  mrr,
+  cardData,
   canWrite,
 }: {
   plan: {
@@ -264,122 +284,94 @@ function DetailsTab({
     trialDays: number | null;
     ctaLabel: string | null;
     ctaHref: string | null;
+    currency: string;
+    _count: { tenants: number; versions: number; overrides: number };
   };
+  counts: { active: number; trial: number; pastDue: number };
+  mrr: number;
+  cardData: PlanCardData;
   canWrite: boolean;
 }) {
   return (
-    <Card>
-      <CardHeader
-        title="Identity & copy"
-        description="What prospects see on the plan card. Slug powers /signup?plan=… URLs and stays stable across rebrands."
-      />
-      <form action={savePlanDetails.bind(null, plan.id)} className="space-y-5 px-5 py-5">
-        <div className="grid gap-4 md:grid-cols-2">
-          <FormField
-            label="Slug"
-            name="slug"
-            defaultValue={plan.slug}
-            required
-            hint="Lowercase letters, digits, hyphens. Used in URLs and Stripe metadata."
-            disabled={!canWrite}
-          />
-          <FormField
-            label="Name"
-            name="name"
-            defaultValue={plan.name}
-            required
-            maxLength={80}
-            disabled={!canWrite}
-          />
-          <FormField
-            label="Subtitle"
-            name="subtitle"
-            defaultValue={plan.subtitle ?? ""}
-            hint="One-line positioning under the name on cards."
-            maxLength={200}
-            disabled={!canWrite}
-          />
-          <FormField
-            label="Badge"
-            name="badge"
-            defaultValue={plan.badge ?? ""}
-            hint={'Chip shown on the card. e.g. "Most popular", "Save 20%".'}
-            maxLength={40}
-            disabled={!canWrite}
-          />
-          <FormField
-            label="Sort order"
-            name="sortOrder"
-            type="number"
-            defaultValue={String(plan.sortOrder)}
-            hint="Lower numbers come first on marketing + admin."
-            disabled={!canWrite}
-          />
-          <FormField
-            label="Trial days"
-            name="trialDays"
-            type="number"
-            defaultValue={plan.trialDays == null ? "" : String(plan.trialDays)}
-            hint="Blank = use platform default (14)."
-            disabled={!canWrite}
-          />
-          <FormField
-            label="CTA label"
-            name="ctaLabel"
-            defaultValue={plan.ctaLabel ?? ""}
-            hint={'Blank = "Start free trial". Contact-sales: "Talk to sales".'}
-            maxLength={40}
-            disabled={!canWrite}
-          />
-          <FormField
-            label="CTA href"
-            name="ctaHref"
-            defaultValue={plan.ctaHref ?? ""}
-            hint={'Blank = /signup?plan=<slug>. Absolute URL ok.'}
-            maxLength={300}
-            disabled={!canWrite}
-          />
+    <div className="space-y-6">
+      {/* KPI mini-band */}
+      <div className="grid gap-3 md:grid-cols-4">
+        <MiniKpi label="MRR contribution" value={formatMoney(mrr, plan.currency || "USD")} hint={`${counts.active} active tenants`} tone="success" />
+        <MiniKpi label="Tenants on plan"  value={plan._count.tenants.toString()} hint={`${counts.trial} trial · ${counts.pastDue} past-due`} />
+        <MiniKpi label="Versions"          value={plan._count.versions.toString()} hint="Published snapshots" />
+        <MiniKpi label="Price overrides"   value={plan._count.overrides.toString()} hint="Negotiated deals" tone={plan._count.overrides > 0 ? "accent" : "default"} />
+      </div>
+
+      <div className="grid gap-6 md:grid-cols-[1fr_360px]">
+        {/* Identity & copy form */}
+        <Section
+          title="Identity & copy"
+          description="What prospects see on the plan card. Slug powers /signup?plan=… URLs."
+        >
+          <form action={savePlanDetails.bind(null, plan.id)} className="space-y-5">
+            <div className="grid gap-4 md:grid-cols-2">
+              <FormField label="Slug" name="slug" defaultValue={plan.slug} required hint="Lowercase letters, digits, hyphens." disabled={!canWrite} />
+              <FormField label="Name" name="name" defaultValue={plan.name} required maxLength={80} disabled={!canWrite} />
+              <FormField label="Subtitle" name="subtitle" defaultValue={plan.subtitle ?? ""} hint="One-line positioning under the name." maxLength={200} disabled={!canWrite} />
+              <FormField label="Badge" name="badge" defaultValue={plan.badge ?? ""} hint='e.g. "Most popular", "Save 20%"' maxLength={40} disabled={!canWrite} />
+              <FormField label="Sort order" name="sortOrder" type="number" defaultValue={String(plan.sortOrder)} hint="Lower = earlier." disabled={!canWrite} />
+              <FormField label="Trial days" name="trialDays" type="number" defaultValue={plan.trialDays == null ? "" : String(plan.trialDays)} hint="Blank = platform default (14)." disabled={!canWrite} />
+              <FormField label="CTA label" name="ctaLabel" defaultValue={plan.ctaLabel ?? ""} hint='Blank = "Start free trial".' maxLength={40} disabled={!canWrite} />
+              <FormField label="CTA href"  name="ctaHref"  defaultValue={plan.ctaHref ?? ""} hint="Blank = /signup?plan=<slug>." maxLength={300} disabled={!canWrite} />
+            </div>
+
+            <label className="block">
+              <span className="mb-1 block text-sm font-medium" style={{ color: "var(--text-default)" }}>
+                Long description
+              </span>
+              <textarea
+                name="description"
+                defaultValue={plan.description ?? ""}
+                rows={4}
+                maxLength={2000}
+                disabled={!canWrite}
+                className="ts-focus w-full rounded-md px-3 py-2 text-sm outline-none"
+                style={{
+                  background: "var(--surface-1)",
+                  border: "1px solid var(--border-default)",
+                  color: "var(--text-default)",
+                }}
+              />
+              <span className="mt-1 block text-xs" style={{ color: "var(--text-muted)" }}>
+                Shown on /pricing detail expansion. 2,000 chars max.
+              </span>
+            </label>
+
+            <CheckboxField
+              label="Highlight this plan (accent border on /pricing)"
+              name="highlight"
+              defaultChecked={plan.highlight}
+              disabled={!canWrite}
+            />
+
+            {canWrite && <SaveRow />}
+          </form>
+        </Section>
+
+        {/* Live preview */}
+        <div className="space-y-3">
+          <h3 className="text-xs font-semibold uppercase tracking-wide" style={{ color: "var(--text-muted)" }}>
+            Live preview
+          </h3>
+          <PlanCardPreview plan={cardData} />
         </div>
-
-        <label className="block">
-          <span className="mb-1 block text-sm">Long description</span>
-          <textarea
-            name="description"
-            defaultValue={plan.description ?? ""}
-            rows={4}
-            maxLength={2000}
-            disabled={!canWrite}
-            className="w-full rounded-md px-3 py-2 text-sm outline-none"
-            style={{
-              background: "var(--panel)",
-              border: "1px solid var(--border)",
-              color: "var(--text)",
-            }}
-          />
-          <span className="mt-1 block text-xs" style={{ color: "var(--text-muted)" }}>
-            Shown on /pricing detail expansion. Plain text; markdown renders where supported.
-          </span>
-        </label>
-
-        <CheckboxField
-          label="Highlight this plan (accent border on /pricing)"
-          name="highlight"
-          defaultChecked={plan.highlight}
-          disabled={!canWrite}
-        />
-
-        {canWrite && <SaveRow />}
-      </form>
-    </Card>
+      </div>
+    </div>
   );
 }
 
-/* ──────────────────────────────────────────────────────────────
-   Pricing tab
-   ────────────────────────────────────────────────────────────── */
+// ────────────────────────────────────────────────────────────────
+// PRICING TAB
+// ────────────────────────────────────────────────────────────────
 
 function PricingTab({
   plan,
+  cardData,
   canWrite,
 }: {
   plan: {
@@ -393,127 +385,108 @@ function PricingTab({
     stripePriceAnnual: string | null;
     stripeSyncedAt: Date | null;
   };
+  cardData: PlanCardData;
   canWrite: boolean;
 }) {
-  // Decimals come back as Prisma.Decimal; stringify for the input.
   const monthly = plan.priceMonthly == null ? "" : String(plan.priceMonthly);
-  const annual = plan.priceAnnual == null ? "" : String(plan.priceAnnual);
+  const annual  = plan.priceAnnual  == null ? "" : String(plan.priceAnnual);
+  const monthlyN = plan.priceMonthly == null ? null : Number(plan.priceMonthly);
+  const annualN  = plan.priceAnnual  == null ? null : Number(plan.priceAnnual);
+  const annualSavingsPct =
+    monthlyN != null && annualN != null && monthlyN > 0
+      ? Math.max(0, Math.round((1 - (annualN / 12) / monthlyN) * 100))
+      : null;
+
+  const hasStripeSync = !!plan.stripeProductId;
 
   return (
-    <Card>
-      <CardHeader
-        title="Pricing & billing"
-        description="Sticker prices shown on marketing. Stripe linkage drives checkout when set; otherwise the legacy PRICE_IDS env map is used."
-        right={
-          canWrite ? (
+    <div className="space-y-6">
+      <div className="grid gap-6 md:grid-cols-[1fr_360px]">
+        <Section
+          title="Sticker price"
+          description="What appears on /pricing. Stripe drives actual checkout — keep them in sync."
+          right={canWrite ? (
             <form action={syncPlanToStripe.bind(null, plan.id)}>
               <button
                 type="submit"
-                className="rounded-md px-3 py-1.5 text-xs font-medium"
+                className="ts-focus rounded-md px-3 py-1.5 text-xs font-medium"
                 style={{
-                  background: "var(--surface-2)",
-                  color: "var(--text-default)",
-                  border: "1px solid var(--border-subtle)",
+                  background: hasStripeSync ? "var(--surface-2)" : "var(--accent-primary)",
+                  color:      hasStripeSync ? "var(--text-default)" : "var(--accent-fg)",
+                  border: `1px solid ${hasStripeSync ? "var(--border-default)" : "var(--accent-primary)"}`,
                 }}
-                title="Create / update Stripe Product and Price objects to match these values, then write the IDs back."
+                title="Create / update the Stripe Product and Price objects to match these values."
               >
-                Sync to Stripe
+                {hasStripeSync ? "Re-sync to Stripe" : "Sync to Stripe"}
               </button>
             </form>
-          ) : null
-        }
-      />
-      <form action={savePlanPricing.bind(null, plan.id)} className="space-y-5 px-5 py-5">
-        <div className="grid gap-4 md:grid-cols-3">
-          <FormField
-            label="Monthly price"
-            name="priceMonthly"
-            defaultValue={monthly}
-            placeholder="79"
-            hint="Dollars (or dollars.cents). Blank = no monthly price."
-            disabled={!canWrite}
-          />
-          <FormField
-            label="Annual price"
-            name="priceAnnual"
-            defaultValue={annual}
-            placeholder="756"
-            hint="Full-year total (e.g. 756 = $63/mo × 12). The card divides by 12 for the /mo display. Blank = no annual option."
-            disabled={!canWrite}
-          />
-          <FormField
-            label="Currency"
-            name="currency"
-            defaultValue={plan.currency || "USD"}
-            maxLength={3}
-            hint="ISO-4217 code. We only display USD today."
-            disabled={!canWrite}
-          />
-        </div>
-
-        <CheckboxField
-          label="Contact-sales only (hides price, card shows “Contact sales”)"
-          name="isContactSales"
-          defaultChecked={plan.isContactSales}
-          disabled={!canWrite}
-        />
-
-        <div
-          className="rounded-md px-4 py-3 text-xs"
-          style={{
-            background: "var(--surface-2)",
-            border: "1px solid var(--border-subtle)",
-            color: "var(--text-muted)",
-          }}
+          ) : null}
         >
-          <div className="mb-2 font-medium uppercase tracking-wider" style={{ color: "var(--text-default)" }}>
-            Stripe linkage
-          </div>
-          Click <strong>Sync to Stripe</strong> above to create or update the Product + Price objects and auto-fill
-          these fields. Manual edits are fine for advanced cases, but the sync button is the happy path.
-          {plan.stripeSyncedAt && (
-            <div className="mt-1">
-              Last synced: {plan.stripeSyncedAt.toISOString().slice(0, 16).replace("T", " ")} UTC
+          <form action={savePlanPricing.bind(null, plan.id)} className="space-y-5">
+            <div className="grid gap-4 md:grid-cols-3">
+              <FormField label="Monthly price" name="priceMonthly" defaultValue={monthly} placeholder="79" hint="Dollars or dollars.cents." disabled={!canWrite} />
+              <FormField label="Annual price"  name="priceAnnual"  defaultValue={annual}  placeholder="756" hint="Full-year total. Card divides by 12." disabled={!canWrite} />
+              <FormField label="Currency"      name="currency"     defaultValue={plan.currency || "USD"} maxLength={3} hint="ISO-4217." disabled={!canWrite} />
             </div>
-          )}
-        </div>
 
-        <div className="grid gap-4 md:grid-cols-3">
-          <FormField
-            label="Stripe product ID"
-            name="stripeProductId"
-            defaultValue={plan.stripeProductId ?? ""}
-            placeholder="prod_…"
-            maxLength={120}
-            disabled={!canWrite}
-          />
-          <FormField
-            label="Stripe monthly price ID"
-            name="stripePriceMonthly"
-            defaultValue={plan.stripePriceMonthly ?? ""}
-            placeholder="price_…"
-            maxLength={120}
-            disabled={!canWrite}
-          />
-          <FormField
-            label="Stripe annual price ID"
-            name="stripePriceAnnual"
-            defaultValue={plan.stripePriceAnnual ?? ""}
-            placeholder="price_…"
-            maxLength={120}
-            disabled={!canWrite}
-          />
-        </div>
+            <CheckboxField
+              label="Contact-sales only — hides price; card shows 'Custom'."
+              name="isContactSales"
+              defaultChecked={plan.isContactSales}
+              disabled={!canWrite}
+            />
 
-        {canWrite && <SaveRow />}
-      </form>
-    </Card>
+            {annualSavingsPct != null && annualSavingsPct > 0 && !plan.isContactSales && (
+              <div
+                className="rounded-md px-3 py-2 text-xs"
+                style={{ background: "var(--accent-surface)", color: "var(--accent-primary)", border: "1px solid var(--accent-primary)" }}
+              >
+                Annual saves customers ~{annualSavingsPct}% vs paying monthly.
+              </div>
+            )}
+
+            <fieldset
+              className="rounded-md p-4"
+              style={{ border: "1px solid var(--border-subtle)", background: "var(--surface-2)" }}
+            >
+              <legend className="px-2 text-xs font-semibold uppercase tracking-wide" style={{ color: "var(--text-muted)" }}>
+                Stripe linkage
+              </legend>
+              <div className="grid gap-4 md:grid-cols-3">
+                <FormField label="Product ID"        name="stripeProductId"   defaultValue={plan.stripeProductId   ?? ""} placeholder="prod_…"  maxLength={120} disabled={!canWrite} />
+                <FormField label="Monthly price ID"  name="stripePriceMonthly" defaultValue={plan.stripePriceMonthly ?? ""} placeholder="price_…" maxLength={120} disabled={!canWrite} />
+                <FormField label="Annual price ID"   name="stripePriceAnnual"  defaultValue={plan.stripePriceAnnual  ?? ""} placeholder="price_…" maxLength={120} disabled={!canWrite} />
+              </div>
+              {plan.stripeSyncedAt && (
+                <div className="mt-3 text-xs" style={{ color: "var(--text-muted)" }}>
+                  Last synced: {plan.stripeSyncedAt.toISOString().slice(0, 16).replace("T", " ")} UTC
+                </div>
+              )}
+              {!hasStripeSync && (
+                <div className="mt-3 text-xs" style={{ color: "var(--warning-fg)" }}>
+                  ⚠ Not yet linked to Stripe — checkout will fall back to env-mapped IDs if available.
+                </div>
+              )}
+            </fieldset>
+
+            {canWrite && <SaveRow />}
+          </form>
+        </Section>
+
+        <div className="space-y-3">
+          <h3 className="text-xs font-semibold uppercase tracking-wide" style={{ color: "var(--text-muted)" }}>
+            Pricing preview
+          </h3>
+          <PlanCardPreview plan={cardData} />
+        </div>
+      </div>
+    </div>
   );
 }
 
-/* ──────────────────────────────────────────────────────────────
-   Features tab
-   ────────────────────────────────────────────────────────────── */
+// ────────────────────────────────────────────────────────────────
+// FEATURES TAB
+// ────────────────────────────────────────────────────────────────
 
 type PlanFeatureRow = {
   id: string;
@@ -526,7 +499,6 @@ type PlanFeatureRow = {
   sortOrder: number;
   groupSortOrder: number;
 };
-
 type PlanFeatureValueRow = {
   id: string;
   planId: string;
@@ -549,9 +521,6 @@ function FeaturesTab({
   valueByFeature: Map<string, PlanFeatureValueRow>;
   canWrite: boolean;
 }) {
-  // Group features by groupLabel in the order we fetched them (already
-  // sorted by groupSortOrder then sortOrder). Use a Map so the first
-  // seen group wins insertion order.
   const groups = new Map<string, PlanFeatureRow[]>();
   for (const f of features) {
     const key = f.groupLabel ?? "Other";
@@ -562,117 +531,122 @@ function FeaturesTab({
 
   if (features.length === 0) {
     return (
-      <Card>
-        <CardHeader
-          title="Features"
-          description="No feature library defined yet."
-        />
-        <p className="px-5 py-8 text-center text-sm" style={{ color: "var(--text-muted)" }}>
-          Run the pricing seed script to populate the feature library, or add features via the Prisma
-          console (admin UI for this comes in M4).
+      <Section
+        title="Features"
+        description="No feature library defined yet."
+      >
+        <p className="px-2 py-6 text-center text-sm" style={{ color: "var(--text-muted)" }}>
+          Run the pricing seed script to populate the feature library.
         </p>
-      </Card>
+      </Section>
     );
   }
 
   return (
-    <Card>
-      <CardHeader
-        title="Features"
-        description="Per-feature value for this plan. Boolean = checkbox; numeric = cap (-1 means unlimited); text = free-form label. Highlight flags the cell to render in accent color on /pricing."
-      />
-      <form action={savePlanFeatures.bind(null, plan.id)} className="px-5 py-5">
-        <div className="space-y-6">
-          {Array.from(groups.entries()).map(([group, rows]) => (
-            <div key={group}>
-              <div
-                className="mb-2 text-[11px] font-semibold uppercase tracking-wider"
-                style={{ color: "var(--text-muted)" }}
-              >
-                {group}
-              </div>
-              <div
-                className="overflow-hidden rounded-md"
-                style={{ border: "1px solid var(--border-subtle)" }}
-              >
-                <table className="w-full text-sm">
-                  <thead style={{ color: "var(--text-muted)", background: "var(--surface-2)" }}>
-                    <tr className="text-left">
-                      <th className="px-4 py-2 font-normal">Feature</th>
-                      <th className="px-4 py-2 font-normal" style={{ width: "220px" }}>Value</th>
-                      <th className="px-4 py-2 font-normal" style={{ width: "220px" }}>Footnote</th>
-                      <th className="px-4 py-2 font-normal text-center" style={{ width: "80px" }}>
-                        Highlight
-                      </th>
-                    </tr>
-                  </thead>
-                  <tbody>
-                    {rows.map((f) => {
-                      const v = valueByFeature.get(f.id);
-                      return (
-                        <tr
-                          key={f.id}
-                          style={{ borderTop: "1px solid var(--border-subtle)" }}
-                        >
-                          <td className="px-4 py-3 align-top">
-                            <div className="font-medium">{f.label}</div>
-                            <div className="mt-0.5 font-mono text-[10px]" style={{ color: "var(--text-faint)" }}>
-                              {f.key}
-                              {" · "}
-                              {f.valueType.toLowerCase()}
-                              {" · "}
-                              {f.enforcement === "GATE" ? "gate" : "marketing-only"}
-                            </div>
-                            {f.description && (
-                              <div className="mt-1 text-xs" style={{ color: "var(--text-muted)" }}>
-                                {f.description}
-                              </div>
-                            )}
-                          </td>
-                          <td className="px-4 py-3 align-top">
-                            <FeatureValueInput feature={f} value={v} disabled={!canWrite} />
-                          </td>
-                          <td className="px-4 py-3 align-top">
-                            <input
-                              type="text"
-                              name={`feature[${f.id}][footnote]`}
-                              defaultValue={v?.footnote ?? ""}
-                              maxLength={120}
-                              disabled={!canWrite}
-                              placeholder={'e.g. "+$12/seat after 15"'}
-                              className="w-full rounded-md px-2 py-1 text-xs outline-none"
-                              style={{
-                                background: "var(--panel)",
-                                border: "1px solid var(--border)",
-                                color: "var(--text)",
-                              }}
-                            />
-                          </td>
-                          <td className="px-4 py-3 align-top text-center">
-                            <input
-                              type="checkbox"
-                              name={`feature[${f.id}][highlight]`}
-                              defaultChecked={v?.highlight ?? false}
-                              disabled={!canWrite}
-                            />
-                          </td>
-                        </tr>
-                      );
-                    })}
-                  </tbody>
-                </table>
-              </div>
-            </div>
-          ))}
-        </div>
+    <form action={savePlanFeatures.bind(null, plan.id)} className="space-y-6">
+      <div
+        className="rounded-md px-4 py-3 text-xs"
+        style={{ background: "var(--surface-2)", color: "var(--text-muted)", border: "1px solid var(--border-subtle)" }}
+      >
+        <b style={{ color: "var(--text-default)" }}>Resolution:</b> tenant override beats global override beats this plan's value.
+        Boolean = checkbox · Numeric: cap (-1 = unlimited) · Text: free-form label · Highlight = render in accent color on /pricing.
+      </div>
 
-        {canWrite && (
-          <div className="mt-6">
-            <SaveRow />
-          </div>
-        )}
-      </form>
-    </Card>
+      {Array.from(groups.entries()).map(([group, rows]) => (
+        <Section
+          key={group}
+          title={group}
+          description={`${rows.length} feature${rows.length === 1 ? "" : "s"}`}
+        >
+          <ul className="-mx-5 -my-5">
+            {rows.map((f, idx) => {
+              const v = valueByFeature.get(f.id);
+              const enforcementBadge =
+                f.enforcement === "GATE"
+                  ? { label: "Gated", bg: "var(--warning-surface)", fg: "var(--warning-fg)" }
+                  : { label: "Marketing", bg: "var(--surface-2)", fg: "var(--text-muted)" };
+              return (
+                <li
+                  key={f.id}
+                  className="grid gap-3 px-5 py-4 md:grid-cols-[1fr_240px_240px_60px] md:items-start"
+                  style={{ borderTop: idx === 0 ? "none" : "1px solid var(--border-subtle)" }}
+                >
+                  <div className="min-w-0">
+                    <div className="flex flex-wrap items-center gap-2">
+                      <span className="text-sm font-medium" style={{ color: "var(--text-default)" }}>
+                        {f.label}
+                      </span>
+                      <span
+                        className="rounded-full px-1.5 py-0.5 text-[10px] font-medium"
+                        style={{ background: enforcementBadge.bg, color: enforcementBadge.fg }}
+                      >
+                        {enforcementBadge.label}
+                      </span>
+                      <span
+                        className="rounded-full px-1.5 py-0.5 text-[10px] font-medium"
+                        style={{ background: "var(--surface-2)", color: "var(--text-muted)" }}
+                      >
+                        {f.valueType.toLowerCase()}
+                      </span>
+                    </div>
+                    <div className="mt-1 font-mono text-[10px]" style={{ color: "var(--text-faint)" }}>
+                      {f.key}
+                    </div>
+                    {f.description && (
+                      <div className="mt-1 text-xs" style={{ color: "var(--text-muted)" }}>
+                        {f.description}
+                      </div>
+                    )}
+                  </div>
+                  <div>
+                    <FeatureValueInput feature={f} value={v} disabled={!canWrite} />
+                  </div>
+                  <div>
+                    <input
+                      type="text"
+                      name={`feature[${f.id}][footnote]`}
+                      defaultValue={v?.footnote ?? ""}
+                      maxLength={120}
+                      disabled={!canWrite}
+                      placeholder='e.g. "+$12/seat after 15"'
+                      className="ts-focus w-full rounded-md px-2 py-1.5 text-xs outline-none"
+                      style={{
+                        background: "var(--surface-1)",
+                        border: "1px solid var(--border-default)",
+                        color: "var(--text-default)",
+                      }}
+                    />
+                  </div>
+                  <div className="flex items-center justify-center pt-1">
+                    <label className="flex items-center gap-1.5 text-xs" style={{ color: "var(--text-muted)" }}>
+                      <input
+                        type="checkbox"
+                        name={`feature[${f.id}][highlight]`}
+                        defaultChecked={v?.highlight ?? false}
+                        disabled={!canWrite}
+                      />
+                      <span>★</span>
+                    </label>
+                  </div>
+                </li>
+              );
+            })}
+          </ul>
+        </Section>
+      ))}
+
+      {canWrite && (
+        <div className="flex justify-end">
+          <button
+            type="submit"
+            className="ts-focus rounded-md px-4 py-2 text-sm font-medium"
+            style={{ background: "var(--accent-primary)", color: "var(--accent-fg)" }}
+          >
+            Save all features
+          </button>
+        </div>
+      )}
+    </form>
   );
 }
 
@@ -686,14 +660,13 @@ function FeatureValueInput({
   disabled: boolean;
 }) {
   const inputStyle: React.CSSProperties = {
-    background: "var(--panel)",
-    border: "1px solid var(--border)",
-    color: "var(--text)",
+    background: "var(--surface-1)",
+    border: "1px solid var(--border-default)",
+    color: "var(--text-default)",
   };
-
   if (feature.valueType === "BOOLEAN") {
     return (
-      <label className="flex items-center gap-2 text-sm">
+      <label className="flex items-center gap-2 text-sm" style={{ color: "var(--text-default)" }}>
         <input
           type="checkbox"
           name={`feature[${feature.id}][bool]`}
@@ -710,31 +683,30 @@ function FeatureValueInput({
         type="number"
         name={`feature[${feature.id}][number]`}
         defaultValue={value?.valueNumber == null ? "" : String(value.valueNumber)}
-        placeholder="e.g. 5 (or -1 for unlimited)"
+        placeholder="e.g. 5 (-1 unlimited)"
         disabled={disabled}
-        className="w-full rounded-md px-2 py-1 text-xs outline-none"
+        className="ts-focus w-full rounded-md px-2 py-1.5 text-xs outline-none"
         style={inputStyle}
       />
     );
   }
-  // TEXT
   return (
     <input
       type="text"
       name={`feature[${feature.id}][text]`}
       defaultValue={value?.valueText ?? ""}
-      placeholder={'e.g. "Priority + chat"'}
+      placeholder='e.g. "Priority + chat"'
       maxLength={120}
       disabled={disabled}
-      className="w-full rounded-md px-2 py-1 text-xs outline-none"
+      className="ts-focus w-full rounded-md px-2 py-1.5 text-xs outline-none"
       style={inputStyle}
     />
   );
 }
 
-/* ──────────────────────────────────────────────────────────────
-   Add-ons tab
-   ────────────────────────────────────────────────────────────── */
+// ────────────────────────────────────────────────────────────────
+// ADD-ONS TAB
+// ────────────────────────────────────────────────────────────────
 
 type PlanAddOnRow = {
   id: string;
@@ -760,81 +732,79 @@ function AddOnsTab({
   canWrite: boolean;
 }) {
   return (
-    <Card>
-      <CardHeader
+    <div className="space-y-4">
+      <Section
         title="Add-ons"
-        description="Optional line items billed alongside the base plan — seat overages, API access, etc. Each add-on is scoped to this plan so copy and pricing can differ per tier."
-        right={
-          canWrite ? (
-            <form action={createPlanAddOn.bind(null, plan.id)}>
-              <button
-                type="submit"
-                className="rounded-md px-3 py-1.5 text-xs font-medium"
-                style={{ background: "var(--accent-primary)", color: "var(--accent-fg)" }}
-              >
-                + New add-on
-              </button>
-            </form>
-          ) : null
-        }
-      />
-      {addOns.length === 0 ? (
-        <p className="px-5 py-8 text-center text-sm" style={{ color: "var(--text-muted)" }}>
-          No add-ons yet. {canWrite && 'Click "+ New add-on" to create one.'}
-        </p>
-      ) : (
-        <div className="space-y-4 px-5 py-5">
-          {addOns.map((a) => (
-            <AddOnRow key={a.id} addOn={a} canWrite={canWrite} />
-          ))}
-        </div>
-      )}
-    </Card>
+        description="Optional line items billed alongside the base plan — seat overages, API access, etc. Scoped to this plan."
+        right={canWrite ? (
+          <form action={createPlanAddOn.bind(null, plan.id)}>
+            <button
+              type="submit"
+              className="ts-focus rounded-md px-3 py-1.5 text-xs font-medium"
+              style={{ background: "var(--accent-primary)", color: "var(--accent-fg)" }}
+            >
+              + New add-on
+            </button>
+          </form>
+        ) : null}
+      >
+        {addOns.length === 0 ? (
+          <p className="px-2 py-6 text-center text-sm" style={{ color: "var(--text-muted)" }}>
+            No add-ons yet.{canWrite ? ' Click "+ New add-on" to create one.' : ""}
+          </p>
+        ) : (
+          <div className="space-y-4">
+            {addOns.map((a) => (
+              <AddOnRow key={a.id} addOn={a} canWrite={canWrite} />
+            ))}
+          </div>
+        )}
+      </Section>
+    </div>
   );
 }
 
 function AddOnRow({ addOn, canWrite }: { addOn: PlanAddOnRow; canWrite: boolean }) {
   const monthly = addOn.priceMonthly == null ? "" : String(addOn.priceMonthly);
-  const annual = addOn.priceAnnual == null ? "" : String(addOn.priceAnnual);
-
+  const annual  = addOn.priceAnnual  == null ? "" : String(addOn.priceAnnual);
   return (
     <div
-      className="rounded-md"
+      className="rounded-lg"
       style={{
+        background: addOn.active ? "var(--surface-1)" : "var(--surface-2)",
         border: "1px solid var(--border-subtle)",
-        background: addOn.active ? "var(--panel)" : "var(--surface-2)",
+        opacity: addOn.active ? 1 : 0.85,
       }}
     >
       <div
-        className="flex items-center justify-between px-4 py-3"
+        className="flex items-center justify-between gap-2 px-4 py-3"
         style={{ borderBottom: "1px solid var(--border-subtle)" }}
       >
-        <div className="flex items-center gap-3">
-          <span className="font-medium">{addOn.name}</span>
+        <div className="flex flex-wrap items-center gap-2">
+          <span className="text-sm font-semibold" style={{ color: "var(--text-default)" }}>
+            {addOn.name || <span style={{ color: "var(--text-faint)" }}>Untitled</span>}
+          </span>
           <span className="font-mono text-[11px]" style={{ color: "var(--text-faint)" }}>
             {addOn.slug}
           </span>
           {addOn.active ? (
             <span
-              className="rounded-full px-2 py-0.5 text-[10px] font-medium uppercase tracking-wider"
-              style={{
-                background: "var(--success-surface)",
-                color: "var(--success-fg)",
-                border: "1px solid var(--success-fg)",
-              }}
+              className="rounded-full px-1.5 py-0.5 text-[10px] font-semibold uppercase tracking-wide"
+              style={{ background: "var(--success-surface)", color: "var(--success-fg)" }}
             >
               active
             </span>
           ) : (
             <span
-              className="rounded-full px-2 py-0.5 text-[10px] font-medium uppercase tracking-wider"
-              style={{
-                background: "var(--surface-2)",
-                color: "var(--text-muted)",
-                border: "1px solid var(--border-subtle)",
-              }}
+              className="rounded-full px-1.5 py-0.5 text-[10px] font-semibold uppercase tracking-wide"
+              style={{ background: "var(--surface-2)", color: "var(--text-muted)" }}
             >
               inactive
+            </span>
+          )}
+          {addOn.priceMonthly != null && (
+            <span className="text-xs tabular-nums" style={{ color: "var(--text-muted)" }}>
+              {formatMoney(Number(addOn.priceMonthly), "USD")}/mo{addOn.unitLabel ? ` · ${addOn.unitLabel}` : ""}
             </span>
           )}
         </div>
@@ -842,11 +812,11 @@ function AddOnRow({ addOn, canWrite }: { addOn: PlanAddOnRow; canWrite: boolean 
           <form action={deletePlanAddOn.bind(null, addOn.id)}>
             <button
               type="submit"
-              className="rounded-md px-2 py-1 text-xs font-medium"
+              className="ts-focus rounded-md px-2 py-1 text-xs font-medium"
               style={{
                 background: "var(--danger-surface)",
                 color: "var(--danger-fg)",
-                border: "1px solid var(--danger-border)",
+                border: "1px solid var(--danger-fg)",
               }}
             >
               Delete
@@ -857,72 +827,32 @@ function AddOnRow({ addOn, canWrite }: { addOn: PlanAddOnRow; canWrite: boolean 
 
       <form action={updatePlanAddOn.bind(null, addOn.id)} className="space-y-4 px-4 py-4">
         <div className="grid gap-3 md:grid-cols-3">
-          <FormField
-            label="Slug"
-            name="slug"
-            defaultValue={addOn.slug}
-            required
-            hint="Unique per plan."
-            disabled={!canWrite}
-          />
-          <FormField
-            label="Name"
-            name="name"
-            defaultValue={addOn.name}
-            required
-            maxLength={80}
-            disabled={!canWrite}
-          />
-          <FormField
-            label="Sort order"
-            name="sortOrder"
-            type="number"
-            defaultValue={String(addOn.sortOrder)}
-            hint="Lower = shown first."
-            disabled={!canWrite}
-          />
+          <FormField label="Slug" name="slug" defaultValue={addOn.slug} required hint="Unique per plan." disabled={!canWrite} />
+          <FormField label="Name" name="name" defaultValue={addOn.name} required maxLength={80} disabled={!canWrite} />
+          <FormField label="Sort order" name="sortOrder" type="number" defaultValue={String(addOn.sortOrder)} hint="Lower = earlier." disabled={!canWrite} />
         </div>
 
         <label className="block">
-          <span className="mb-1 block text-sm">Description</span>
+          <span className="mb-1 block text-sm font-medium" style={{ color: "var(--text-default)" }}>Description</span>
           <textarea
             name="description"
             defaultValue={addOn.description ?? ""}
             rows={2}
             maxLength={400}
             disabled={!canWrite}
-            className="w-full rounded-md px-3 py-2 text-sm outline-none"
+            className="ts-focus w-full rounded-md px-3 py-2 text-sm outline-none"
             style={{
-              background: "var(--panel)",
-              border: "1px solid var(--border)",
-              color: "var(--text)",
+              background: "var(--surface-1)",
+              border: "1px solid var(--border-default)",
+              color: "var(--text-default)",
             }}
           />
         </label>
 
         <div className="grid gap-3 md:grid-cols-3">
-          <FormField
-            label="Monthly price"
-            name="priceMonthly"
-            defaultValue={monthly}
-            placeholder="12"
-            disabled={!canWrite}
-          />
-          <FormField
-            label="Annual price"
-            name="priceAnnual"
-            defaultValue={annual}
-            placeholder="120"
-            disabled={!canWrite}
-          />
-          <FormField
-            label="Unit label"
-            name="unitLabel"
-            defaultValue={addOn.unitLabel ?? ""}
-            placeholder="per seat / mo"
-            maxLength={40}
-            disabled={!canWrite}
-          />
+          <FormField label="Monthly price" name="priceMonthly" defaultValue={monthly} placeholder="12" disabled={!canWrite} />
+          <FormField label="Annual price"  name="priceAnnual"  defaultValue={annual}  placeholder="120" disabled={!canWrite} />
+          <FormField label="Unit label"    name="unitLabel"    defaultValue={addOn.unitLabel ?? ""} placeholder="per seat / mo" maxLength={40} disabled={!canWrite} />
         </div>
 
         <FormField
@@ -931,13 +861,13 @@ function AddOnRow({ addOn, canWrite }: { addOn: PlanAddOnRow; canWrite: boolean 
           defaultValue={addOn.stripePriceId ?? ""}
           placeholder="price_…"
           maxLength={120}
-          hint="Optional. Populated manually today; the plan-level “Sync to Stripe” button does not yet cover add-ons."
+          hint="Optional. Plan-level Sync to Stripe doesn't yet cover add-ons."
           disabled={!canWrite}
         />
 
         <div className="flex items-center justify-between">
           <CheckboxField
-            label="Active (visible on /pricing and selectable at checkout)"
+            label="Active — visible on /pricing and selectable at checkout"
             name="active"
             defaultChecked={addOn.active}
             disabled={!canWrite}
@@ -945,7 +875,7 @@ function AddOnRow({ addOn, canWrite }: { addOn: PlanAddOnRow; canWrite: boolean 
           {canWrite && (
             <button
               type="submit"
-              className="rounded-md px-4 py-2 text-sm font-medium"
+              className="ts-focus rounded-md px-4 py-2 text-sm font-medium"
               style={{ background: "var(--accent-primary)", color: "var(--accent-fg)" }}
             >
               Save
@@ -957,12 +887,13 @@ function AddOnRow({ addOn, canWrite }: { addOn: PlanAddOnRow; canWrite: boolean 
   );
 }
 
-/* ──────────────────────────────────────────────────────────────
-   Marketing tab
-   ────────────────────────────────────────────────────────────── */
+// ────────────────────────────────────────────────────────────────
+// MARKETING TAB
+// ────────────────────────────────────────────────────────────────
 
 function MarketingTab({
   plan,
+  cardData,
   canWrite,
 }: {
   plan: {
@@ -973,86 +904,320 @@ function MarketingTab({
     showOnPricing: boolean;
     showOnSignup: boolean;
   };
+  cardData: PlanCardData;
   canWrite: boolean;
 }) {
   return (
-    <Card>
-      <CardHeader
-        title="Marketing surfaces"
-        description="Where this plan appears and what copy it carries. Toggles take effect after save — marketing cache is flushed automatically."
-      />
-      <form action={savePlanMarketing.bind(null, plan.id)} className="space-y-5 px-5 py-5">
-        <label className="block">
-          <span className="mb-1 block text-sm">Landing copy</span>
-          <textarea
-            name="landingCopy"
-            defaultValue={plan.landingCopy ?? ""}
-            rows={3}
-            maxLength={400}
-            disabled={!canWrite}
-            className="w-full rounded-md px-3 py-2 text-sm outline-none"
-            style={{
-              background: "var(--panel)",
-              border: "1px solid var(--border)",
-              color: "var(--text)",
-            }}
-          />
-          <span className="mt-1 block text-xs" style={{ color: "var(--text-muted)" }}>
-            Short blurb on the home page pricing grid. 400 chars max.
-          </span>
-        </label>
+    <div className="grid gap-6 md:grid-cols-[1fr_360px]">
+      <div className="space-y-6">
+        <Section title="Landing & pricing copy" description="Visible on the marketing site. Edits flush the marketing cache on save.">
+          <form action={savePlanMarketing.bind(null, plan.id)} className="space-y-5">
+            <label className="block">
+              <span className="mb-1 block text-sm font-medium" style={{ color: "var(--text-default)" }}>
+                Home-page blurb
+              </span>
+              <textarea
+                name="landingCopy"
+                defaultValue={plan.landingCopy ?? ""}
+                rows={3}
+                maxLength={400}
+                disabled={!canWrite}
+                className="ts-focus w-full rounded-md px-3 py-2 text-sm outline-none"
+                style={{
+                  background: "var(--surface-1)",
+                  border: "1px solid var(--border-default)",
+                  color: "var(--text-default)",
+                }}
+              />
+              <span className="mt-1 block text-xs" style={{ color: "var(--text-muted)" }}>
+                Short blurb on the home page pricing grid. 400 chars max.
+              </span>
+            </label>
 
-        <label className="block">
-          <span className="mb-1 block text-sm">Marketing copy (detail page)</span>
-          <textarea
-            name="marketingCopy"
-            defaultValue={plan.marketingCopy ?? ""}
-            rows={6}
-            maxLength={4000}
-            disabled={!canWrite}
-            className="w-full rounded-md px-3 py-2 text-sm outline-none"
-            style={{
-              background: "var(--panel)",
-              border: "1px solid var(--border)",
-              color: "var(--text)",
-            }}
-          />
-          <span className="mt-1 block text-xs" style={{ color: "var(--text-muted)" }}>
-            Fuller description on /pricing detail. 4,000 chars max.
-          </span>
-        </label>
+            <label className="block">
+              <span className="mb-1 block text-sm font-medium" style={{ color: "var(--text-default)" }}>
+                Pricing-page detail copy
+              </span>
+              <textarea
+                name="marketingCopy"
+                defaultValue={plan.marketingCopy ?? ""}
+                rows={6}
+                maxLength={4000}
+                disabled={!canWrite}
+                className="ts-focus w-full rounded-md px-3 py-2 text-sm outline-none"
+                style={{
+                  background: "var(--surface-1)",
+                  border: "1px solid var(--border-default)",
+                  color: "var(--text-default)",
+                }}
+              />
+              <span className="mt-1 block text-xs" style={{ color: "var(--text-muted)" }}>
+                Fuller description on the /pricing detail. 4,000 chars max.
+              </span>
+            </label>
 
-        <div className="space-y-2">
-          <div className="text-sm font-medium">Show on…</div>
-          <CheckboxField
-            label="Home page (/) — shown in the 3-up landing grid"
-            name="showOnLanding"
-            defaultChecked={plan.showOnLanding}
-            disabled={!canWrite}
-          />
-          <CheckboxField
-            label="Pricing page (/pricing) — full comparison table"
-            name="showOnPricing"
-            defaultChecked={plan.showOnPricing}
-            disabled={!canWrite}
-          />
-          <CheckboxField
-            label="Signup page (/signup) — selectable tier at checkout"
-            name="showOnSignup"
-            defaultChecked={plan.showOnSignup}
-            disabled={!canWrite}
-          />
-        </div>
+            <fieldset
+              className="rounded-md p-4"
+              style={{ border: "1px solid var(--border-subtle)", background: "var(--surface-2)" }}
+            >
+              <legend className="px-2 text-xs font-semibold uppercase tracking-wide" style={{ color: "var(--text-muted)" }}>
+                Visibility
+              </legend>
+              <div className="space-y-2 pt-1">
+                <CheckboxField label="Home page (/) — shown in the landing grid" name="showOnLanding" defaultChecked={plan.showOnLanding} disabled={!canWrite} />
+                <CheckboxField label="Pricing page (/pricing) — full comparison table" name="showOnPricing" defaultChecked={plan.showOnPricing} disabled={!canWrite} />
+                <CheckboxField label="Signup page (/signup) — selectable tier at checkout" name="showOnSignup" defaultChecked={plan.showOnSignup} disabled={!canWrite} />
+              </div>
+            </fieldset>
 
-        {canWrite && <SaveRow />}
-      </form>
-    </Card>
+            {canWrite && <SaveRow />}
+          </form>
+        </Section>
+      </div>
+
+      <div className="space-y-3">
+        <h3 className="text-xs font-semibold uppercase tracking-wide" style={{ color: "var(--text-muted)" }}>
+          Live preview
+        </h3>
+        <PlanCardPreview plan={cardData} />
+      </div>
+    </div>
   );
 }
 
-/* ──────────────────────────────────────────────────────────────
-   Shared UI bits
-   ────────────────────────────────────────────────────────────── */
+// ────────────────────────────────────────────────────────────────
+// ADVANCED TAB
+// ────────────────────────────────────────────────────────────────
+
+function AdvancedTab({
+  plan,
+  canWrite,
+}: {
+  plan: {
+    id: string;
+    slug: string;
+    status: string;
+    sortOrder: number;
+    createdAt: Date;
+    updatedAt: Date;
+    publishedAt: Date | null;
+    stripeProductId: string | null;
+    stripePriceMonthly: string | null;
+    stripePriceAnnual: string | null;
+    stripeSyncedAt: Date | null;
+    _count: { tenants: number; versions: number; overrides: number };
+  };
+  canWrite: boolean;
+}) {
+  const eligibleForDelete =
+    plan.status === "DRAFT" &&
+    plan._count.tenants === 0 &&
+    plan._count.versions === 0 &&
+    plan._count.overrides === 0;
+
+  return (
+    <div className="space-y-6">
+      <Section title="Internal metadata" description="Read-only audit info for support / engineering.">
+        <dl className="grid gap-y-2 text-sm md:grid-cols-2">
+          <DT label="Plan ID"             value={plan.id} mono />
+          <DT label="Slug"                value={plan.slug} mono />
+          <DT label="Created"             value={plan.createdAt.toISOString().slice(0, 16).replace("T", " ")} />
+          <DT label="Updated"             value={plan.updatedAt.toISOString().slice(0, 16).replace("T", " ")} />
+          <DT label="Published"           value={plan.publishedAt ? plan.publishedAt.toISOString().slice(0, 16).replace("T", " ") : null} />
+          <DT label="Sort order"          value={String(plan.sortOrder)} />
+          <DT label="Stripe product"      value={plan.stripeProductId} mono />
+          <DT label="Stripe price ID (m)" value={plan.stripePriceMonthly} mono />
+          <DT label="Stripe price ID (y)" value={plan.stripePriceAnnual} mono />
+          <DT label="Stripe last synced"  value={plan.stripeSyncedAt ? plan.stripeSyncedAt.toISOString().slice(0, 16).replace("T", " ") : null} />
+        </dl>
+      </Section>
+
+      <Section title="Versioning" description="Each Publish snapshots a PlanVersion. Older versions can be diffed and rolled back.">
+        <div className="flex items-center justify-between gap-3">
+          <div className="text-sm" style={{ color: "var(--text-muted)" }}>
+            <b style={{ color: "var(--text-default)" }}>{plan._count.versions}</b> version{plan._count.versions === 1 ? "" : "s"} on file.
+          </div>
+          <Link
+            href={`/platform/plans/${plan.id}/versions`}
+            className="ts-focus rounded-md px-3 py-1.5 text-xs font-medium"
+            style={{
+              background: "var(--surface-2)",
+              color: "var(--text-default)",
+              border: "1px solid var(--border-default)",
+            }}
+          >
+            View versions →
+          </Link>
+        </div>
+      </Section>
+
+      {/* ── Danger zone ─── */}
+      <div
+        className="rounded-xl"
+        style={{
+          background: "var(--surface-1)",
+          border: "1px solid var(--danger-fg)",
+          boxShadow: "var(--shadow-sm)",
+        }}
+      >
+        <div
+          className="flex items-center gap-2 px-5 py-3"
+          style={{ borderBottom: "1px solid var(--danger-fg)", background: "var(--danger-surface)" }}
+        >
+          <span aria-hidden style={{ color: "var(--danger-fg)" }}>⚠</span>
+          <h2 className="text-sm font-semibold uppercase tracking-wide" style={{ color: "var(--danger-fg)" }}>
+            Danger zone
+          </h2>
+        </div>
+        <div className="space-y-3 p-5">
+          <div>
+            <h3 className="text-sm font-semibold" style={{ color: "var(--text-default)" }}>
+              Delete plan
+            </h3>
+            <p className="mt-0.5 text-xs" style={{ color: "var(--text-muted)" }}>
+              Permanent. Only allowed for DRAFT plans with no tenants, no versions, and no overrides.
+            </p>
+          </div>
+          {eligibleForDelete && canWrite ? (
+            <form action={deletePlan.bind(null, plan.id)}>
+              <button
+                type="submit"
+                className="ts-focus rounded-md px-3 py-2 text-xs font-medium"
+                style={{
+                  background: "var(--danger-surface)",
+                  color: "var(--danger-fg)",
+                  border: "1px solid var(--danger-fg)",
+                }}
+              >
+                Delete plan permanently
+              </button>
+            </form>
+          ) : (
+            <div
+              className="rounded-md px-3 py-2 text-xs"
+              style={{
+                background: "var(--surface-2)",
+                color: "var(--text-muted)",
+                border: "1px solid var(--border-subtle)",
+              }}
+            >
+              Can't delete:{" "}
+              {plan.status !== "DRAFT" && <>not a draft · </>}
+              {plan._count.tenants > 0 && <>{plan._count.tenants} tenant{plan._count.tenants === 1 ? "" : "s"} · </>}
+              {plan._count.versions > 0 && <>{plan._count.versions} version{plan._count.versions === 1 ? "" : "s"} · </>}
+              {plan._count.overrides > 0 && <>{plan._count.overrides} override{plan._count.overrides === 1 ? "" : "s"} · </>}
+              archive instead.
+            </div>
+          )}
+        </div>
+      </div>
+    </div>
+  );
+}
+
+// ────────────────────────────────────────────────────────────────
+// SHARED LITTLE BITS
+// ────────────────────────────────────────────────────────────────
+
+function Section({
+  title,
+  description,
+  right,
+  children,
+}: {
+  title: string;
+  description?: string;
+  right?: React.ReactNode;
+  children: React.ReactNode;
+}) {
+  return (
+    <section
+      className="overflow-hidden rounded-xl"
+      style={{
+        background: "var(--surface-1)",
+        border: "1px solid var(--border-subtle)",
+        boxShadow: "var(--shadow-sm)",
+      }}
+    >
+      <header
+        className="flex items-start justify-between gap-3 px-5 py-4"
+        style={{ borderBottom: "1px solid var(--border-subtle)" }}
+      >
+        <div>
+          <h2 className="text-sm font-semibold" style={{ color: "var(--text-default)" }}>
+            {title}
+          </h2>
+          {description && (
+            <p className="mt-0.5 text-xs" style={{ color: "var(--text-muted)" }}>
+              {description}
+            </p>
+          )}
+        </div>
+        {right}
+      </header>
+      <div className="p-5">{children}</div>
+    </section>
+  );
+}
+
+function MiniKpi({
+  label,
+  value,
+  hint,
+  tone = "default",
+}: {
+  label: string;
+  value: string;
+  hint?: string;
+  tone?: "default" | "accent" | "success" | "warning";
+}) {
+  const palette =
+    tone === "accent"  ? { bg: "var(--accent-surface)",  border: "var(--accent-primary)", label: "var(--accent-primary)" } :
+    tone === "success" ? { bg: "var(--success-surface)", border: "var(--success-fg)",     label: "var(--success-fg)"     } :
+    tone === "warning" ? { bg: "var(--warning-surface)", border: "var(--warning-fg)",     label: "var(--warning-fg)"     } :
+                         { bg: "var(--surface-1)",       border: "var(--border-subtle)",  label: "var(--text-muted)"     };
+  return (
+    <div
+      className="rounded-xl p-4"
+      style={{ background: palette.bg, border: `1px solid ${palette.border}`, boxShadow: "var(--shadow-sm)" }}
+    >
+      <div className="text-xs font-medium uppercase tracking-wide" style={{ color: palette.label }}>
+        {label}
+      </div>
+      <div className="mt-2 text-xl font-semibold tabular-nums tracking-tight" style={{ color: "var(--text-default)" }}>
+        {value}
+      </div>
+      {hint && (
+        <div className="mt-1 text-xs" style={{ color: "var(--text-muted)" }}>{hint}</div>
+      )}
+    </div>
+  );
+}
+
+function Banner({
+  tone,
+  title,
+  body,
+}: {
+  tone: "danger" | "warning" | "success" | "neutral";
+  title: string;
+  body: string;
+}) {
+  const palette =
+    tone === "danger"  ? { bg: "var(--danger-surface)",  fg: "var(--danger-fg)",      border: "var(--danger-fg)"      } :
+    tone === "warning" ? { bg: "var(--warning-surface)", fg: "var(--warning-fg)",     border: "var(--warning-fg)"     } :
+    tone === "success" ? { bg: "var(--success-surface)", fg: "var(--success-fg)",     border: "var(--success-fg)"     } :
+                          { bg: "var(--surface-2)",      fg: "var(--text-default)",   border: "var(--border-default)" };
+  return (
+    <div
+      className="rounded-md px-4 py-3 text-sm"
+      style={{ background: palette.bg, border: `1px solid ${palette.border}`, color: palette.fg }}
+    >
+      <div className="font-semibold">{title}</div>
+      <div className="mt-0.5 text-xs" style={{ opacity: 0.85 }}>{body}</div>
+    </div>
+  );
+}
 
 function FormField({
   label,
@@ -1077,7 +1242,9 @@ function FormField({
 }) {
   return (
     <label className="block">
-      <span className="mb-1 block text-sm">{label}</span>
+      <span className="mb-1 block text-sm font-medium" style={{ color: "var(--text-default)" }}>
+        {label}
+      </span>
       <input
         type={type}
         name={name}
@@ -1086,11 +1253,11 @@ function FormField({
         placeholder={placeholder}
         maxLength={maxLength}
         disabled={disabled}
-        className="w-full rounded-md px-3 py-2 text-sm outline-none"
+        className="ts-focus w-full rounded-md px-3 py-2 text-sm outline-none"
         style={{
-          background: "var(--panel)",
-          border: "1px solid var(--border)",
-          color: "var(--text)",
+          background: "var(--surface-1)",
+          border: "1px solid var(--border-default)",
+          color: "var(--text-default)",
         }}
       />
       {hint && (
@@ -1114,13 +1281,8 @@ function CheckboxField({
   disabled?: boolean;
 }) {
   return (
-    <label className="flex items-center gap-2 text-sm">
-      <input
-        type="checkbox"
-        name={name}
-        defaultChecked={defaultChecked}
-        disabled={disabled}
-      />
+    <label className="flex items-center gap-2 text-sm" style={{ color: "var(--text-default)" }}>
+      <input type="checkbox" name={name} defaultChecked={defaultChecked} disabled={disabled} />
       <span>{label}</span>
     </label>
   );
@@ -1128,10 +1290,13 @@ function CheckboxField({
 
 function SaveRow() {
   return (
-    <div className="flex justify-end pt-2" style={{ borderTop: "1px solid var(--border-subtle)" }}>
+    <div
+      className="flex justify-end pt-4"
+      style={{ borderTop: "1px solid var(--border-subtle)" }}
+    >
       <button
         type="submit"
-        className="mt-4 rounded-md px-4 py-2 text-sm font-medium"
+        className="ts-focus rounded-md px-4 py-2 text-sm font-medium"
         style={{ background: "var(--accent-primary)", color: "var(--accent-fg)" }}
       >
         Save changes
@@ -1140,7 +1305,7 @@ function SaveRow() {
   );
 }
 
-function SolidButton({
+function ActionButton({
   tone,
   children,
 }: {
@@ -1154,17 +1319,17 @@ function SolidButton({
       ? {
           background: "var(--danger-surface)",
           color: "var(--danger-fg)",
-          border: "1px solid var(--danger-border)",
+          border: "1px solid var(--danger-fg)",
         }
       : {
           background: "var(--surface-2)",
           color: "var(--text-default)",
-          border: "1px solid var(--border-subtle)",
+          border: "1px solid var(--border-default)",
         };
   return (
     <button
       type="submit"
-      className="rounded-md px-3 py-2 text-xs font-medium"
+      className="ts-focus rounded-md px-3 py-2 text-xs font-medium"
       style={style}
     >
       {children}
@@ -1172,55 +1337,18 @@ function SolidButton({
   );
 }
 
-function Banner({ tone, children }: { tone: "ok" | "error"; children: React.ReactNode }) {
-  const style: React.CSSProperties =
-    tone === "ok"
-      ? {
-          background: "var(--success-surface)",
-          color: "var(--success-fg)",
-          border: "1px solid var(--success-fg)",
-        }
-      : {
-          background: "var(--danger-surface)",
-          color: "var(--danger-fg)",
-          border: "1px solid var(--danger-fg)",
-        };
+function DT({ label, value, mono }: { label: string; value: string | null | undefined; mono?: boolean }) {
   return (
-    <div className="rounded-md px-4 py-3 text-sm" style={style}>
-      {children}
+    <div className="flex flex-wrap items-baseline gap-2">
+      <dt className="w-32 shrink-0 text-xs" style={{ color: "var(--text-muted)" }}>
+        {label}
+      </dt>
+      <dd
+        className={`flex-1 break-all text-sm ${mono ? "font-mono text-xs" : ""}`}
+        style={{ color: value ? "var(--text-default)" : "var(--text-faint)" }}
+      >
+        {value ?? "—"}
+      </dd>
     </div>
-  );
-}
-
-function StatusChip({ status }: { status: string }) {
-  const styles: Record<string, React.CSSProperties> = {
-    PUBLISHED: {
-      background: "var(--success-surface)",
-      color: "var(--success-fg)",
-      border: "1px solid var(--success-fg)",
-    },
-    DRAFT: {
-      background: "var(--surface-2)",
-      color: "var(--text-muted)",
-      border: "1px solid var(--border-subtle)",
-    },
-    HIDDEN: {
-      background: "var(--warning-surface)",
-      color: "var(--warning-fg)",
-      border: "1px solid var(--warning-fg)",
-    },
-    ARCHIVED: {
-      background: "var(--surface-2)",
-      color: "var(--text-faint)",
-      border: "1px solid var(--border-subtle)",
-    },
-  };
-  return (
-    <span
-      className="rounded-full px-2 py-0.5 text-[10px] font-medium uppercase tracking-wider"
-      style={styles[status] ?? styles.DRAFT}
-    >
-      {status.toLowerCase()}
-    </span>
   );
 }
