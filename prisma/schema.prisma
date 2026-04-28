@@ -3086,11 +3086,37 @@ model Feedback {
   body     String? // optional longer write-up
   context  String? // path the user was on when they opened the form
 
-  createdAt DateTime @default(now())
+  // Triage / roadmap state — every submission starts NEW. Platform PM
+  // moves it through UNDER_REVIEW → PLANNED → IN_PROGRESS → SHIPPED, or
+  // closes it out via REJECTED with a public note explaining why.
+  status FeedbackStatus @default(NEW)
 
-  tenant Tenant @relation(fields: [tenantId], references: [id], onDelete: Cascade)
+  // Public-facing note shown when status is SHIPPED or REJECTED — gives
+  // the submitter closure ("here's what we shipped" or "not doing it
+  // because…"). Internal notes are separate.
+  resolutionNote String?
+
+  // Admin-only annotation. Never shown to tenants. Use for triage
+  // hand-offs or PM context.
+  internalNotes String?
+
+  // Cached vote count — denormalized so the board can sort by demand
+  // without an aggregation per row. Kept in sync by toggleFeedbackVote.
+  voteCount Int @default(0)
+
+  createdAt   DateTime  @default(now())
+  updatedAt   DateTime  @updatedAt
+  // Stamped when status flips to SHIPPED. Drives the "Recently shipped"
+  // roadmap strip and conversion-rate KPI.
+  shippedAt   DateTime?
+
+  tenant   Tenant            @relation(fields: [tenantId], references: [id], onDelete: Cascade)
+  votes    FeedbackVote[]
+  comments FeedbackComment[]
 
   @@index([tenantId, createdAt])
+  @@index([status, createdAt])
+  @@index([voteCount])
 }
 
 enum FeedbackKind {
@@ -3098,6 +3124,51 @@ enum FeedbackKind {
   BUG
   PRAISE
   OTHER
+}
+
+enum FeedbackStatus {
+  NEW
+  UNDER_REVIEW
+  PLANNED
+  IN_PROGRESS
+  SHIPPED
+  REJECTED
+}
+
+// Per-user upvote for a Feedback row. One row per (feedbackId, userId)
+// — Postgres enforces uniqueness via the @@unique constraint, so the
+// vote toggle can't double-count even under concurrent submission.
+model FeedbackVote {
+  id         String   @id @default(cuid())
+  feedbackId String
+  userId     String
+  tenantId   String // duplicated for fast cross-tenant aggregations
+  createdAt  DateTime @default(now())
+
+  feedback Feedback @relation(fields: [feedbackId], references: [id], onDelete: Cascade)
+
+  @@unique([feedbackId, userId])
+  @@index([feedbackId])
+  @@index([tenantId])
+}
+
+// Comments thread on a Feedback row. Mixes tenant-member comments and
+// platform-staff replies; `internal=true` flags admin-only notes that
+// the tenant must never see (filtered out at query time, mirroring
+// SupportTicketMessage.internal).
+model FeedbackComment {
+  id         String   @id @default(cuid())
+  feedbackId String
+  authorId   String? // null = system / deleted user
+  isStaff    Boolean  @default(false)
+  internal   Boolean  @default(false)
+  body       String
+
+  createdAt DateTime @default(now())
+
+  feedback Feedback @relation(fields: [feedbackId], references: [id], onDelete: Cascade)
+
+  @@index([feedbackId, createdAt])
 }
 
 // ────────────────────────────────────────────────────────────
