@@ -2,19 +2,17 @@ import Link from "next/link";
 import { notFound } from "next/navigation";
 import { db } from "@/lib/db";
 import { requirePlatformStaff } from "@/lib/platform";
-import { Card, CardHeader } from "@/components/Card";
 import { updatePlanFeature, deletePlanFeature } from "@/app/actions/plan-features";
 
-// /platform/features/[id] — feature editor (M4).
+// /platform/features/[id] — feature editor (transformation rewrite).
 //
-// Edits the master PlanFeature row. Renaming a `key` on a GATE feature
-// is a foot-gun (needs matching code change in the same commit), so the
-// form flags it with a warning chip. MARKETING_ONLY features are free
-// to rename — they don't gate any runtime behavior.
+// Sticky-style header with breadcrumb + chips, multi-section layout,
+// and a Plan usage matrix at the bottom showing where this feature
+// has a value set across the plan catalog.
 //
-// Delete is the loud kind: removes the row, cascades to every
-// PlanFeatureValue cell across all plans. Admins are shown the
-// count-of-active-cells before committing.
+// Renaming a key on a GATE feature stays the loudest concern — we
+// surface the warning banner and keep a danger-zone Delete on a
+// separate card.
 
 export const dynamic = "force-dynamic";
 
@@ -48,95 +46,124 @@ export default async function PlatformFeatureEditorPage({
   });
   if (!feature) notFound();
 
-  // Count active cells (non-empty values). Helps the admin understand
-  // what will vanish from marketing cards if they delete this row.
-  const activeCells = await db.planFeatureValue.count({
-    where: {
-      featureId: id,
-      OR: [
-        { valueBool: true },
-        { valueNumber: { not: null } },
-        { valueText: { not: null } },
-      ],
-    },
-  });
+  // Fire two things in parallel:
+  //   1. Plans we'll show in the usage matrix
+  //   2. PlanFeatureValue rows that already exist for this feature
+  // We then merge per-plan in memory.
+  const [plans, values, activeCells] = await Promise.all([
+    db.pricingPlan.findMany({
+      where: { status: { in: ["PUBLISHED", "DRAFT", "HIDDEN"] } },
+      orderBy: [{ status: "asc" }, { sortOrder: "asc" }],
+      select: { id: true, slug: true, name: true, status: true },
+    }),
+    db.planFeatureValue.findMany({
+      where: { featureId: id },
+      select: {
+        planId: true,
+        valueBool: true,
+        valueNumber: true,
+        valueText: true,
+        footnote: true,
+        highlight: true,
+      },
+    }),
+    db.planFeatureValue.count({
+      where: {
+        featureId: id,
+        OR: [
+          { valueBool: true },
+          { valueNumber: { not: null } },
+          { valueText: { not: null } },
+        ],
+      },
+    }),
+  ]);
+
+  const valueByPlan = new Map(values.map((v) => [v.planId, v]));
 
   const canWrite = ctx.canWrite;
 
+  // Header chips.
+  const enforcementTone =
+    feature.enforcement === "GATE" ? { bg: "var(--warning-surface)", fg: "var(--warning-fg)", label: "Gated" }
+                                   : { bg: "var(--surface-2)",       fg: "var(--text-muted)", label: "Marketing-only" };
+  const typeTone =
+    feature.valueType === "NUMBER"  ? { bg: "var(--accent-surface)", fg: "var(--accent-primary)" }
+                                    : { bg: "var(--surface-2)",      fg: "var(--text-muted)"     };
+
   return (
     <div className="space-y-6">
-      <div className="flex items-start justify-between gap-4">
-        <div>
-          <Link
-            href="/platform/features"
-            className="text-xs"
-            style={{ color: "var(--text-muted)" }}
-          >
-            ← Features
+      {/* ── Header ──────────────────────────────────────────── */}
+      <header>
+        <div className="text-xs" style={{ color: "var(--text-muted)" }}>
+          <Link href="/platform/features" className="hover:underline">
+            Feature library
           </Link>
-          <h1 className="mt-1 flex items-center gap-3 text-2xl font-semibold">
-            {feature.label}
-            <EnforcementChip enforcement={feature.enforcement} />
-          </h1>
-          <p className="mt-1 text-sm" style={{ color: "var(--text-muted)" }}>
-            <span className="font-mono text-xs">{feature.key}</span>
-            {" · "}
-            {feature.valueType.toLowerCase()}
-            {" · "}
-            {activeCells} active / {feature._count.values} total cells
-          </p>
+          <span className="mx-1.5">/</span>
+          <span className="font-mono">{feature.key}</span>
         </div>
-
-        {canWrite && (
-          <form
-            action={deletePlanFeature.bind(null, feature.id)}
-            // A trivial native confirm keeps the flow 1-click without
-            // pulling in client JS just for a modal. Admins only.
-          >
-            <button
-              type="submit"
-              className="rounded-md px-3 py-2 text-xs font-medium"
-              style={{
-                background: "var(--danger-surface)",
-                color: "var(--danger-fg)",
-                border: "1px solid var(--danger-border)",
-              }}
+        <div className="mt-1 flex items-start justify-between gap-4">
+          <div className="min-w-0 flex-1">
+            <h1
+              className="text-2xl font-semibold tracking-tight"
+              style={{ color: "var(--text-default)" }}
             >
-              Delete feature
-            </button>
-          </form>
-        )}
-      </div>
+              {feature.label || <span style={{ color: "var(--text-faint)" }}>Untitled feature</span>}
+            </h1>
+            <div className="mt-2 flex flex-wrap items-center gap-1.5">
+              <Chip {...enforcementTone} />
+              <Chip bg={typeTone.bg} fg={typeTone.fg} label={feature.valueType.toLowerCase()} />
+              {feature.groupLabel && (
+                <Chip bg="var(--surface-2)" fg="var(--text-default)" label={feature.groupLabel} title="Group" />
+              )}
+              <Chip
+                bg={activeCells > 0 ? "var(--success-surface)" : "var(--surface-2)"}
+                fg={activeCells > 0 ? "var(--success-fg)"     : "var(--text-muted)"}
+                label={`${activeCells} active`}
+                title={`${activeCells} of ${feature._count.values} cells set across plans`}
+              />
+              <Chip
+                bg="var(--surface-2)"
+                fg="var(--text-muted)"
+                label={`sort ${feature.sortOrder}`}
+                title="Within-group sort"
+              />
+            </div>
+          </div>
+          {canWrite && (
+            <form action={deletePlanFeature.bind(null, feature.id)}>
+              <button
+                type="submit"
+                className="ts-focus rounded-md px-3 py-2 text-xs font-medium"
+                style={{
+                  background: "var(--danger-surface)",
+                  color: "var(--danger-fg)",
+                  border: "1px solid var(--danger-fg)",
+                }}
+                title={`Permanently removes this feature and ${feature._count.values} cell${feature._count.values === 1 ? "" : "s"} across plans.`}
+              >
+                Delete feature
+              </button>
+            </form>
+          )}
+        </div>
+      </header>
 
-      {sp.ok && <Banner tone="ok">Saved.</Banner>}
-      {sp.error && <Banner tone="error">{sp.error}</Banner>}
+      {/* ── Banners ─────────────────────────────────────────── */}
+      {sp.ok && <Banner tone="success" title="Saved" body="Changes saved." />}
+      {sp.error && <Banner tone="danger" title="Action failed" body={decodeURIComponent(sp.error)} />}
 
       {feature.enforcement === "GATE" && (
-        <div
-          className="rounded-md px-4 py-3 text-xs"
-          style={{
-            background: "var(--warning-surface)",
-            color: "var(--warning-fg)",
-            border: "1px solid var(--warning-fg)",
-          }}
-        >
-          <strong>Gate feature.</strong> This key is referenced from app code via{" "}
-          <code
-            className="rounded px-1 py-0.5 font-mono text-[11px]"
-            style={{ background: "var(--surface-0)", border: "1px solid var(--warning-fg)" }}
-          >
-            hasFeature(tenant, &quot;{feature.key}&quot;)
-          </code>
-          . Renaming the key here without updating the call sites will silently disable the gate.
-        </div>
+        <Banner
+          tone="warning"
+          title="Code-referenced feature"
+          body={`This key is referenced in app code via hasFeature(tenant, "${feature.key}"). Renaming it without updating call sites silently disables the gate.`}
+        />
       )}
 
-      <Card>
-        <CardHeader
-          title="Identity & display"
-          description="Key, label, group. Group controls which section of the pricing matrix this feature appears in."
-        />
-        <form action={updatePlanFeature.bind(null, feature.id)} className="space-y-5 px-5 py-5">
+      {/* ── Edit form ───────────────────────────────────────── */}
+      <form action={updatePlanFeature.bind(null, feature.id)} className="space-y-5">
+        <Section title="Identity & display" description="Key, label, group. Group controls which section of the pricing matrix this feature appears in.">
           <div className="grid gap-4 md:grid-cols-2">
             <FormField
               label="Key"
@@ -160,17 +187,46 @@ export default async function PlatformFeatureEditorPage({
               name="groupLabel"
               defaultValue={feature.groupLabel ?? ""}
               maxLength={60}
-              hint={'e.g. "Limits", "Workflow", "Insights". Blank = Ungrouped.'}
+              hint='e.g. "Limits & storage", "Workflow & operations". Blank = Ungrouped.'
               disabled={!canWrite}
             />
+          </div>
+          <label className="block">
+            <span className="mb-1 block text-sm font-medium" style={{ color: "var(--text-default)" }}>
+              Description
+            </span>
+            <textarea
+              name="description"
+              defaultValue={feature.description ?? ""}
+              rows={3}
+              maxLength={400}
+              disabled={!canWrite}
+              className="ts-focus w-full rounded-md px-3 py-2 text-sm outline-none"
+              style={{
+                background: "var(--surface-1)",
+                border: "1px solid var(--border-default)",
+                color: "var(--text-default)",
+              }}
+            />
+            <span className="mt-1 block text-xs" style={{ color: "var(--text-muted)" }}>
+              Optional hover tooltip on /pricing. 400 chars max.
+            </span>
+          </label>
+        </Section>
+
+        <Section
+          title="Behavior"
+          description="What kind of value this feature carries and whether it gates runtime access."
+        >
+          <div className="grid gap-4 md:grid-cols-2">
             <SelectField
               label="Value type"
               name="valueType"
               defaultValue={feature.valueType}
               options={[
                 { value: "BOOLEAN", label: "Boolean — included / not included" },
-                { value: "NUMBER", label: "Number — cap (-1 = unlimited)" },
-                { value: "TEXT", label: "Text — free-form label" },
+                { value: "NUMBER",  label: "Number — cap (-1 = unlimited)" },
+                { value: "TEXT",    label: "Text — free-form label" },
               ]}
               hint="Changes per-plan cell shape; existing values in the wrong shape become inert."
               disabled={!canWrite}
@@ -180,18 +236,26 @@ export default async function PlatformFeatureEditorPage({
               name="enforcement"
               defaultValue={feature.enforcement}
               options={[
-                { value: "GATE", label: "GATE — runtime entitlement (code references key)" },
-                { value: "MARKETING_ONLY", label: "MARKETING_ONLY — bullet text only, no code effect" },
+                { value: "GATE",            label: "GATE — runtime entitlement (code references key)" },
+                { value: "MARKETING_ONLY",  label: "MARKETING_ONLY — bullet text only, no code effect" },
               ]}
               hint="Marketing-only features are safe to rename at will."
               disabled={!canWrite}
             />
+          </div>
+        </Section>
+
+        <Section
+          title="Position"
+          description="Where this feature appears in the pricing matrix and within its group."
+        >
+          <div className="grid gap-4 md:grid-cols-2">
             <FormField
-              label="Sort order"
+              label="Sort order (within group)"
               name="sortOrder"
               type="number"
               defaultValue={String(feature.sortOrder)}
-              hint="Lower = shown first within its group."
+              hint="Lower = earlier within the group."
               disabled={!canWrite}
             />
             <FormField
@@ -203,45 +267,201 @@ export default async function PlatformFeatureEditorPage({
               disabled={!canWrite}
             />
           </div>
+        </Section>
 
-          <label className="block">
-            <span className="mb-1 block text-sm">Description</span>
-            <textarea
-              name="description"
-              defaultValue={feature.description ?? ""}
-              rows={3}
-              maxLength={400}
-              disabled={!canWrite}
-              className="w-full rounded-md px-3 py-2 text-sm outline-none"
-              style={{
-                background: "var(--panel)",
-                border: "1px solid var(--border)",
-                color: "var(--text)",
-              }}
-            />
-            <span className="mt-1 block text-xs" style={{ color: "var(--text-muted)" }}>
-              Optional hover tooltip on /pricing. 400 chars max.
-            </span>
-          </label>
+        {canWrite && (
+          <div className="flex justify-end">
+            <button
+              type="submit"
+              className="ts-focus rounded-md px-4 py-2 text-sm font-medium"
+              style={{ background: "var(--accent-primary)", color: "var(--accent-fg)" }}
+            >
+              Save changes
+            </button>
+          </div>
+        )}
+      </form>
 
-          {canWrite && (
-            <div className="flex justify-end pt-2" style={{ borderTop: "1px solid var(--border-subtle)" }}>
-              <button
-                type="submit"
-                className="mt-4 rounded-md px-4 py-2 text-sm font-medium"
-                style={{ background: "var(--accent-primary)", color: "var(--accent-fg)" }}
-              >
-                Save changes
-              </button>
-            </div>
-          )}
-        </form>
-      </Card>
+      {/* ── Plan usage matrix ─────────────────────────────────── */}
+      <Section
+        title="Plan usage"
+        description="Which plans have a value set for this feature. Edit per-plan values from the plan's Features tab."
+      >
+        {plans.length === 0 ? (
+          <p className="text-sm" style={{ color: "var(--text-muted)" }}>
+            No plans yet.
+          </p>
+        ) : (
+          <div className="overflow-x-auto -mx-5 -mb-5">
+            <table className="w-full text-sm">
+              <thead style={{ color: "var(--text-muted)", background: "var(--surface-2)" }}>
+                <tr className="text-left">
+                  <th className="px-5 py-2.5 font-medium">Plan</th>
+                  <th className="px-5 py-2.5 font-medium">Status</th>
+                  <th className="px-5 py-2.5 font-medium">Value</th>
+                  <th className="px-5 py-2.5 font-medium">Footnote</th>
+                  <th className="px-5 py-2.5 text-center font-medium">★</th>
+                  <th className="px-5 py-2.5 font-medium"></th>
+                </tr>
+              </thead>
+              <tbody>
+                {plans.map((plan, idx) => {
+                  const value = valueByPlan.get(plan.id);
+                  const display = renderValue(feature.valueType, value);
+                  return (
+                    <tr key={plan.id} style={{ borderTop: idx === 0 ? "none" : "1px solid var(--border-subtle)" }}>
+                      <td className="px-5 py-3">
+                        <Link
+                          href={`/platform/plans/${plan.id}?tab=features`}
+                          className="hover:underline"
+                          style={{ color: "var(--text-default)" }}
+                        >
+                          {plan.name}
+                        </Link>
+                        <div className="mt-0.5 font-mono text-[10px]" style={{ color: "var(--text-faint)" }}>
+                          {plan.slug}
+                        </div>
+                      </td>
+                      <td className="px-5 py-3">
+                        <PlanStatusPill status={plan.status} />
+                      </td>
+                      <td className="px-5 py-3">
+                        {display.set ? (
+                          <span style={{ color: display.tone }}>{display.text}</span>
+                        ) : (
+                          <span style={{ color: "var(--text-faint)" }}>not set</span>
+                        )}
+                      </td>
+                      <td className="px-5 py-3 text-xs" style={{ color: "var(--text-muted)" }}>
+                        {value?.footnote ?? <span style={{ color: "var(--text-faint)" }}>—</span>}
+                      </td>
+                      <td className="px-5 py-3 text-center">
+                        {value?.highlight ? (
+                          <span style={{ color: "var(--accent-primary)" }}>★</span>
+                        ) : (
+                          <span style={{ color: "var(--text-faint)" }}>—</span>
+                        )}
+                      </td>
+                      <td className="px-5 py-3 text-right">
+                        <Link
+                          href={`/platform/plans/${plan.id}?tab=features`}
+                          className="text-xs"
+                          style={{ color: "var(--accent-primary)" }}
+                        >
+                          Edit on plan →
+                        </Link>
+                      </td>
+                    </tr>
+                  );
+                })}
+              </tbody>
+            </table>
+          </div>
+        )}
+      </Section>
     </div>
   );
 }
 
-/* ──────────────────────────────────────────────────────────────── */
+/* ────────────────────────────────────────────────────────────── */
+
+function renderValue(
+  type: "BOOLEAN" | "NUMBER" | "TEXT",
+  value: { valueBool: boolean | null; valueNumber: number | null; valueText: string | null } | undefined,
+): { set: boolean; text: string; tone: string } {
+  if (!value) return { set: false, text: "", tone: "var(--text-faint)" };
+  if (type === "BOOLEAN") {
+    if (value.valueBool === true)  return { set: true, text: "✓ Included",     tone: "var(--success-fg)" };
+    if (value.valueBool === false) return { set: true, text: "Not included",   tone: "var(--text-muted)" };
+    return { set: false, text: "", tone: "var(--text-faint)" };
+  }
+  if (type === "NUMBER") {
+    if (value.valueNumber == null) return { set: false, text: "", tone: "var(--text-faint)" };
+    if (value.valueNumber === -1)  return { set: true, text: "∞ Unlimited",    tone: "var(--success-fg)" };
+    return { set: true, text: value.valueNumber.toLocaleString(), tone: "var(--text-default)" };
+  }
+  // TEXT
+  if (!value.valueText) return { set: false, text: "", tone: "var(--text-faint)" };
+  return { set: true, text: value.valueText, tone: "var(--text-default)" };
+}
+
+function PlanStatusPill({ status }: { status: string }) {
+  const palette =
+    status === "PUBLISHED" ? { bg: "var(--success-surface)", fg: "var(--success-fg)" } :
+    status === "HIDDEN"    ? { bg: "var(--warning-surface)", fg: "var(--warning-fg)" } :
+                              { bg: "var(--surface-2)",       fg: "var(--text-muted)" };
+  return (
+    <span
+      className="inline-block rounded-full px-1.5 py-0.5 text-[10px] font-medium uppercase tracking-wide"
+      style={{ background: palette.bg, color: palette.fg }}
+    >
+      {status.toLowerCase()}
+    </span>
+  );
+}
+
+function Section({
+  title,
+  description,
+  right,
+  children,
+}: {
+  title: string;
+  description?: string;
+  right?: React.ReactNode;
+  children: React.ReactNode;
+}) {
+  return (
+    <section
+      className="overflow-hidden rounded-xl"
+      style={{
+        background: "var(--surface-1)",
+        border: "1px solid var(--border-subtle)",
+        boxShadow: "var(--shadow-sm)",
+      }}
+    >
+      <header
+        className="flex items-start justify-between gap-3 px-5 py-4"
+        style={{ borderBottom: "1px solid var(--border-subtle)" }}
+      >
+        <div>
+          <h2 className="text-sm font-semibold" style={{ color: "var(--text-default)" }}>
+            {title}
+          </h2>
+          {description && (
+            <p className="mt-0.5 text-xs" style={{ color: "var(--text-muted)" }}>
+              {description}
+            </p>
+          )}
+        </div>
+        {right}
+      </header>
+      <div className="space-y-5 p-5">{children}</div>
+    </section>
+  );
+}
+
+function Chip({
+  bg,
+  fg,
+  label,
+  title,
+}: {
+  bg: string;
+  fg: string;
+  label: string;
+  title?: string;
+}) {
+  return (
+    <span
+      className="inline-block rounded-full px-2 py-0.5 text-[11px] font-semibold uppercase tracking-wide"
+      style={{ background: bg, color: fg, border: `1px solid ${fg}` }}
+      title={title}
+    >
+      {label}
+    </span>
+  );
+}
 
 function FormField({
   label,
@@ -266,7 +486,9 @@ function FormField({
 }) {
   return (
     <label className="block">
-      <span className="mb-1 block text-sm">{label}</span>
+      <span className="mb-1 block text-sm font-medium" style={{ color: "var(--text-default)" }}>
+        {label}
+      </span>
       <input
         type={type}
         name={name}
@@ -275,11 +497,11 @@ function FormField({
         placeholder={placeholder}
         maxLength={maxLength}
         disabled={disabled}
-        className="w-full rounded-md px-3 py-2 text-sm outline-none"
+        className="ts-focus w-full rounded-md px-3 py-2 text-sm outline-none"
         style={{
-          background: "var(--panel)",
-          border: "1px solid var(--border)",
-          color: "var(--text)",
+          background: "var(--surface-1)",
+          border: "1px solid var(--border-default)",
+          color: "var(--text-default)",
         }}
       />
       {hint && (
@@ -308,16 +530,18 @@ function SelectField({
 }) {
   return (
     <label className="block">
-      <span className="mb-1 block text-sm">{label}</span>
+      <span className="mb-1 block text-sm font-medium" style={{ color: "var(--text-default)" }}>
+        {label}
+      </span>
       <select
         name={name}
         defaultValue={defaultValue}
         disabled={disabled}
-        className="w-full rounded-md px-3 py-2 text-sm outline-none"
+        className="ts-focus w-full rounded-md px-3 py-2 text-sm outline-none"
         style={{
-          background: "var(--panel)",
-          border: "1px solid var(--border)",
-          color: "var(--text)",
+          background: "var(--surface-1)",
+          border: "1px solid var(--border-default)",
+          color: "var(--text-default)",
         }}
       >
         {options.map((o) => (
@@ -335,45 +559,26 @@ function SelectField({
   );
 }
 
-function Banner({ tone, children }: { tone: "ok" | "error"; children: React.ReactNode }) {
-  const style: React.CSSProperties =
-    tone === "ok"
-      ? {
-          background: "var(--success-surface)",
-          color: "var(--success-fg)",
-          border: "1px solid var(--success-fg)",
-        }
-      : {
-          background: "var(--danger-surface)",
-          color: "var(--danger-fg)",
-          border: "1px solid var(--danger-fg)",
-        };
+function Banner({
+  tone,
+  title,
+  body,
+}: {
+  tone: "danger" | "warning" | "success";
+  title: string;
+  body: string;
+}) {
+  const palette =
+    tone === "danger"  ? { bg: "var(--danger-surface)",  fg: "var(--danger-fg)",  border: "var(--danger-fg)"  } :
+    tone === "warning" ? { bg: "var(--warning-surface)", fg: "var(--warning-fg)", border: "var(--warning-fg)" } :
+                          { bg: "var(--success-surface)", fg: "var(--success-fg)", border: "var(--success-fg)" };
   return (
-    <div className="rounded-md px-4 py-3 text-sm" style={style}>
-      {children}
-    </div>
-  );
-}
-
-function EnforcementChip({ enforcement }: { enforcement: "GATE" | "MARKETING_ONLY" }) {
-  const style: React.CSSProperties =
-    enforcement === "GATE"
-      ? {
-          background: "var(--accent-surface)",
-          color: "var(--accent-primary)",
-          border: "1px solid var(--accent-primary)",
-        }
-      : {
-          background: "var(--surface-2)",
-          color: "var(--text-muted)",
-          border: "1px solid var(--border-subtle)",
-        };
-  return (
-    <span
-      className="rounded-full px-2 py-0.5 text-[10px] font-medium uppercase tracking-wider"
-      style={style}
+    <div
+      className="rounded-md px-4 py-3 text-sm"
+      style={{ background: palette.bg, border: `1px solid ${palette.border}`, color: palette.fg }}
     >
-      {enforcement === "GATE" ? "gate" : "marketing"}
-    </span>
+      <div className="font-semibold">{title}</div>
+      <div className="mt-0.5 text-xs" style={{ opacity: 0.85 }}>{body}</div>
+    </div>
   );
 }
