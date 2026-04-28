@@ -39,6 +39,8 @@ export type FeatureKey =
   | "franchiseGroup"          // Phase 15 Slice D — parent/child tenancy
   | "advancedPricing"         // Phase 13 — rush / tiers / approval rules
   | "reportsFinancial"        // Phase 12 — revenue / margin reports
+  | "vendors_expenses"        // Track vendor bills + job-linked expenses
+  | "sso"                     // SAML / OIDC sign-in — placeholder until SSO ships
   | "betaProofAnnotations";   // placeholder — flip per-tenant for early access
 
 export type LimitKey =
@@ -70,6 +72,8 @@ export const PLAN_ENTITLEMENTS: Record<Plan, PlanEntitlements> = {
       franchiseGroup: false,
       advancedPricing: false,
       reportsFinancial: false,
+      vendors_expenses: false,
+      sso: false,
       betaProofAnnotations: false,
     },
     limits: {
@@ -88,6 +92,8 @@ export const PLAN_ENTITLEMENTS: Record<Plan, PlanEntitlements> = {
       franchiseGroup: false,
       advancedPricing: true,
       reportsFinancial: true,
+      vendors_expenses: true,
+      sso: false,
       betaProofAnnotations: false,
     },
     limits: {
@@ -106,6 +112,8 @@ export const PLAN_ENTITLEMENTS: Record<Plan, PlanEntitlements> = {
       franchiseGroup: false,
       advancedPricing: true,
       reportsFinancial: true,
+      vendors_expenses: true,
+      sso: false,
       betaProofAnnotations: false,
     },
     limits: {
@@ -124,6 +132,8 @@ export const PLAN_ENTITLEMENTS: Record<Plan, PlanEntitlements> = {
       franchiseGroup: true,
       advancedPricing: true,
       reportsFinancial: true,
+      vendors_expenses: true,
+      sso: true,
       betaProofAnnotations: true,
     },
     limits: {

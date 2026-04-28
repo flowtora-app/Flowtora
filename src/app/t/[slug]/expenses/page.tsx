@@ -4,6 +4,9 @@ import { db } from "@/lib/db";
 import { Card } from "@/components/Card";
 import { Button } from "@/components/Field";
 import { EmptyState } from "@/components/ui/EmptyState";
+import { UpgradeRequired } from "@/components/UpgradeRequired";
+import { isEntitled } from "@/lib/entitlements";
+import { getFeatureGateMeta } from "@/lib/feature-gates";
 import { formatMoney, formatDate } from "@/lib/format";
 import { expenseMethodLabel, SUGGESTED_EXPENSE_CATEGORIES } from "@/lib/finance";
 import type { Prisma } from "@prisma/client";
@@ -41,6 +44,20 @@ export default async function ExpensesPage({
   const { slug } = await params;
   const sp = await searchParams;
   const ctx = await requirePermission(slug, "expenses:view");
+
+  // Feature gate — vendors & expenses is a Professional+ feature.
+  if (!(await isEntitled(ctx.tenant.id, ctx.tenant.plan, "vendors_expenses"))) {
+    const meta = getFeatureGateMeta("vendors_expenses");
+    return (
+      <UpgradeRequired
+        slug={slug}
+        featureName={meta.label}
+        requiredPlan={meta.requiredPlan}
+        reason={meta.reason}
+      />
+    );
+  }
+
   const canManage = ctx.can("expenses:manage");
 
   // Default window: current month, in the server's local calendar. An

@@ -4,6 +4,9 @@ import { db } from "@/lib/db";
 import { Card } from "@/components/Card";
 import { Button } from "@/components/Field";
 import { EmptyState } from "@/components/ui/EmptyState";
+import { UpgradeRequired } from "@/components/UpgradeRequired";
+import { isEntitled } from "@/lib/entitlements";
+import { getFeatureGateMeta } from "@/lib/feature-gates";
 import { formatMoney } from "@/lib/format";
 import type { Prisma } from "@prisma/client";
 
@@ -26,6 +29,22 @@ export default async function VendorsPage({
   const { slug } = await params;
   const sp = await searchParams;
   const ctx = await requirePermission(slug, "vendors:view");
+
+  // Feature gate — vendors & expenses is a Professional+ feature. The
+  // gate reads the current PlanFeatureValue cell from the DB so an
+  // admin can flip it without a deploy.
+  if (!(await isEntitled(ctx.tenant.id, ctx.tenant.plan, "vendors_expenses"))) {
+    const meta = getFeatureGateMeta("vendors_expenses");
+    return (
+      <UpgradeRequired
+        slug={slug}
+        featureName={meta.label}
+        requiredPlan={meta.requiredPlan}
+        reason={meta.reason}
+      />
+    );
+  }
+
   const canManage = ctx.can("vendors:manage");
 
   const scope = sp.scope ?? "active";
