@@ -87,3 +87,73 @@ export async function updateMarketingLead(leadId: string, formData: FormData) {
   revalidatePath(`/platform/leads/${leadId}`);
   redirect(`/platform/leads/${leadId}?ok=1`);
 }
+
+// Inline quick-actions used by the leads inbox row menu and side panel.
+// These bypass the full updateMarketingLead form so a sales person can
+// claim a row or flip its status with one click — without leaving the
+// inbox.
+
+export async function assignLeadToMe(leadId: string) {
+  const ctx = await requirePlatformStaff();
+  const lead = await db.marketingLead.findUnique({
+    where:  { id: leadId },
+    select: { id: true, assignedToUserId: true, status: true },
+  });
+  if (!lead) return;
+  if (lead.assignedToUserId === ctx.userId) return;
+
+  await db.marketingLead.update({
+    where: { id: leadId },
+    data:  { assignedToUserId: ctx.userId },
+  });
+  await logPlatformAudit({
+    userId:     ctx.userId,
+    tenantId:   null,
+    action:     "platform.lead_assigned",
+    entityType: "MarketingLead",
+    entityId:   leadId,
+    metadata:   { actor: ctx.email, from: lead.assignedToUserId, to: ctx.userId },
+  });
+
+  revalidatePath("/platform/leads");
+  revalidatePath(`/platform/leads/${leadId}`);
+}
+
+export async function changeLeadStatus(leadId: string, formData: FormData) {
+  const ctx = await requirePlatformStaff();
+  const next = String(formData.get("status") ?? "");
+  const parsed = z.enum(LEAD_STATUSES).safeParse(next);
+  if (!parsed.success) return;
+
+  const lead = await db.marketingLead.findUnique({
+    where:  { id: leadId },
+    select: { id: true, status: true, firstContactedAt: true, convertedAt: true },
+  });
+  if (!lead) return;
+  if (lead.status === parsed.data) return;
+
+  const now = new Date();
+  const becomingContacted = lead.status === "NEW" && parsed.data !== "NEW";
+  const becomingConverted = lead.status !== "CONVERTED" && parsed.data === "CONVERTED";
+
+  await db.marketingLead.update({
+    where: { id: leadId },
+    data: {
+      status:          parsed.data,
+      lastContactedAt: now,
+      ...(becomingContacted && !lead.firstContactedAt ? { firstContactedAt: now } : {}),
+      ...(becomingConverted && !lead.convertedAt       ? { convertedAt: now }     : {}),
+    },
+  });
+  await logPlatformAudit({
+    userId:     ctx.userId,
+    tenantId:   null,
+    action:     "platform.lead_status_changed",
+    entityType: "MarketingLead",
+    entityId:   leadId,
+    metadata:   { actor: ctx.email, from: lead.status, to: parsed.data },
+  });
+
+  revalidatePath("/platform/leads");
+  revalidatePath(`/platform/leads/${leadId}`);
+}
