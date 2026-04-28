@@ -7,6 +7,7 @@ import type { Prisma, QuoteItem, QuoteStatus } from "@prisma/client";
 import { db } from "@/lib/db";
 import { requirePermission } from "@/lib/tenant";
 import { logAudit } from "@/lib/audit";
+import { isEntitled } from "@/lib/entitlements";
 // Phase 15 Slice E — unified customer-email send helper (template + send +
 // timeline in one call). Used for the "quote sent" touchpoint so customers
 // see a real body preview in the portal activity feed.
@@ -1042,6 +1043,13 @@ export async function applyRushFee(slug: string, quoteId: string) {
   const ctx = await requirePermission(slug, "quotes:manage");
   const existing = await assertQuoteInTenant(ctx.tenant.id, quoteId);
   if (!existing) redirect(`/t/${slug}/quotes`);
+
+  // Plan gate — advancedPricing covers rush surcharges. Defense-in-depth
+  // even though the page hides the button: a determined user POSTing to
+  // the action shouldn't bypass the gate.
+  if (!(await isEntitled(ctx.tenant.id, ctx.tenant.plan, "advancedPricing"))) {
+    redirect(`/t/${slug}/settings/billing?error=${encodeURIComponent("Rush surcharges require the Professional plan.")}`);
+  }
 
   const tenant = await db.tenant.findUnique({
     where:  { id: ctx.tenant.id },

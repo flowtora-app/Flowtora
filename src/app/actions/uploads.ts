@@ -10,6 +10,7 @@ import {
   StorageError,
 } from "@/lib/storage";
 import { checkStorageQuota } from "@/lib/storage-quota";
+import { maybeSendStorageWarning } from "@/lib/storage-warning-email";
 
 // Server-side uploaders for tenant-owned image and file assets. Each
 // client component posts a multipart form-data with a `file` field via
@@ -108,6 +109,7 @@ export async function uploadTenantLogo(
       action: "tenant.logo.uploaded",
       metadata: { url, key, bytes: size, mime: file.type },
     });
+    await maybeSendStorageWarning({ tenantId: ctx.tenant.id, plan: ctx.tenant.plan });
     return { ok: true, url };
   } catch (err) {
     if (err instanceof StorageError) {
@@ -161,6 +163,7 @@ export async function uploadExpenseReceipt(
       action: "expense.receipt_uploaded",
       metadata: { url, key, bytes: size, mime: contentType },
     });
+    await maybeSendStorageWarning({ tenantId: ctx.tenant.id, plan: ctx.tenant.plan });
     return { ok: true, url, size, mime: contentType };
   } catch (err) {
     if (err instanceof StorageError) return { ok: false, error: err.message };
@@ -210,6 +213,7 @@ export async function uploadInstallPhoto(
       action: "install.photo_uploaded",
       metadata: { url, key, bytes: size, mime: contentType },
     });
+    await maybeSendStorageWarning({ tenantId: ctx.tenant.id, plan: ctx.tenant.plan });
     return { ok: true, url, size, mime: contentType };
   } catch (err) {
     if (err instanceof StorageError) return { ok: false, error: err.message };
@@ -256,6 +260,7 @@ export async function uploadTenantFile(
       action: "file.uploaded",
       metadata: { url, key, bytes: size, mime: contentType, filename: file.name },
     });
+    await maybeSendStorageWarning({ tenantId: ctx.tenant.id, plan: ctx.tenant.plan });
     return {
       ok: true,
       url,
@@ -322,6 +327,7 @@ export async function uploadUserAvatar(
       action: "account.avatar_uploaded",
       metadata: { url, key, bytes: size, mime: contentType },
     });
+    await maybeSendStorageWarning({ tenantId: ctx.tenant.id, plan: ctx.tenant.plan });
     return { ok: true, url };
   } catch (err) {
     if (err instanceof StorageError) return { ok: false, error: err.message };

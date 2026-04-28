@@ -16,6 +16,7 @@ import {
   StorageError,
 } from "@/lib/storage";
 import { checkStorageQuota } from "@/lib/storage-quota";
+import { maybeSendStorageWarning } from "@/lib/storage-warning-email";
 
 // Filter out synthetic user ids like "portal:<tokenId>" — those aren't real
 // staff users and will never log in to receive notifications.
@@ -749,6 +750,8 @@ export async function uploadPortalFile(
       link:       `/t/${ctx.tenant.slug}/orders/${order.id}`,
     },
   );
+
+  await maybeSendStorageWarning({ tenantId: ctx.tenant.id, plan: ctx.tenant.plan });
 
   revalidatePath(`/t/${ctx.tenant.slug}/orders/${order.id}`);
   redirect(`${portalPath(token, `orders/${orderId}`)}?uploaded=1`);

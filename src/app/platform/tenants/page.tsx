@@ -3,6 +3,8 @@ import { db } from "@/lib/db";
 import { requirePlatformStaff } from "@/lib/platform";
 import { computeTenantHealth, environmentColor, healthColor } from "@/lib/tenant-health";
 import { cohortLabel, cohortChip } from "@/lib/cohorts";
+import { formatBytes, GB_IN_BYTES } from "@/lib/storage-quota";
+import { PLAN_ENTITLEMENTS } from "@/lib/entitlements";
 import type { BetaCohort, Prisma } from "@prisma/client";
 
 // Phase 17 Slice A — searchable, filterable tenant list.
@@ -61,6 +63,24 @@ export default async function PlatformTenantsPage({
     include: { _count: { select: { memberships: true } } },
     take: 200,
   });
+
+  // Batch storage usage in a single groupBy across the listed tenants
+  // — one round-trip vs 200. The admin column reads the legacy
+  // PLAN_ENTITLEMENTS map for the per-plan cap (synchronous,
+  // approximate but fine at this surface — the live tenant flows
+  // already use the DB-backed planLimit() for hard enforcement).
+  const tenantIds = tenants.map((t) => t.id);
+  const usageRows = tenantIds.length
+    ? await db.file.groupBy({
+        by: ["tenantId"],
+        where: { tenantId: { in: tenantIds } },
+        _sum: { sizeBytes: true },
+      })
+    : [];
+  const usageByTenant = new Map<string, number>();
+  for (const r of usageRows) {
+    usageByTenant.set(r.tenantId, r._sum.sizeBytes ?? 0);
+  }
 
   return (
     <div>
@@ -153,6 +173,7 @@ export default async function PlatformTenantsPage({
               <th className="px-4 py-3 font-normal">Status</th>
               <th className="px-4 py-3 font-normal">Health</th>
               <th className="px-4 py-3 font-normal">Users</th>
+              <th className="px-4 py-3 font-normal">Storage</th>
               <th className="px-4 py-3 font-normal">Last activity</th>
               <th className="px-4 py-3 font-normal">Created</th>
             </tr>
@@ -160,7 +181,7 @@ export default async function PlatformTenantsPage({
           <tbody>
             {tenants.length === 0 && (
               <tr>
-                <td colSpan={9} className="px-4 py-6 text-center" style={{ color: "var(--text-muted)" }}>
+                <td colSpan={10} className="px-4 py-6 text-center" style={{ color: "var(--text-muted)" }}>
                   No tenants match.
                 </td>
               </tr>
@@ -215,6 +236,12 @@ export default async function PlatformTenantsPage({
                     </span>
                   </td>
                   <td className="px-4 py-3">{t._count.memberships}</td>
+                  <td className="px-4 py-3 text-xs">
+                    <StorageCell
+                      usedBytes={usageByTenant.get(t.id) ?? 0}
+                      quotaGB={PLAN_ENTITLEMENTS[t.plan].limits.storageQuotaGB}
+                    />
+                  </td>
                   <td className="px-4 py-3" style={{ color: "var(--text-muted)" }}>
                     {health.daysInactive === 0 ? "today" : `${health.daysInactive}d ago`}
                   </td>
@@ -243,5 +270,38 @@ function StatusPill({ status }: { status: string }) {
     <span className="rounded-full px-2 py-0.5 text-xs" style={{ background: bg, color: fg }}>
       {status}
     </span>
+  );
+}
+
+function StorageCell({
+  usedBytes,
+  quotaGB,
+}: {
+  usedBytes: number;
+  quotaGB: number | null;
+}) {
+  const used = formatBytes(usedBytes);
+  // null = unlimited (Enterprise / unlimited tier)
+  if (quotaGB === null) {
+    return (
+      <div>
+        <div style={{ color: "var(--text-default)" }}>{used}</div>
+        <div style={{ color: "var(--text-faint)" }}>of unlimited</div>
+      </div>
+    );
+  }
+  const quotaBytes = quotaGB * GB_IN_BYTES;
+  const pct = Math.min(1, usedBytes / quotaBytes);
+  const tone =
+    pct >= 1 ? "var(--danger-fg)" : pct >= 0.85 ? "var(--warning-fg)" : "var(--text-muted)";
+  return (
+    <div>
+      <div style={{ color: tone, fontWeight: pct >= 0.85 ? 600 : 400 }}>
+        {used}
+      </div>
+      <div style={{ color: "var(--text-faint)" }}>
+        {Math.round(pct * 100)}% of {quotaGB} GB
+      </div>
+    </div>
   );
 }

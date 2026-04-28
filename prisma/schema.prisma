@@ -181,6 +181,13 @@ model Tenant {
   // /account-suspended landing page so the tenant owner has a path to resolve.
   suspensionReason String?
 
+  // Storage-quota warning email — bumped to "now" the first time a
+  // post-upload check finds the tenant past 85% of their quota, and
+  // cleared back to null when usage drops below the 75% reset
+  // threshold. The hysteresis stops a tenant who's hovering around
+  // 85% from getting a flood of warnings as files get added/removed.
+  storageWarningEmailSentAt DateTime?
+
   // ── Phase 1 (Core SaaS Foundation): environment + lifecycle fields ──
   // `environment` separates real paying customers from test/demo tenants
   // used for sales demos, QA, and internal playground accounts. The

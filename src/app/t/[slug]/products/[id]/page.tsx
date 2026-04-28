@@ -16,6 +16,7 @@ import {
   addProductTier,
   deleteProductTier,
 } from "@/app/actions/products";
+import { isEntitled } from "@/lib/entitlements";
 
 export default async function ProductDetailPage({
   params,
@@ -25,6 +26,11 @@ export default async function ProductDetailPage({
   const { slug, id } = await params;
   const ctx = await requirePermission(slug, "products:view");
   const canManage = ctx.can("products:manage");
+  // Quantity tiers (volume discounts) are part of advanced pricing.
+  // We hide the "Quantity breaks" card entirely on plans without it
+  // rather than showing a paywall here — the rest of the product
+  // editor is still useful for Essentials shops.
+  const hasAdvancedPricing = await isEntitled(ctx.tenant.id, ctx.tenant.plan, "advancedPricing");
 
   const product = await db.product.findFirst({
     where: { id, tenantId: ctx.tenant.id },
@@ -282,6 +288,7 @@ export default async function ProductDetailPage({
         </div>
       </Card>
 
+      {hasAdvancedPricing && (
       <Card>
         <CardHeader
           title="Quantity breaks"
@@ -338,6 +345,7 @@ export default async function ProductDetailPage({
           )}
         </div>
       </Card>
+      )}
     </div>
   );
 }

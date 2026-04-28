@@ -7,6 +7,7 @@ import { db } from "@/lib/db";
 import { requirePermission } from "@/lib/tenant";
 import { logAudit } from "@/lib/audit";
 import { recordEmailEvent } from "@/lib/email-events";
+import { isEntitled } from "@/lib/entitlements";
 
 const optionalString = z.string().max(200).optional().or(z.literal(""));
 const empty = (s: string | undefined) => (s && s.length > 0 ? s : null);
@@ -22,6 +23,12 @@ const issueSchema = z.object({
 
 export async function issuePortalToken(slug: string, formData: FormData) {
   const ctx = await requirePermission(slug, "customers:edit");
+
+  // Plan gate — customerPortal must be enabled for the tenant's plan.
+  if (!(await isEntitled(ctx.tenant.id, ctx.tenant.plan, "customerPortal"))) {
+    redirect(`/t/${slug}/settings/billing?error=${encodeURIComponent("The customer portal isn't enabled on your plan.")}`);
+  }
+
   const parsed = issueSchema.safeParse(Object.fromEntries(formData.entries()));
   if (!parsed.success) {
     redirect(`/t/${slug}/customers?error=${encodeURIComponent("Invalid portal link input.")}`);

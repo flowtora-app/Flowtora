@@ -46,6 +46,7 @@ import { QuotePortalPreview } from "@/components/quotes/QuotePortalPreview";
 import { AddLineItemBuilder } from "@/components/quotes/AddLineItemBuilder";
 import { AutoSaveForm } from "@/components/AutoSaveForm";
 import { Icon } from "@/components/shell/icons";
+import { isEntitled } from "@/lib/entitlements";
 
 // Phase 6 (transformation) — the old 5-tab editor (Details / Pricing /
 // Notes / Sharing / Activity) collapsed into a single scrollable page
@@ -702,7 +703,12 @@ export default async function QuoteDetailPage({
   const rushPreview = rushPct > 0 && currentSubtotal > 0
     ? Math.round(currentSubtotal * (rushPct / 100) * 100) / 100
     : 0;
-  const canApplyRush = editable && rushPct > 0 && currentSubtotal > 0;
+  // advancedPricing gates the rush-fee surcharge. Hide the button at
+  // both the page level (here) and the action level (applyRushFee
+  // also re-checks). Editable + rushPct > 0 + non-empty subtotal stays
+  // as the existing show-when-meaningful logic.
+  const hasAdvancedPricing = await isEntitled(ctx.tenant.id, ctx.tenant.plan, "advancedPricing");
+  const canApplyRush = editable && rushPct > 0 && currentSubtotal > 0 && hasAdvancedPricing;
 
   // Preview is always visible in the right rail (Phase 6). The `?preview=1`
   // query param from older bookmarks is ignored — the rail renders either

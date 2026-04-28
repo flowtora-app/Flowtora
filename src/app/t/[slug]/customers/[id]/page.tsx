@@ -23,6 +23,7 @@ import {
 } from "@/app/actions/customers";
 import { issuePortalToken, revokePortalToken, deletePortalToken } from "@/app/actions/portal-tokens";
 import { isPortalTokenActive, portalTokenStatusLabel, portalPath } from "@/lib/portal";
+import { isEntitled } from "@/lib/entitlements";
 import { SendMessageWidget } from "@/components/SendMessageWidget";
 import { loadSendContext } from "@/app/actions/message-templates";
 import { replyToPortalMessage, markPortalMessagesRead } from "@/app/actions/portal-messages";
@@ -83,6 +84,11 @@ export default async function CustomerDetailPage({
   const { slug, id } = await params;
   const sp = await searchParams;
   const ctx = await requirePermission(slug, "customers:view");
+  // customerPortal gates the entire portal feature — any "Issue portal
+  // link" affordance hides when the plan doesn't include it. Default
+  // matrix has all plans enabled, so this is mostly future-proofing
+  // for the case where an admin restricts the portal to higher tiers.
+  const hasPortal = await isEntitled(ctx.tenant.id, ctx.tenant.plan, "customerPortal");
   const activityFilter = parseStreamFilter(sp.activity);
 
   const customer = await db.customer.findFirst({
@@ -1038,7 +1044,7 @@ export default async function CustomerDetailPage({
               );
             })}
           </ul>
-          {canEdit && (
+          {canEdit && hasPortal && (
             <form
               action={issuePortalToken.bind(null, slug)}
               className="space-y-3 px-5 py-4"
@@ -1049,6 +1055,21 @@ export default async function CustomerDetailPage({
               <Field label="Expires (optional)" name="expiresAt" type="date" />
               <Button type="submit" variant="secondary">Issue new portal link</Button>
             </form>
+          )}
+          {canEdit && !hasPortal && (
+            <div
+              className="px-5 py-4 text-xs"
+              style={{
+                borderTop: "1px solid var(--border-subtle)",
+                color: "var(--text-muted)",
+              }}
+            >
+              The customer portal isn&apos;t enabled on your plan.{" "}
+              <a href={`/t/${slug}/settings/billing`} className="underline" style={{ color: "var(--accent-primary)" }}>
+                Upgrade
+              </a>{" "}
+              to invite customers to self-serve.
+            </div>
           )}
         </Card>
       </DetailSection>
