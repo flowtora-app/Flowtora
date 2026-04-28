@@ -2,7 +2,6 @@ import Link from "next/link";
 import { notFound } from "next/navigation";
 import { requireTenant } from "@/lib/tenant";
 import { db } from "@/lib/db";
-import { Card, CardHeader } from "@/components/Card";
 import { TextArea, Button } from "@/components/Field";
 import {
   replyToSupportTicket,
@@ -10,17 +9,27 @@ import {
   rateSupportTicket,
 } from "@/app/actions/support";
 
-// Phase 17 Slice D — tenant-side ticket detail. Shows the message thread,
-// lets any active tenant member reply, and lets them close the ticket when
-// the issue is handled. Platform staff controls (priority, assignment)
-// live on the mirror /platform/support/[id] page.
+// /t/[slug]/support/[id] — tenant ticket detail (transformation rewrite).
+//
+// Conversation thread + reply box + rating widget when resolved. Internal
+// staff notes are filtered out at the query level so a rendering bug
+// can never accidentally show them to the tenant.
+//
+// Polish-only rewrite: same data, same actions, new tokens / structure.
 
-const STATUS_LABELS: Record<string, { label: string; color: string }> = {
-  OPEN:              { label: "Open",              color: "#8bb9ff" },
-  IN_PROGRESS:       { label: "In progress",       color: "#ffc98b" },
-  WAITING_CUSTOMER:  { label: "Waiting on you",    color: "#ffc98b" },
-  RESOLVED:          { label: "Resolved",          color: "#7dd688" },
-  CLOSED:            { label: "Closed",            color: "var(--muted)" },
+const STATUS_TONE: Record<string, { bg: string; fg: string; label: string }> = {
+  OPEN:             { bg: "var(--accent-surface)",  fg: "var(--accent-primary)", label: "Open" },
+  IN_PROGRESS:      { bg: "var(--warning-surface)", fg: "var(--warning-fg)",     label: "In progress" },
+  WAITING_CUSTOMER: { bg: "var(--warning-surface)", fg: "var(--warning-fg)",     label: "Waiting on you" },
+  RESOLVED:         { bg: "var(--success-surface)", fg: "var(--success-fg)",     label: "Resolved" },
+  CLOSED:           { bg: "var(--surface-2)",       fg: "var(--text-muted)",     label: "Closed" },
+};
+
+const PRIORITY_TONE: Record<string, string> = {
+  URGENT: "var(--danger-fg)",
+  HIGH:   "var(--warning-fg)",
+  NORMAL: "var(--accent-primary)",
+  LOW:    "var(--border-default)",
 };
 
 export default async function TenantSupportDetailPage({
@@ -37,8 +46,6 @@ export default async function TenantSupportDetailPage({
   const ticket = await db.supportTicket.findFirst({
     where: { id, tenantId: ctx.tenant.id },
     include: {
-      // Phase 20 — strip internal staff notes at query time so there's no
-      // way a rendering bug accidentally shows them to the tenant.
       messages: {
         where:   { internal: false },
         orderBy: { createdAt: "asc" },
@@ -47,8 +54,6 @@ export default async function TenantSupportDetailPage({
   });
   if (!ticket) notFound();
 
-  // Look up author names. We mix tenant users + platform staff on the same
-  // thread, so a single `findMany` for every author id is simplest.
   const authorIds = Array.from(
     new Set(ticket.messages.map((m) => m.authorId).filter((x): x is string => Boolean(x))),
   );
@@ -60,47 +65,70 @@ export default async function TenantSupportDetailPage({
     : [];
   const authorById = new Map(authors.map((a) => [a.id, a]));
 
-  const meta = STATUS_LABELS[ticket.status] ?? { label: ticket.status, color: "var(--muted)" };
+  const status = STATUS_TONE[ticket.status] ?? { bg: "var(--surface-2)", fg: "var(--text-muted)", label: ticket.status };
+  const prio   = PRIORITY_TONE[ticket.priority] ?? "var(--border-default)";
   const isActive = ticket.status !== "CLOSED";
+  const canRate  = ticket.status === "RESOLVED" || ticket.status === "CLOSED";
 
   const reply = replyToSupportTicket.bind(null, slug, ticket.id);
   const close = closeSupportTicketAsTenant.bind(null, slug, ticket.id);
   const rate  = rateSupportTicket.bind(null, slug, ticket.id);
 
-  // Rating widget appears once the thread rests. We still show it after
-  // CLOSED so a tenant can rate even after their own close click.
-  const canRate = ticket.status === "RESOLVED" || ticket.status === "CLOSED";
-
   return (
     <div className="mx-auto max-w-3xl space-y-6">
+      {/* ── Header ────────────────────────────────────────── */}
       <div>
-        <div className="text-xs" style={{ color: "var(--muted)" }}>
-          <Link href={`/t/${slug}/support`} className="underline">Support</Link> / ticket {ticket.id.slice(0, 8)}
+        <div className="text-xs" style={{ color: "var(--text-muted)" }}>
+          <Link href={`/t/${slug}/support`} className="hover:underline">
+            Support
+          </Link>
+          <span className="mx-1.5">/</span>
+          <span className="font-mono">#{ticket.id.slice(0, 8)}</span>
         </div>
-        <div className="mt-1 flex items-start justify-between gap-3">
-          <h1 className="text-2xl font-semibold">{ticket.subject}</h1>
-          <span
-            className="rounded-full px-2 py-0.5 text-xs"
-            style={{ color: meta.color, border: `1px solid ${meta.color}` }}
+        <div className="mt-1 flex flex-wrap items-start justify-between gap-3">
+          <h1
+            className="flex items-center gap-3 text-2xl font-semibold tracking-tight"
+            style={{ color: "var(--text-default)" }}
           >
-            {meta.label}
+            <span
+              aria-hidden
+              className="inline-block h-2.5 w-2.5 rounded-full"
+              style={{ background: prio }}
+              title={`Priority: ${ticket.priority}`}
+            />
+            {ticket.subject}
+          </h1>
+          <span
+            className="rounded-full px-2.5 py-0.5 text-xs font-semibold uppercase tracking-wide"
+            style={{ background: status.bg, color: status.fg, border: `1px solid ${status.fg}` }}
+          >
+            {status.label}
           </span>
         </div>
-        <div className="mt-1 text-xs" style={{ color: "var(--muted)" }}>
-          {ticket.category.replace(/_/g, " ")} · priority {ticket.priority.toLowerCase()} · opened{" "}
-          {ticket.createdAt.toISOString().slice(0, 10)}
+        <div className="mt-1 text-xs" style={{ color: "var(--text-muted)" }}>
+          {ticket.category.replace(/_/g, " ").toLowerCase()} ·
+          {" "}priority {ticket.priority.toLowerCase()} ·
+          {" "}opened {ticket.createdAt.toISOString().slice(0, 10)}
         </div>
       </div>
 
       {sp.error && (
         <div
-          className="rounded-md px-4 py-2 text-sm"
-          style={{ background: "#3a1517", color: "#ff8b8b", border: "1px solid #5b2024" }}
+          className="rounded-md px-4 py-3 text-sm"
+          style={{
+            background: "var(--danger-surface)",
+            color: "var(--danger-fg)",
+            border: "1px solid var(--danger-fg)",
+          }}
         >
-          {decodeURIComponent(sp.error)}
+          <div className="font-semibold">Action failed</div>
+          <div className="mt-0.5 text-xs" style={{ opacity: 0.85 }}>
+            {decodeURIComponent(sp.error)}
+          </div>
         </div>
       )}
 
+      {/* ── Thread ────────────────────────────────────────── */}
       <div className="space-y-3">
         {ticket.messages.map((m) => {
           const author = m.authorId ? authorById.get(m.authorId) : null;
@@ -108,69 +136,91 @@ export default async function TenantSupportDetailPage({
           return (
             <div
               key={m.id}
-              className="rounded-md px-4 py-3 text-sm"
+              className="rounded-lg px-4 py-3 text-sm"
               style={{
-                background: m.isStaff ? "#15263a" : "var(--panel)",
-                border: `1px solid ${m.isStaff ? "#2a4a7a" : "var(--border)"}`,
+                background: m.isStaff ? "var(--accent-surface)" : "var(--surface-1)",
+                border: `1px solid ${m.isStaff ? "var(--accent-primary)" : "var(--border-subtle)"}`,
               }}
             >
-              <div className="flex items-center justify-between text-xs" style={{ color: "var(--muted)" }}>
-                <span className="font-medium" style={{ color: m.isStaff ? "#8bb9ff" : "var(--text)" }}>
+              <div className="flex items-baseline justify-between gap-3 text-xs">
+                <span
+                  className="font-semibold"
+                  style={{ color: m.isStaff ? "var(--accent-primary)" : "var(--text-default)" }}
+                >
                   {label}
                 </span>
-                <span>{m.createdAt.toISOString().replace("T", " ").slice(0, 16)}</span>
+                <span style={{ color: "var(--text-muted)" }}>
+                  {m.createdAt.toISOString().replace("T", " ").slice(0, 16)}
+                </span>
               </div>
-              <div className="mt-2 whitespace-pre-wrap">{m.body}</div>
+              <div
+                className="mt-2 whitespace-pre-wrap"
+                style={{ color: "var(--text-default)" }}
+              >
+                {m.body}
+              </div>
             </div>
           );
         })}
       </div>
 
+      {/* ── Reply / close ─────────────────────────────────── */}
       {isActive ? (
-        <Card>
-          <CardHeader title="Reply" />
-          <form action={reply} className="space-y-3 px-5 py-4">
+        <Section title="Reply" description="Add detail, answer a follow-up, or share an update.">
+          <form action={reply} className="space-y-3">
             <TextArea
               label="Message"
               name="body"
               rows={6}
               required
               maxLength={8000}
-              placeholder="Add more info, answer a question, or share an update."
+              placeholder="Type your reply…"
             />
-            <div className="flex items-center justify-end">
+            <div className="flex items-center justify-between gap-3">
+              <form action={close}>
+                <button
+                  type="submit"
+                  className="ts-focus text-xs underline"
+                  style={{ color: "var(--text-muted)" }}
+                >
+                  Close ticket
+                </button>
+              </form>
               <Button type="submit">Send reply</Button>
             </div>
           </form>
-          <form action={close} className="border-t px-5 py-3" style={{ borderColor: "var(--border)" }}>
-            <button type="submit" className="text-xs underline" style={{ color: "var(--muted)" }}>
-              Close ticket
-            </button>
-          </form>
-        </Card>
+        </Section>
       ) : (
         <div
           className="rounded-md px-4 py-3 text-sm"
-          style={{ background: "var(--panel)", border: "1px solid var(--border)", color: "var(--muted)" }}
+          style={{
+            background: "var(--surface-2)",
+            border: "1px solid var(--border-subtle)",
+            color: "var(--text-muted)",
+          }}
         >
-          This ticket is closed. <Link href={`/t/${slug}/support/new`} className="underline">Open a new one</Link> if you need more help.
+          This ticket is closed.{" "}
+          <Link href={`/t/${slug}/support/new`} className="underline" style={{ color: "var(--accent-primary)" }}>
+            Open a new one
+          </Link>{" "}
+          if you need more help.
         </div>
       )}
 
+      {/* ── Rate ──────────────────────────────────────────── */}
       {canRate && (
-        <Card>
-          <CardHeader
-            title={ticket.satisfactionRating ? "Thanks for the rating" : "How did we do?"}
-            description={
-              ticket.satisfactionRating
-                ? `You rated this ${ticket.satisfactionRating}/5 · updating is fine — just resubmit.`
-                : "Let platform support know how this ticket went."
-            }
-          />
-          <form action={rate} className="space-y-3 px-5 py-4">
+        <Section
+          title={ticket.satisfactionRating ? "Thanks for the rating" : "How did we do?"}
+          description={
+            ticket.satisfactionRating
+              ? `You rated this ${ticket.satisfactionRating}/5. Want to update? Just resubmit.`
+              : "A quick rating helps us improve."
+          }
+        >
+          <form action={rate} className="space-y-3">
             <div className="flex items-center gap-2">
               {[1, 2, 3, 4, 5].map((n) => (
-                <label key={n} className="flex items-center gap-1 text-sm">
+                <label key={n} className="flex items-center gap-1 text-sm" style={{ color: "var(--text-default)" }}>
                   <input
                     type="radio"
                     name="rating"
@@ -181,8 +231,8 @@ export default async function TenantSupportDetailPage({
                   {n}
                 </label>
               ))}
-              <span className="ml-2 text-xs" style={{ color: "var(--muted)" }}>
-                1 = poor, 5 = excellent
+              <span className="ml-2 text-xs" style={{ color: "var(--text-muted)" }}>
+                1 = poor · 5 = excellent
               </span>
             </div>
             <TextArea
@@ -193,11 +243,49 @@ export default async function TenantSupportDetailPage({
               defaultValue={ticket.satisfactionComment ?? ""}
             />
             <div className="flex justify-end">
-              <Button type="submit">{ticket.satisfactionRating ? "Update rating" : "Submit rating"}</Button>
+              <Button type="submit">
+                {ticket.satisfactionRating ? "Update rating" : "Submit rating"}
+              </Button>
             </div>
           </form>
-        </Card>
+        </Section>
       )}
     </div>
+  );
+}
+
+function Section({
+  title,
+  description,
+  children,
+}: {
+  title: string;
+  description?: string;
+  children: React.ReactNode;
+}) {
+  return (
+    <section
+      className="overflow-hidden rounded-xl"
+      style={{
+        background: "var(--surface-1)",
+        border: "1px solid var(--border-subtle)",
+        boxShadow: "var(--shadow-sm)",
+      }}
+    >
+      <header
+        className="px-5 py-4"
+        style={{ borderBottom: "1px solid var(--border-subtle)" }}
+      >
+        <h2 className="text-sm font-semibold" style={{ color: "var(--text-default)" }}>
+          {title}
+        </h2>
+        {description && (
+          <p className="mt-0.5 text-xs" style={{ color: "var(--text-muted)" }}>
+            {description}
+          </p>
+        )}
+      </header>
+      <div className="p-5">{children}</div>
+    </section>
   );
 }

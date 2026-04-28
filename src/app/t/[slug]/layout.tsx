@@ -17,6 +17,7 @@ import { loadPalettePins } from "@/lib/palette";
 import { loadActivationReport, shouldShowActivationBanner } from "@/lib/activation";
 import { FinishSetupBanner } from "@/components/FinishSetupBanner";
 import { MemberWelcomeCard } from "@/components/onboarding/MemberWelcomeCard";
+import { FloatingHelpButton } from "@/components/support/FloatingHelpButton";
 
 // Phase 18 Slice B — tenant layout.
 //
@@ -389,6 +390,7 @@ export default async function TenantLayout({
         <UnverifiedEmailBanner email={userRecord.email} />
       )}
       {children}
+      <FloatingHelpButton slug={slug} />
     </AppShell>
   );
 }
