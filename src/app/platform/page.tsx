@@ -36,10 +36,14 @@ type SearchParams = { range?: string; from?: string; to?: string };
 // ──────────────────────────────────────────────────────────────────
 // Platform command-center overview.
 //
-// Layout follows a glance → orient → act progression:
+// Layout follows an act → glance → orient progression — Quick actions
+// sit at the top so the most common admin operations (impersonate,
+// run readiness, etc.) are one click away without scrolling past the
+// dashboards:
+//   Top:                   quick actions
 //   Band 1 (glance, < 5s): alerts rail · MRR hero · health gauge · KPI strip · ops vitals
 //   Band 2 (orient):       revenue trend + plan mix · growth funnel + churn reasons
-//   Band 3 (act):          triage queues · recent activity · quick actions
+//   Band 3 (act, deeper):  triage queues · recent activity
 // ──────────────────────────────────────────────────────────────────
 
 export default async function PlatformOverviewPage({
@@ -54,6 +58,8 @@ export default async function PlatformOverviewPage({
   return (
     <div className="space-y-6">
       <TopBar range={range} />
+
+      <PlatformQuickActions />
 
       <Suspense fallback={<SectionSkeleton height={60} />}>
         <AlertsSection />
@@ -70,8 +76,6 @@ export default async function PlatformOverviewPage({
       <Suspense fallback={<ActSkeleton />}>
         <ActSection />
       </Suspense>
-
-      <PlatformQuickActions />
     </div>
   );
 }
