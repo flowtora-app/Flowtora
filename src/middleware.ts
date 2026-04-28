@@ -70,6 +70,7 @@ const PUBLIC_PREFIXES = [
   "/api/webhooks",
   "/api/signup",
   "/api/track",        // First-party analytics beacon — public visitors
+  "/api/consent",      // GDPR consent audit log — public visitors
   "/accept-invite",
   "/_next",
   "/favicon",

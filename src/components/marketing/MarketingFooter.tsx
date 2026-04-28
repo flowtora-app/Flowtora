@@ -3,6 +3,7 @@ import Link from "next/link";
 import { NewsletterForm } from "./NewsletterForm";
 import { Logomark } from "@/components/brand/BrandMark";
 import { MarketingThemeToggle } from "./MarketingThemeToggle";
+import { ManageCookiesButton } from "@/components/consent/ManageCookiesButton";
 
 // Phase 8 — MarketingFooter.
 //
@@ -150,11 +151,20 @@ export function MarketingFooter() {
             color: "var(--text-faint)",
           }}
         >
-          <div className="flex items-center gap-3">
-            <Logomark size={24} />
-            <span style={{ color: "var(--text-muted)" }}>
-              © {year} Flowtora, Inc. · Built for shops that make real things.
+          <div className="flex flex-col items-start gap-2 md:flex-row md:items-center md:gap-4">
+            <div className="flex items-center gap-3">
+              <Logomark size={24} />
+              <span style={{ color: "var(--text-muted)" }}>
+                © {year} Flowtora, Inc. · Built for shops that make real things.
+              </span>
+            </div>
+            <span aria-hidden style={{ color: "var(--text-faint)" }} className="hidden md:inline">
+              ·
             </span>
+            <ManageCookiesButton
+              className="text-xs underline transition-colors hover:opacity-80"
+              label="Manage cookies"
+            />
           </div>
           <div className="flex items-center gap-4">
             <ul className="flex items-center gap-3">

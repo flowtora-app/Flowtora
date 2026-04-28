@@ -2,7 +2,7 @@
 
 import * as React from "react";
 import { usePathname } from "next/navigation";
-import { getStoredConsent } from "@/components/CookieBanner";
+import { useConsent } from "@/components/consent/CookieConsentProvider";
 
 // Page-view beacon — mounted only inside public marketing-style
 // layouts (marketing site, auth pages, customer portal, share links).
@@ -11,9 +11,11 @@ import { getStoredConsent } from "@/components/CookieBanner";
 //
 // Behavior:
 //   - On mount + every pathname change, POST to /api/track
-//   - Only fires when the visitor has accepted analytics cookies
-//   - Listens for `ts:consent-changed` so a freshly-accepted visitor
-//     gets their first page recorded immediately (no reload needed)
+//   - Only fires when the visitor has consented to ANALYTICS
+//     specifically — necessary-only or all-rejected visitors are
+//     never tracked
+//   - Reactive to consent changes via the CookieConsentProvider
+//     context (no manual storage listeners needed)
 //   - Generates a UUIDv4 sessionId on first call, persists in
 //     localStorage so the same browser session de-dups on the server
 //
@@ -66,40 +68,22 @@ function sendBeacon(payload: { path: string; referrer: string; sessionId: string
 
 export function Tracker() {
   const pathname = usePathname();
-  const [consent, setConsent] = React.useState<"accepted" | "rejected" | null>(null);
+  const { isAllowed, hydrated } = useConsent();
+  const allowed = hydrated && isAllowed("analytics");
 
-  // Pull initial consent state on mount, then keep listening — both
-  // cross-tab via the storage event and same-tab via our custom one.
+  // Beacon on every consented pathname change. Two guards:
+  //   - hydrated, so we don't fire before the localStorage read
+  //   - isAllowed("analytics"), so a visitor who accepted only
+  //     necessary cookies is never tracked
   React.useEffect(() => {
-    setConsent(getStoredConsent());
-    const onCustom = (e: Event) => {
-      const detail = (e as CustomEvent<"accepted" | "rejected">).detail;
-      setConsent(detail);
-    };
-    const onStorage = (e: StorageEvent) => {
-      if (e.key === "ts.cookieConsent") {
-        setConsent(getStoredConsent());
-      }
-    };
-    window.addEventListener("ts:consent-changed", onCustom);
-    window.addEventListener("storage", onStorage);
-    return () => {
-      window.removeEventListener("ts:consent-changed", onCustom);
-      window.removeEventListener("storage", onStorage);
-    };
-  }, []);
-
-  // Beacon on every (consented) pathname change. We DO NOT fire when
-  // pathname is null (rare; SSR fallback) or consent isn't accepted.
-  React.useEffect(() => {
-    if (consent !== "accepted") return;
+    if (!allowed) return;
     if (!pathname) return;
     sendBeacon({
       path: pathname,
       referrer: typeof document !== "undefined" ? document.referrer : "",
       sessionId: getOrCreateSessionId(),
     });
-  }, [pathname, consent]);
+  }, [pathname, allowed]);
 
   return null;
 }

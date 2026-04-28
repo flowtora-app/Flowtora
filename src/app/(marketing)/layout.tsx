@@ -1,7 +1,8 @@
 import { auth } from "@/auth";
 import { MarketingHeader } from "@/components/marketing/MarketingHeader";
 import { MarketingFooter } from "@/components/marketing/MarketingFooter";
-import { CookieBanner } from "@/components/CookieBanner";
+import { CookieConsentProvider } from "@/components/consent/CookieConsentProvider";
+import { CookieBanner, PreferencesModal } from "@/components/consent/CookieBanner";
 import { Tracker } from "@/components/Tracker";
 
 // Phase 18 Slice C — marketing route group.
@@ -23,12 +24,15 @@ export default async function MarketingLayout({ children }: { children: React.Re
   const authed  = !!session?.user?.id;
 
   return (
-    <div className="flex min-h-screen flex-col">
-      <MarketingHeader authed={authed} />
-      <main className="flex-1">{children}</main>
-      <MarketingFooter />
-      <Tracker />
-      <CookieBanner />
-    </div>
+    <CookieConsentProvider>
+      <div className="flex min-h-screen flex-col">
+        <MarketingHeader authed={authed} />
+        <main className="flex-1">{children}</main>
+        <MarketingFooter />
+        <Tracker />
+        <CookieBanner />
+        <PreferencesModal />
+      </div>
+    </CookieConsentProvider>
   );
 }

@@ -4205,3 +4205,58 @@ model PageView {
   @@index([sessionId])
   @@index([path])
 }
+
+// ────────────────────────────────────────────────────────────
+// GDPR proof-of-consent log.
+//
+// Every cookie-banner decision is recorded — accept all, reject all,
+// custom selection, or later withdrawal. Lets the business prove,
+// for any given anonymous browser or signed-in user, exactly what
+// consent was on file at any timestamp. Audit-friendly.
+//
+// Architecture:
+//   - `anonymousId` is a browser-generated UUID stored in localStorage
+//     (and mirrored as a non-httpOnly cookie). Stable across visits
+//     from the same browser, regardless of auth state.
+//   - `userId` is filled when the visitor was signed in at the
+//     moment of the decision; null otherwise.
+//   - `categories` snapshots the granular toggles in their final
+//     state at the moment of consent.
+//   - `version` bumps when cookie-policy text materially changes —
+//     stale versions trigger a re-consent prompt.
+//   - IP is hashed (daily salt, same scheme as PageView) so we can
+//     prove "this consent came from a real visitor" without retaining
+//     PII. Optional and easy to drop entirely.
+// ────────────────────────────────────────────────────────────
+model ConsentLog {
+  id String @id @default(cuid())
+
+  /// Browser-generated UUID. Stable across decisions from the same
+  /// browser. Use this to find a visitor's full consent history.
+  anonymousId String
+
+  /// User id at the moment of consent, if signed in. Null otherwise.
+  userId String?
+
+  /// Cookie-policy version this decision was recorded against.
+  version String
+
+  /// "accepted-all" | "rejected-all" | "custom" | "withdrawn"
+  decision String
+
+  /// Snapshot of category toggles at decision time.
+  /// Shape: { necessary: true, analytics: bool, marketing: bool, preferences: bool }
+  categories Json
+
+  /// Hashed source IP (daily-rotating salt). Optional.
+  ipHash String?
+
+  /// Truncated user-agent string for the audit trail.
+  userAgent String?
+
+  createdAt DateTime @default(now())
+
+  @@index([anonymousId, createdAt])
+  @@index([userId, createdAt])
+  @@index([createdAt])
+}
