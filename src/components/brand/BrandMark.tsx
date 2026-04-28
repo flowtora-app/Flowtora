@@ -1,33 +1,34 @@
 import type { CSSProperties } from "react";
 
-// Shared product brand lockup. Used in the marketing header, the staff
-// TopBar, and the customer-portal footer. Keeping logomark + wordmark
-// co-located ensures the three surfaces can never drift visually.
+// Shared product brand lockup. Used in the sidebar header, marketing
+// header, customer-portal footer, and email footers. Keeping logomark
+// + wordmark co-located ensures every surface stays visually aligned.
 
 export function Logomark({ size = 32 }: { size?: number }) {
   return (
-    <span
-      className="flex items-center justify-center rounded-md font-bold"
-      style={{
-        width: size,
-        height: size,
-        background: "var(--accent-primary)",
-        color: "var(--accent-fg)",
-        fontSize: Math.round(size * 0.4),
-      }}
-    >
-      F
-    </span>
+    // The PNG ships its own dark navy background as part of the artwork,
+    // so we render it as a rounded chip — works equally well in dark
+    // mode (blends with the sidebar surface) and light mode (reads as
+    // a colored brand badge, Discord-style).
+    // eslint-disable-next-line @next/next/no-img-element
+    <img
+      src="/flowtora-logo.png"
+      alt="Flowtora"
+      width={size}
+      height={size}
+      className="block shrink-0 rounded-md"
+      style={{ width: size, height: size }}
+    />
   );
 }
 
 export function Wordmark({ style }: { style?: CSSProperties }) {
   return (
     <span
-      className="font-semibold tracking-tight"
+      className="font-semibold tracking-tight lowercase"
       style={{ color: "var(--text-default)", ...style }}
     >
-      Flowtora
+      flowtora
     </span>
   );
 }

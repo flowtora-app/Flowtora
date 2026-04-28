@@ -4,6 +4,7 @@ import * as React from "react";
 import Link from "next/link";
 import { usePathname } from "next/navigation";
 import { cn } from "@/lib/cn";
+import { Logomark, Wordmark } from "@/components/brand/BrandMark";
 import { Icon, type IconName } from "./icons";
 import { setSidebarCollapsed } from "@/app/actions/ui";
 
@@ -73,7 +74,24 @@ export function Sidebar({
         height: "100vh",
       }}
     >
-      {/* ── Brand / workspace block ────────────────────────────────── */}
+      {/* ── Flowtora brand row ─────────────────────────────────────── */}
+      <Link
+        href="/select-tenant"
+        aria-label="Flowtora home"
+        title={collapsed ? "flowtora" : undefined}
+        className={cn(
+          "ts-focus flex shrink-0 items-center gap-2 px-3 py-3",
+          collapsed && "justify-center px-0",
+        )}
+        style={{ borderBottom: "1px solid var(--border-subtle)" }}
+      >
+        <Logomark size={28} />
+        {!collapsed && (
+          <Wordmark style={{ fontSize: 16, letterSpacing: "-0.01em" }} />
+        )}
+      </Link>
+
+      {/* ── Tenant / workspace block ───────────────────────────────── */}
       <div
         className="shrink-0 px-2.5 pb-2.5 pt-3"
         style={{ borderBottom: "1px solid var(--border-subtle)" }}

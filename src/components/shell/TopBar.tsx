@@ -1,13 +1,11 @@
 "use client";
 
 import * as React from "react";
-import Link from "next/link";
 import { Icon } from "./icons";
 import { Breadcrumbs } from "./Breadcrumbs";
 import { Popover, PopoverItem, PopoverSection } from "./Popover";
 import { NotificationsMenu, type NotificationPreview } from "./NotificationsMenu";
 import { ThemeToggle } from "./ThemeToggle";
-import { Logomark, Wordmark } from "@/components/brand/BrandMark";
 import { cn } from "@/lib/cn";
 import { signOutAction } from "@/app/actions/auth";
 
@@ -90,22 +88,6 @@ export function TopBar({
         borderBottom: "1px solid var(--border-subtle)",
       }}
     >
-      <Link
-        href="/select-tenant"
-        aria-label="Flowtora home"
-        className="ts-focus flex shrink-0 items-center gap-2 rounded-md"
-        title="Flowtora"
-      >
-        <Logomark size={22} />
-        <Wordmark style={{ fontSize: 13 }} />
-      </Link>
-
-      <div
-        aria-hidden
-        className="h-5 w-px shrink-0"
-        style={{ background: "var(--border-subtle)" }}
-      />
-
       <div className="min-w-0 flex-1">
         <Breadcrumbs />
       </div>
