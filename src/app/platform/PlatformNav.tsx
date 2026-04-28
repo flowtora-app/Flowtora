@@ -4,6 +4,7 @@ import * as React from "react";
 import Link from "next/link";
 import { usePathname } from "next/navigation";
 import { cn } from "@/lib/cn";
+import { Logomark, Wordmark } from "@/components/brand/BrandMark";
 import { Icon, type IconName } from "@/components/shell/icons";
 
 // Platform admin sidebar. Visually identical to the tenant Sidebar via
@@ -100,30 +101,41 @@ export function PlatformNav({ roleLabel, signOutAction }: PlatformNavProps) {
         height: "100vh",
       }}
     >
-      {/* ── Brand block ────────────────────────────────────────────── */}
-      <div
-        className="shrink-0 px-2.5 pb-2.5 pt-3"
+      {/* ── Flowtora brand row ─────────────────────────────────────── */}
+      <Link
+        href="/select-tenant"
+        aria-label="Flowtora home"
+        className="ts-focus flex shrink-0 items-center gap-2 px-3 py-3"
         style={{ borderBottom: "1px solid var(--border-subtle)" }}
       >
-        <div className="ts-nav-brand" style={{ cursor: "default" }}>
+        <Logomark size={28} />
+        <Wordmark style={{ fontSize: 16, letterSpacing: "-0.01em" }} />
+      </Link>
+
+      {/* ── Platform context row ───────────────────────────────────── */}
+      <div
+        className="shrink-0 px-3 py-2.5"
+        style={{ borderBottom: "1px solid var(--border-subtle)" }}
+      >
+        <div className="flex items-center gap-2">
           <span
-            className="flex h-8 w-8 shrink-0 items-center justify-center rounded-md"
+            className="inline-flex h-5 w-5 shrink-0 items-center justify-center rounded"
             style={{
-              background: "var(--accent-primary)",
-              color: "var(--accent-fg)",
+              background: "var(--accent-surface)",
+              color: "var(--accent-primary)",
             }}
           >
-            <Icon.Shield size={16} />
+            <Icon.Shield size={12} />
           </span>
-          <div className="min-w-0 flex-1">
+          <div className="min-w-0">
             <div
-              className="truncate text-[13px] font-semibold leading-tight"
+              className="truncate text-[12px] font-medium leading-tight"
               style={{ color: "var(--text-default)" }}
             >
-              Flowtora Platform
+              Platform
             </div>
             <div
-              className="truncate text-[11px] leading-tight"
+              className="truncate text-[10px] leading-tight"
               style={{ color: "var(--text-muted)" }}
             >
               {roleLabel}
