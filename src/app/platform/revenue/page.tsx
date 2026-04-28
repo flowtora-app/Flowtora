@@ -6,12 +6,12 @@ import { TrendChart } from "@/components/charts/TrendChart";
 import { DonutChart, type DonutSlice } from "@/components/charts/DonutChart";
 import { chooseBucketGranularity, bucketKey, buildTrendSeries } from "@/lib/reports";
 import { getAllPlans } from "@/lib/plans";
+import { RevenueDateRangePicker } from "@/components/platform/RevenueDateRangePicker";
 import {
-  RevenueDateRangePicker,
   resolveRange,
   resolveRangeKey,
   type RangeKey,
-} from "@/components/platform/RevenueDateRangePicker";
+} from "@/lib/revenue-range";
 import { RevenueMetricCard } from "@/components/platform/RevenueMetricCard";
 import {
   RevenueInsightStrip,
