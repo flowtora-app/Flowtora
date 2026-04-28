@@ -2,6 +2,7 @@ import { redirect } from "next/navigation";
 import Link from "next/link";
 import { auth, signOut } from "@/auth";
 import { db } from "@/lib/db";
+import { Logomark, Wordmark } from "@/components/brand/BrandMark";
 
 // Workspace picker + post-signup landing pad.
 //
@@ -46,21 +47,8 @@ export default async function SelectTenantPage({
       style={{ background: "var(--surface-0)" }}
     >
       <Link href="/" className="mb-8 inline-flex items-center gap-2">
-        <span
-          className="flex h-8 w-8 items-center justify-center rounded-md text-xs font-bold"
-          style={{
-            background: "var(--accent-primary)",
-            color: "var(--accent-fg)",
-          }}
-        >
-          F
-        </span>
-        <span
-          className="text-base font-semibold tracking-tight"
-          style={{ color: "var(--text-default)" }}
-        >
-          Flowtora
-        </span>
+        <Logomark size={32} />
+        <Wordmark style={{ fontSize: 16 }} />
       </Link>
 
       <div

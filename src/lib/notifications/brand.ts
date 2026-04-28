@@ -27,7 +27,9 @@ export interface BrandSnapshot {
 export const DEFAULT_BRAND: BrandSnapshot = {
   productName: "Flowtora",
   tagline: "A calm ops platform for sign & print shops.",
-  logoUrl: null,
+  // Absolute URL so it renders in offline email clients. The light-bg
+  // variant reads cleanly against the typical white email canvas.
+  logoUrl: "https://flowtora.com/flowtora-logo.png",
   accentColor: "#4f8cff",
   buttonRadiusPx: 10,
   supportEmail: null,

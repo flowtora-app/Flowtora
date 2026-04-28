@@ -127,6 +127,13 @@ export type BrandedContentSection =
 export interface EmailBrand {
   productName: string;
   tagline: string;
+  /**
+   * Absolute URL to the brand logo image rendered in the email header.
+   * When omitted (null), we fall back to a colored chip with the
+   * product's first letter — keeps emails working when no logo is set
+   * (fresh install, custom branding incomplete, etc.).
+   */
+  logoUrl: string | null;
   accentColor: string; // hex
   buttonRadiusPx: number; // 0–16
   supportEmail: string | null;
@@ -140,6 +147,10 @@ export interface EmailBrand {
 const FALLBACK_BRAND: EmailBrand = {
   productName: "Flowtora",
   tagline: "A calm ops platform for sign & print shops.",
+  // Absolute URL — emails are read offline / from external clients,
+  // so the image must be reachable from anywhere. The light-bg
+  // variant reads well against the typical white email canvas.
+  logoUrl: "https://flowtora.com/flowtora-logo.png",
   accentColor: "#4f8cff",
   buttonRadiusPx: 10,
   supportEmail: null,
@@ -313,7 +324,11 @@ export function brandedEmailLayout(opts: {
                     <table role="presentation" cellpadding="0" cellspacing="0" border="0">
                       <tr>
                         <td valign="middle" style="padding-right:10px">
-                          <div style="width:32px;height:32px;background:${accent};border-radius:8px;color:#ffffff;font-family:-apple-system,BlinkMacSystemFont,'Segoe UI',Roboto,Arial,sans-serif;font-weight:700;font-size:15px;text-align:center;line-height:32px">${escape(productInitial)}</div>
+                          ${
+                            brand.logoUrl
+                              ? `<img src="${escape(brand.logoUrl)}" alt="${escape(brand.productName)}" width="32" height="32" style="display:block;width:32px;height:32px;border-radius:8px;border:0" />`
+                              : `<div style="width:32px;height:32px;background:${accent};border-radius:8px;color:#ffffff;font-family:-apple-system,BlinkMacSystemFont,'Segoe UI',Roboto,Arial,sans-serif;font-weight:700;font-size:15px;text-align:center;line-height:32px">${escape(productInitial)}</div>`
+                          }
                         </td>
                         <td valign="middle">
                           <span class="ft-wordmark" style="font-family:-apple-system,BlinkMacSystemFont,'Segoe UI',Roboto,'Helvetica Neue',Arial,sans-serif;font-size:17px;font-weight:600;color:#111827;letter-spacing:-0.2px">${escape(brand.productName)}</span>

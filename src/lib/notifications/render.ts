@@ -45,6 +45,7 @@ function toEmailBrand(brand: BrandSnapshot): EmailBrand {
   return {
     productName: brand.productName,
     tagline: brand.tagline,
+    logoUrl: brand.logoUrl,
     accentColor: brand.accentColor,
     buttonRadiusPx: brand.buttonRadiusPx,
     supportEmail: brand.supportEmail,

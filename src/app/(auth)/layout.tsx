@@ -1,4 +1,5 @@
 import Link from "next/link";
+import { Logomark, Wordmark } from "@/components/brand/BrandMark";
 
 // Phase 18 Slice C — refreshed auth layout.
 //
@@ -29,21 +30,8 @@ export default function AuthLayout({ children }: { children: React.ReactNode }) 
         />
         <div className="relative flex flex-1 flex-col justify-between p-10">
           <Link href="/" className="inline-flex items-center gap-2">
-            <span
-              className="flex h-8 w-8 items-center justify-center rounded-md text-xs font-bold"
-              style={{
-                background: "var(--accent-primary)",
-                color: "var(--accent-fg)",
-              }}
-            >
-              T
-            </span>
-            <span
-              className="text-base font-semibold tracking-tight"
-              style={{ color: "var(--text-default)" }}
-            >
-              Flowtora
-            </span>
+            <Logomark size={32} />
+            <Wordmark style={{ fontSize: 16 }} />
           </Link>
 
           {/* Positioning block. No fake testimonial — a real customer
@@ -84,21 +72,8 @@ export default function AuthLayout({ children }: { children: React.ReactNode }) 
             href="/"
             className="mb-8 inline-flex items-center gap-2 lg:hidden"
           >
-            <span
-              className="flex h-8 w-8 items-center justify-center rounded-md text-xs font-bold"
-              style={{
-                background: "var(--accent-primary)",
-                color: "var(--accent-fg)",
-              }}
-            >
-              T
-            </span>
-            <span
-              className="text-base font-semibold tracking-tight"
-              style={{ color: "var(--text-default)" }}
-            >
-              Flowtora
-            </span>
+            <Logomark size={32} />
+            <Wordmark style={{ fontSize: 16 }} />
           </Link>
           {children}
         </div>
