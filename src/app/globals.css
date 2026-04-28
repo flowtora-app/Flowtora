@@ -551,7 +551,9 @@ button.underline:not([class*="ts-btn"]):not(:disabled):hover {
 
 /* Brand logomark — swap variants based on theme. Default theme is
    dark, so the dark variant shows by default; [data-theme="light"]
-   on <html> flips them. */
-.ts-logo-variant--light { display: none; }
-[data-theme="light"] .ts-logo-variant--dark { display: none; }
-[data-theme="light"] .ts-logo-variant--light { display: block; }
+   on <html> flips them. !important guards against any future Tailwind
+   utility from accidentally winning the cascade and revealing both. */
+.ts-logo-variant--dark { display: block !important; }
+.ts-logo-variant--light { display: none !important; }
+[data-theme="light"] .ts-logo-variant--dark { display: none !important; }
+[data-theme="light"] .ts-logo-variant--light { display: block !important; }

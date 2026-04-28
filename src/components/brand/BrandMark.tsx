@@ -22,7 +22,7 @@ export function Logomark({ size = 32 }: { size?: number }) {
         alt="Flowtora"
         width={size}
         height={size}
-        className="ts-logo-variant ts-logo-variant--dark block"
+        className="ts-logo-variant ts-logo-variant--dark"
         style={dimStyle}
       />
       {/* eslint-disable-next-line @next/next/no-img-element */}
@@ -32,7 +32,7 @@ export function Logomark({ size = 32 }: { size?: number }) {
         aria-hidden
         width={size}
         height={size}
-        className="ts-logo-variant ts-logo-variant--light block"
+        className="ts-logo-variant ts-logo-variant--light"
         style={dimStyle}
       />
     </span>
