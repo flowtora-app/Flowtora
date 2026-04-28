@@ -23,6 +23,9 @@ import {
   toLocalInputValue,
 } from "@/lib/installs";
 import { createInstallEvent } from "@/app/actions/installs";
+import { UpgradeRequired } from "@/components/UpgradeRequired";
+import { isEntitled } from "@/lib/entitlements";
+import { getFeatureGateMeta } from "@/lib/feature-gates";
 import { applyBranchScope, listActiveLocations } from "@/lib/locations";
 import type { Prisma, InstallEventStatus } from "@prisma/client";
 
@@ -44,6 +47,20 @@ export default async function InstallsPage({
   const { slug } = await params;
   const sp = await searchParams;
   const ctx = await requirePermission(slug, "installs:view");
+
+  // Feature gate — install scheduling is Professional+.
+  if (!(await isEntitled(ctx.tenant.id, ctx.tenant.plan, "installScheduling"))) {
+    const meta = getFeatureGateMeta("installScheduling");
+    return (
+      <UpgradeRequired
+        slug={slug}
+        featureName={meta.label}
+        requiredPlan={meta.requiredPlan}
+        reason={meta.reason}
+      />
+    );
+  }
+
   const canManage = ctx.can("installs:manage");
 
   // Week navigation — defaults to the week containing today.

@@ -3,6 +3,9 @@ import { requirePermission } from "@/lib/tenant";
 import { db } from "@/lib/db";
 import { Card, CardHeader } from "@/components/Card";
 import { RangePicker, Stat, Bar } from "@/components/Reports";
+import { UpgradeRequired } from "@/components/UpgradeRequired";
+import { isEntitled } from "@/lib/entitlements";
+import { getFeatureGateMeta } from "@/lib/feature-gates";
 import { resolveRange, resolveBranch, reportQueryString, pct, formatPct, AGING_BUCKETS, daysPastDue, chooseBucketGranularity, bucketKey, buildTrendSeries } from "@/lib/reports";
 import { TrendChart } from "@/components/charts/TrendChart";
 import { DonutChart } from "@/components/charts/DonutChart";
@@ -52,6 +55,20 @@ export default async function FinancialReportPage({
   const { slug } = await params;
   const sp = await searchParams;
   const ctx = await requirePermission(slug, "reports:financial");
+
+  // Feature gate — financial reporting is Professional+.
+  if (!(await isEntitled(ctx.tenant.id, ctx.tenant.plan, "reportsFinancial"))) {
+    const meta = getFeatureGateMeta("reportsFinancial");
+    return (
+      <UpgradeRequired
+        slug={slug}
+        featureName={meta.label}
+        requiredPlan={meta.requiredPlan}
+        reason={meta.reason}
+      />
+    );
+  }
+
   const range = resolveRange(sp);
   const branch = await resolveBranch(ctx.tenant.id, ctx.branchScope, sp.branch);
 

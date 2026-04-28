@@ -1,12 +1,13 @@
 import Link from "next/link";
-import { redirect } from "next/navigation";
 import { requirePermission } from "@/lib/tenant";
 import { db } from "@/lib/db";
 import { Card, CardHeader } from "@/components/Card";
 import { Button } from "@/components/Field";
+import { UpgradeRequired } from "@/components/UpgradeRequired";
 import { getGroupContext } from "@/lib/franchise";
 import { updateGroupRoot, leaveParentGroup } from "@/app/actions/franchise";
 import { isEntitled } from "@/lib/entitlements";
+import { getFeatureGateMeta } from "@/lib/feature-gates";
 
 export default async function FranchiseSettingsPage({
   params,
@@ -20,11 +21,18 @@ export default async function FranchiseSettingsPage({
   const ctx = await requirePermission(slug, "tenant:manage");
 
   // Defense-in-depth: the settings layout hides this tab when the tenant
-  // lacks `franchiseGroup`, but a direct URL must also refuse. Redirect to
-  // billing so the owner sees the upgrade path rather than a 404.
-  const allowed = await isEntitled(ctx.tenant.id, ctx.tenant.plan, "franchiseGroup");
-  if (!allowed) {
-    redirect(`/t/${slug}/settings/billing?error=${encodeURIComponent("Franchise groups require the Enterprise plan.")}`);
+  // lacks `franchiseGroup`, but a direct URL must also refuse. Render the
+  // shared upgrade paywall so the owner sees the upgrade path inline.
+  if (!(await isEntitled(ctx.tenant.id, ctx.tenant.plan, "franchiseGroup"))) {
+    const meta = getFeatureGateMeta("franchiseGroup");
+    return (
+      <UpgradeRequired
+        slug={slug}
+        featureName={meta.label}
+        requiredPlan={meta.requiredPlan}
+        reason={meta.reason}
+      />
+    );
   }
 
   const group = await getGroupContext(ctx.tenant.id);

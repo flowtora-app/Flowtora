@@ -4,6 +4,9 @@ import { requirePermission } from "@/lib/tenant";
 import { db } from "@/lib/db";
 import { Card, CardHeader } from "@/components/Card";
 import { RangePicker } from "@/components/Reports";
+import { UpgradeRequired } from "@/components/UpgradeRequired";
+import { isEntitled } from "@/lib/entitlements";
+import { getFeatureGateMeta } from "@/lib/feature-gates";
 import { resolveRange, rangeQueryString } from "@/lib/reports";
 import { listActiveLocations } from "@/lib/locations";
 import { ACTIVE_ORDER_STATUSES } from "@/lib/orders";
@@ -29,6 +32,20 @@ export default async function BranchComparisonPage({
   const { slug } = await params;
   const sp = await searchParams;
   const ctx = await requirePermission(slug, "reports:view");
+
+  // Feature gate — cross-branch comparison is Enterprise.
+  if (!(await isEntitled(ctx.tenant.id, ctx.tenant.plan, "branchComparison"))) {
+    const meta = getFeatureGateMeta("branchComparison");
+    return (
+      <UpgradeRequired
+        slug={slug}
+        featureName={meta.label}
+        requiredPlan={meta.requiredPlan}
+        reason={meta.reason}
+      />
+    );
+  }
+
   // A single-branch view of "compare branches" would just duplicate the per-
   // domain reports for that one branch. Hide the page entirely from members
   // without cross-view rights.

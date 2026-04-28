@@ -2,6 +2,9 @@ import { requirePermission } from "@/lib/tenant";
 import { db } from "@/lib/db";
 import { Card, CardHeader } from "@/components/Card";
 import { Button, Checkbox, Field } from "@/components/Field";
+import { UpgradeRequired } from "@/components/UpgradeRequired";
+import { isEntitled } from "@/lib/entitlements";
+import { getFeatureGateMeta } from "@/lib/feature-gates";
 import { listAllLocations, ensureDefaultLocation } from "@/lib/locations";
 import {
   createLocation,
@@ -20,6 +23,19 @@ export default async function LocationsSettingsPage({
   const { slug } = await params;
   const sp = await searchParams;
   const ctx = await requirePermission(slug, "locations:manage");
+
+  // Feature gate — multi-location is Enterprise.
+  if (!(await isEntitled(ctx.tenant.id, ctx.tenant.plan, "multiLocation"))) {
+    const meta = getFeatureGateMeta("multiLocation");
+    return (
+      <UpgradeRequired
+        slug={slug}
+        featureName={meta.label}
+        requiredPlan={meta.requiredPlan}
+        reason={meta.reason}
+      />
+    );
+  }
 
   // Self-healing: guarantee the tenant has a default location before we
   // render the list so the settings page is never empty.
