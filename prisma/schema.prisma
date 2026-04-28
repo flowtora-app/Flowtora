@@ -3126,6 +3126,86 @@ enum FeedbackKind {
   OTHER
 }
 
+// ────────────────────────────────────────────────────────────
+// Platform announcements — release notes, maintenance windows,
+// incidents, pricing changes, broadcasts of any kind. One row per
+// communication; no per-tenant dismissal tracking in v1 (the tenant-
+// side banner stores dismissals in localStorage).
+// ────────────────────────────────────────────────────────────
+
+enum AnnouncementType {
+  RELEASE          // shipped a feature
+  NEW_FEATURE      // newly available capability
+  MAINTENANCE      // scheduled maintenance window
+  INCIDENT         // active or recent outage
+  PRICING          // pricing / policy / billing change
+  GENERAL          // catch-all for one-offs
+}
+
+enum AnnouncementPriority {
+  INFO
+  IMPORTANT
+  CRITICAL
+}
+
+enum AnnouncementStatus {
+  DRAFT
+  SCHEDULED
+  PUBLISHED
+  ARCHIVED
+}
+
+enum AnnouncementAudience {
+  ALL
+  PLAN
+  COHORT
+  TENANT
+}
+
+model PlatformAnnouncement {
+  id    String @id @default(cuid())
+  title String
+  // Plain or markdown — rendered with whitespace-pre-wrap on the
+  // tenant-side banner; full markdown rendering can come later.
+  body String @default("")
+
+  type     AnnouncementType     @default(GENERAL)
+  priority AnnouncementPriority @default(INFO)
+  status   AnnouncementStatus   @default(DRAFT)
+
+  // ── Targeting ──
+  // Audience selector + parallel arrays. ALL ignores everything else.
+  // PLAN  matches if tenant.plan ∈ audiencePlans.
+  // COHORT matches if tenant.betaCohort ∈ audienceCohorts.
+  // TENANT matches if tenant.id ∈ audienceTenantIds.
+  audience          AnnouncementAudience @default(ALL)
+  audiencePlans     String[]             @default([])
+  audienceCohorts   String[]             @default([])
+  audienceTenantIds String[]             @default([])
+
+  // ── Scheduling ──
+  // SCHEDULED rows go live when publishAt <= now(). expireAt makes a
+  // row stop appearing without flipping it to ARCHIVED — useful for
+  // maintenance windows that auto-clear.
+  publishAt   DateTime?
+  expireAt    DateTime?
+  publishedAt DateTime? // moment it actually went live; sort key
+
+  // Optional tags shown as small chips, free-form.
+  tags String[] @default([])
+
+  // Author audit — platform staff user id; nullable for system-created
+  // rows we may add later (e.g. auto-generated incident posts).
+  authorId String?
+
+  createdAt DateTime @default(now())
+  updatedAt DateTime @updatedAt
+
+  @@index([status, publishedAt])
+  @@index([type, status])
+  @@index([publishAt])
+}
+
 enum FeedbackStatus {
   NEW
   UNDER_REVIEW

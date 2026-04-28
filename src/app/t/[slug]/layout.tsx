@@ -18,6 +18,8 @@ import { loadActivationReport, shouldShowActivationBanner } from "@/lib/activati
 import { FinishSetupBanner } from "@/components/FinishSetupBanner";
 import { MemberWelcomeCard } from "@/components/onboarding/MemberWelcomeCard";
 import { FloatingHelpButton } from "@/components/support/FloatingHelpButton";
+import { PlatformAnnouncementBanner } from "@/components/PlatformAnnouncementBanner";
+import { activeAnnouncementsForTenant } from "@/app/actions/announcements";
 
 // Phase 18 Slice B — tenant layout.
 //
@@ -389,6 +391,22 @@ export default async function TenantLayout({
       {!userRecord?.emailVerified && userRecord?.email && (
         <UnverifiedEmailBanner email={userRecord.email} />
       )}
+      <PlatformAnnouncementBanner
+        announcements={
+          (await activeAnnouncementsForTenant({
+            id: tenant.id,
+            plan: tenant.plan,
+            betaCohort: tenant.betaCohort,
+          })).map((a) => ({
+            id: a.id,
+            title: a.title,
+            body: a.body,
+            type: a.type,
+            priority: a.priority,
+            updatedAtISO: a.updatedAt.toISOString(),
+          }))
+        }
+      />
       {children}
       <FloatingHelpButton slug={slug} />
     </AppShell>
