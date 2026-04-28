@@ -1,60 +1,156 @@
+"use client";
+
 import * as React from "react";
 import Link from "next/link";
 import { cn } from "@/lib/cn";
+import { Popover } from "@/components/ui/Popover";
 
-// Breadcrumb — a flat list of links leading to the current page. The
-// last item is rendered as plain text (non-link) and slightly stronger.
+// Breadcrumb — hierarchical nav with smart truncation. When the path
+// has more items than `maxItems`, the middle items collapse into a "…"
+// trigger that opens a Popover listing the hidden ones. First and last
+// items always stay visible.
 //
-// Pass `items` as an array of `{ label, href? }`. Items without an
-// `href` render as text — useful for the terminal node, or for an
-// intermediate page the user can't navigate to.
+//   <Breadcrumb items={[
+//     { label: "Customers", href: "/t/demo-shop/customers" },
+//     { label: "Acme Sign Co.", href: "/t/demo-shop/customers/123" },
+//     { label: "Quote QT-2026-0042" }, // last — current page
+//   ]} />
 
 export interface BreadcrumbItem {
   label: React.ReactNode;
   href?: string;
+  /** Optional icon rendered to the left of the label. */
+  icon?: React.ReactNode;
 }
 
 export interface BreadcrumbProps {
   items: BreadcrumbItem[];
+  /** Hard cap before middle items collapse into "…". Default 4. */
+  maxItems?: number;
+  /** Custom separator between items. Default: "/". */
+  separator?: React.ReactNode;
   className?: string;
 }
 
-export function Breadcrumb({ items, className }: BreadcrumbProps) {
+export function Breadcrumb({
+  items,
+  maxItems = 4,
+  separator,
+  className,
+}: BreadcrumbProps) {
+  const sep = separator ?? <Sep />;
+
+  // Compute visible / hidden split.
+  let visible: (BreadcrumbItem | "ellipsis")[];
+  let hidden: BreadcrumbItem[] = [];
+  if (items.length <= maxItems) {
+    visible = items;
+  } else {
+    const first = items[0]!;
+    const last = items[items.length - 1]!;
+    hidden = items.slice(1, -1);
+    visible = [first, "ellipsis", last];
+  }
+
   return (
-    <nav
-      aria-label="Breadcrumb"
-      className={cn("flex flex-wrap items-center gap-1.5 text-xs", className)}
-      style={{ color: "var(--text-muted)" }}
-    >
-      {items.map((item, i) => {
-        const isLast = i === items.length - 1;
-        return (
-          <React.Fragment key={i}>
-            {item.href && !isLast ? (
-              <Link
-                href={item.href}
-                className="rounded px-1 py-0.5 hover:underline"
-                style={{ color: "var(--text-muted)" }}
-              >
-                {item.label}
-              </Link>
-            ) : (
-              <span
-                className="px-1 py-0.5"
-                style={{ color: isLast ? "var(--text-default)" : "var(--text-muted)" }}
-                aria-current={isLast ? "page" : undefined}
-              >
-                {item.label}
-              </span>
-            )}
-            {!isLast && (
-              <span aria-hidden style={{ color: "var(--text-faint)" }}>
-                /
-              </span>
-            )}
-          </React.Fragment>
-        );
-      })}
+    <nav aria-label="Breadcrumb" className={cn("text-xs", className)}>
+      <ol className="flex flex-wrap items-center gap-1.5">
+        {visible.map((item, i) => {
+          const isLast = i === visible.length - 1;
+          return (
+            <li key={i} className="flex items-center gap-1.5">
+              {item === "ellipsis" ? (
+                <Popover
+                  side="bottom"
+                  align="start"
+                  trigger={
+                    <button
+                      type="button"
+                      aria-label={`${hidden.length} hidden levels`}
+                      className="inline-flex h-6 items-center justify-center rounded-md px-1 transition-colors"
+                      style={{
+                        color: "var(--text-muted)",
+                        transitionDuration: "var(--duration-fast)",
+                      }}
+                    >
+                      <DotsIcon />
+                    </button>
+                  }
+                  className="min-w-44 max-w-xs"
+                >
+                  <ol className="flex flex-col gap-0.5 p-1">
+                    {hidden.map((h, hi) => (
+                      <li key={hi}>
+                        {h.href ? (
+                          <Link
+                            href={h.href}
+                            className="flex items-center gap-2 rounded px-2 py-1.5 text-sm transition-colors"
+                            style={{ color: "var(--text-muted)" }}
+                          >
+                            {h.icon}
+                            <span className="truncate">{h.label}</span>
+                          </Link>
+                        ) : (
+                          <span
+                            className="flex items-center gap-2 px-2 py-1.5 text-sm"
+                            style={{ color: "var(--text-faint)" }}
+                          >
+                            {h.icon}
+                            <span className="truncate">{h.label}</span>
+                          </span>
+                        )}
+                      </li>
+                    ))}
+                  </ol>
+                </Popover>
+              ) : item.href && !isLast ? (
+                <Link
+                  href={item.href}
+                  className="inline-flex items-center gap-1.5 rounded transition-colors hover:underline"
+                  style={{ color: "var(--text-muted)" }}
+                >
+                  {item.icon}
+                  <span className="max-w-xs truncate">{item.label}</span>
+                </Link>
+              ) : (
+                <span
+                  aria-current={isLast ? "page" : undefined}
+                  className="inline-flex items-center gap-1.5 font-medium"
+                  style={{
+                    color: isLast ? "var(--text-default)" : "var(--text-muted)",
+                  }}
+                >
+                  {item.icon}
+                  <span className="max-w-xs truncate">{item.label}</span>
+                </span>
+              )}
+              {!isLast && (
+                <span aria-hidden style={{ color: "var(--text-faint)" }}>
+                  {sep}
+                </span>
+              )}
+            </li>
+          );
+        })}
+      </ol>
     </nav>
+  );
+}
+
+function Sep() {
+  return (
+    <svg width={10} height={10} viewBox="0 0 16 16" fill="none" stroke="currentColor" strokeWidth="1.5" strokeLinecap="round" strokeLinejoin="round" aria-hidden>
+      <polyline points="6,3 11,8 6,13" />
+    </svg>
+  );
+}
+
+function DotsIcon() {
+  return (
+    <svg width={14} height={14} viewBox="0 0 16 16" fill="currentColor" aria-hidden>
+      <circle cx="3" cy="8" r="1.5" />
+      <circle cx="8" cy="8" r="1.5" />
+      <circle cx="13" cy="8" r="1.5" />
+    </svg>
   );
 }
