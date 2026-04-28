@@ -91,11 +91,39 @@ export function Sidebar({
         )}
       </Link>
 
-      {/* ── Tenant / workspace block ───────────────────────────────── */}
-      <div
-        className="shrink-0 px-2.5 pb-2.5 pt-3"
-        style={{ borderBottom: "1px solid var(--border-subtle)" }}
+      {/* ── Nav ─────────────────────────────────────────────────────── */}
+      <nav
+        className="flex-1 overflow-y-auto px-2.5 py-3"
+        aria-label="Primary"
       >
+        {sections.map((section) => (
+          <div key={section.label} className="ts-nav-group">
+            {!collapsed && (
+              <div className="ts-nav-group-label">{section.label}</div>
+            )}
+            {section.items.map((item) => (
+              <NavItem
+                key={item.href}
+                item={item}
+                collapsed={collapsed}
+                active={
+                  pathname === item.href ||
+                  pathname.startsWith(item.href + "/")
+                }
+              />
+            ))}
+          </div>
+        ))}
+      </nav>
+
+      {/* ── Bottom cluster ─────────────────────────────────────────── */}
+      <div
+        className="shrink-0 space-y-1 px-2.5 py-2.5"
+        style={{ borderTop: "1px solid var(--border-subtle)" }}
+      >
+        {/* Tenant / workspace block — anchors the bottom cluster like
+            Discord/Slack/Linear. Top of sidebar is reserved for the
+            product brand; tenant identity + switcher lives down here. */}
         <Link
           href={tenantHref}
           title={collapsed ? tenantName : undefined}
@@ -136,38 +164,7 @@ export function Sidebar({
             </>
           )}
         </Link>
-      </div>
 
-      {/* ── Nav ─────────────────────────────────────────────────────── */}
-      <nav
-        className="flex-1 overflow-y-auto px-2.5 py-3"
-        aria-label="Primary"
-      >
-        {sections.map((section) => (
-          <div key={section.label} className="ts-nav-group">
-            {!collapsed && (
-              <div className="ts-nav-group-label">{section.label}</div>
-            )}
-            {section.items.map((item) => (
-              <NavItem
-                key={item.href}
-                item={item}
-                collapsed={collapsed}
-                active={
-                  pathname === item.href ||
-                  pathname.startsWith(item.href + "/")
-                }
-              />
-            ))}
-          </div>
-        ))}
-      </nav>
-
-      {/* ── Bottom cluster ─────────────────────────────────────────── */}
-      <div
-        className="shrink-0 space-y-1 px-2.5 py-2.5"
-        style={{ borderTop: "1px solid var(--border-subtle)" }}
-      >
         <Link
           href={`/t/${slug}/feedback?from=${encodeURIComponent(pathname ?? "")}`}
           title={collapsed ? "Send feedback" : undefined}
