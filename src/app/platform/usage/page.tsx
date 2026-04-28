@@ -1,46 +1,92 @@
 import Link from "next/link";
 import { db } from "@/lib/db";
 import { requirePlatformStaff } from "@/lib/platform";
-import { getAllPlans } from "@/lib/plans";
+import { TrendChart } from "@/components/charts/TrendChart";
+import { RevenueDateRangePicker } from "@/components/platform/RevenueDateRangePicker";
+import { resolveRange, resolveRangeKey, type RangeKey } from "@/lib/revenue-range";
+import { RevenueMetricCard } from "@/components/platform/RevenueMetricCard";
+import {
+  RevenueInsightStrip,
+  type RevenueInsight,
+} from "@/components/platform/RevenueInsightStrip";
+import {
+  UsageHealthBreakdown,
+  type UsageHealthBuckets,
+} from "@/components/platform/UsageHealthBreakdown";
+import {
+  UsageAdoptionBars,
+  type AdoptionRow,
+} from "@/components/platform/UsageAdoptionBars";
+
+// Premium usage & adoption analytics.
+//
+// Layout (top to bottom):
+//   1. Header — title + URL date-range picker
+//   2. Insight strip — auto-generated, ranked alerts
+//   3. Hero metrics — 4 cards with sparklines + period deltas:
+//        Active tenants · MAU · Engagement % · Sign-ups
+//   4. Daily activity trend (line chart, 30 days, distinct active users)
+//      + Tenant health breakdown (Healthy / At Risk / Dormant)
+//   5. Module adoption bars + Active members by plan
+//   6. Power users + Dormant tenants tables
+//
+// Data sources:
+//   - Tenant.lastActivityAt + .createdAt for tenant-level activity
+//   - User.lastLoginAt for MAU/WAU
+//   - AuditLog (tenantId + userId + createdAt) for the daily trend —
+//     gives us a real per-day distinct-user count instead of a single
+//     "last login" snapshot
+//   - Module tables (Quote/Order/Invoice/...) for adoption %
+//
+// All compute server-side from existing tables — no separate
+// telemetry pipeline required.
 
 export const dynamic = "force-dynamic";
 
-// Phase E — Usage / adoption / engagement analytics.
-//
-// Platform staff care about three things here:
-//   1. Which modules are getting traction across the tenant base
-//      (if nobody creates invoices, that's a product problem).
-//   2. Which tenants are "sticky" (lots of recent activity) and which
-//      are going dormant (last login weeks ago) — signals CSMs watch.
-//   3. How long new sign-ups take to reach first value (first quote,
-//      first order, first invoice).
-//
-// Everything is computed from the core transactional tables —
-// Quote/Order/Invoice/Proof + Membership.lastActiveAt + Tenant.
-// No separate telemetry pipeline required.
+const DAY_MS = 86_400_000;
 
-type ModuleStat = {
-  label: string;
-  tenantsUsing: number;    // distinct tenants with ≥1 record
-  recordsAll: number;      // lifetime records
-  records30d: number;      // records created in last 30d
-};
+type SP = Promise<{ range?: string }>;
 
-export default async function PlatformUsagePage() {
+interface TenantHealthInputs {
+  /** lastActivityAt timestamp on the Tenant row (any audit-log write). */
+  lastActivityAt: Date | null;
+  /** Whether the tenant has any record in any module in the last 30d. */
+  hasRecent30d: boolean;
+}
+
+function classifyHealth(t: TenantHealthInputs, now: Date): "healthy" | "atRisk" | "dormant" {
+  if (!t.lastActivityAt) return "dormant";
+  const ageDays = (now.getTime() - t.lastActivityAt.getTime()) / DAY_MS;
+  if (ageDays > 30) return "dormant";
+  if (ageDays <= 7 && t.hasRecent30d) return "healthy";
+  return "atRisk";
+}
+
+export default async function PlatformUsagePage({
+  searchParams,
+}: {
+  searchParams: SP;
+}) {
   await requirePlatformStaff();
+  const sp = await searchParams;
+  const rangeKey: RangeKey = resolveRangeKey(sp.range);
+  const range = resolveRange(rangeKey);
 
   const now = new Date();
-  const day = 86_400_000;
+  const day = DAY_MS;
   const last7d = new Date(now.getTime() - 7 * day);
   const last30d = new Date(now.getTime() - 30 * day);
+  const last60d = new Date(now.getTime() - 60 * day);
 
+  // ── Parallel data fetch ──────────────────────────────────────────
   const [
-    tenantCountAll,
-    activeTenants,
+    tenants,
     membersActive7d,
     membersActive30d,
-    newSignups30d,
-    // Module usage — tenants using each + total + 30d
+    membersActivePrev30d,
+    activeAuditLogs30d,
+    newSignupsRange,
+    newSignupsPrev,
     quoteStats30, quoteAll, quoteTenants,
     orderStats30, orderAll, orderTenants,
     invoiceStats30, invoiceAll, invoiceTenants,
@@ -48,27 +94,45 @@ export default async function PlatformUsagePage() {
     installStats30, installAll, installTenants,
     taskStats30, taskAll, taskTenants,
     customerStats30, customerAll, customerTenants,
-    // Usage by plan
-    usageByPlan,
-    // Dormant tenants — no membership.lastActiveAt in last 30d
-    dormantTenants,
-    // Most engaged tenants — most Memberships active recently
-    topEngagedTenants,
-    // Onboarding completion
     onboardingDone,
-    // Plan catalog — DB-backed (M6). Drop drafts/archived but keep HIDDEN
-    // so legacy tiers (e.g. Growth) with paying tenants still show.
-    allPlans,
+    activeMembersByPlanRows,
+    topEngagedTenants,
+    plansForLabel,
   ] = await Promise.all([
-    db.tenant.count(),
-    db.tenant.count({ where: { status: { in: ["ACTIVE", "TRIAL"] } } }),
+    db.tenant.findMany({
+      where: { status: { in: ["ACTIVE", "TRIAL"] } },
+      select: {
+        id: true, name: true, slug: true, plan: true, status: true,
+        createdAt: true, lastActivityAt: true,
+        _count: {
+          select: { memberships: true, quotes: true, orders: true, invoices: true },
+        },
+      },
+    }),
     db.user.count({
       where: { lastLoginAt: { gte: last7d }, memberships: { some: {} } },
     }),
     db.user.count({
       where: { lastLoginAt: { gte: last30d }, memberships: { some: {} } },
     }),
-    db.tenant.count({ where: { createdAt: { gte: last30d } } }),
+    db.user.count({
+      where: {
+        lastLoginAt: { gte: last60d, lt: last30d },
+        memberships: { some: {} },
+      },
+    }),
+    // Per-day distinct active users from the audit log — used for the
+    // 30-day DAU sparkline + main trend chart.
+    db.auditLog.findMany({
+      where: { createdAt: { gte: last30d }, userId: { not: null } },
+      select: { userId: true, createdAt: true },
+    }),
+    db.tenant.count({
+      where: { createdAt: { gte: range.start, lt: range.end } },
+    }),
+    db.tenant.count({
+      where: { createdAt: { gte: range.prevStart, lt: range.prevEnd } },
+    }),
 
     db.quote.count({ where: { createdAt: { gte: last30d } } }),
     db.quote.count(),
@@ -98,189 +162,424 @@ export default async function PlatformUsagePage() {
     db.customer.count(),
     db.customer.findMany({ distinct: ["tenantId"], select: { tenantId: true } }),
 
-    // Memberships whose user logged in within 30 days, tagged with the
-    // tenant plan so we can split "active members" by plan tier.
+    db.tenant.count({ where: { onboardingCompletedAt: { not: null } } }),
     db.membership.findMany({
       where: { user: { lastLoginAt: { gte: last30d } } },
       select: { tenantId: true, tenant: { select: { plan: true } } },
     }),
-
-    db.tenant.findMany({
-      where: {
-        status: { in: ["ACTIVE", "TRIAL"] },
-        memberships: {
-          none: { user: { lastLoginAt: { gte: last30d } } },
-        },
-      },
-      orderBy: { updatedAt: "desc" },
-      take: 10,
-      select: { id: true, name: true, plan: true, status: true, createdAt: true },
-    }),
-
     db.tenant.findMany({
       where: { status: { in: ["ACTIVE", "TRIAL"] } },
       orderBy: { memberships: { _count: "desc" } },
-      take: 10,
+      take: 8,
       select: {
         id: true, name: true, plan: true, status: true,
-        _count: { select: { memberships: true, quotes: true, orders: true, invoices: true } },
+        _count: {
+          select: { memberships: true, quotes: true, orders: true, invoices: true },
+        },
       },
     }),
-
-    db.tenant.count({ where: { onboardingCompletedAt: { not: null } } }),
-
-    getAllPlans(),
+    db.pricingPlan.findMany({
+      where: { status: { in: ["PUBLISHED", "HIDDEN"] } },
+      select: { slug: true, name: true },
+    }),
   ]);
 
-  const planList = allPlans.filter(
-    (p) => p.status !== "DRAFT" && p.status !== "ARCHIVED",
-  );
-
-  const modules: ModuleStat[] = [
-    { label: "Customers",     tenantsUsing: customerTenants.length, recordsAll: customerAll, records30d: customerStats30 },
-    { label: "Quotes",        tenantsUsing: quoteTenants.length,    recordsAll: quoteAll,    records30d: quoteStats30 },
-    { label: "Orders",        tenantsUsing: orderTenants.length,    recordsAll: orderAll,    records30d: orderStats30 },
-    { label: "Proofs",        tenantsUsing: proofTenants.length,    recordsAll: proofAll,    records30d: proofStats30 },
-    { label: "Invoices",      tenantsUsing: invoiceTenants.length,  recordsAll: invoiceAll,  records30d: invoiceStats30 },
-    { label: "Install events",tenantsUsing: installTenants.length,  recordsAll: installAll,  records30d: installStats30 },
-    { label: "Tasks",         tenantsUsing: taskTenants.length,     recordsAll: taskAll,     records30d: taskStats30 },
-  ];
-
-  // Tenants using = distinct tenantId across that module. % of active tenants.
-  for (const m of modules) {
-    // noop — just documenting shape
-    void m;
+  // ── Tenant-level recent-activity index ──────────────────────────
+  // For health classification we need to know per-tenant whether
+  // they've created ANY record in the last 30 days. We collect
+  // 30d-distinct tenant lists from each module in a second batch.
+  const tenantsWithRecent = new Set<string>();
+  const recentDistincts = await Promise.all([
+    db.quote.findMany({
+      where: { createdAt: { gte: last30d } },
+      distinct: ["tenantId"], select: { tenantId: true },
+    }),
+    db.order.findMany({
+      where: { createdAt: { gte: last30d } },
+      distinct: ["tenantId"], select: { tenantId: true },
+    }),
+    db.invoice.findMany({
+      where: { createdAt: { gte: last30d } },
+      distinct: ["tenantId"], select: { tenantId: true },
+    }),
+    db.proof.findMany({
+      where: { createdAt: { gte: last30d } },
+      distinct: ["tenantId"], select: { tenantId: true },
+    }),
+    db.installEvent.findMany({
+      where: { createdAt: { gte: last30d } },
+      distinct: ["tenantId"], select: { tenantId: true },
+    }),
+    db.task.findMany({
+      where: { createdAt: { gte: last30d } },
+      distinct: ["tenantId"], select: { tenantId: true },
+    }),
+    db.customer.findMany({
+      where: { createdAt: { gte: last30d } },
+      distinct: ["tenantId"], select: { tenantId: true },
+    }),
+  ]);
+  for (const list of recentDistincts) {
+    for (const r of list) tenantsWithRecent.add(r.tenantId);
   }
 
-  // Activity by plan (DAU-ish — active users in last 30d split by tenant plan)
+  // ── Tenant health classification ─────────────────────────────────
+  let healthy = 0, atRisk = 0, dormant = 0;
+  const dormantList: typeof tenants = [];
+  for (const t of tenants) {
+    const h = classifyHealth(
+      { lastActivityAt: t.lastActivityAt, hasRecent30d: tenantsWithRecent.has(t.id) },
+      now,
+    );
+    if (h === "healthy") healthy++;
+    else if (h === "atRisk") atRisk++;
+    else { dormant++; dormantList.push(t); }
+  }
+  const totalTrackedTenants = tenants.length;
+  const buckets: UsageHealthBuckets = { healthy, atRisk, dormant };
+
+  // ── Daily DAU buckets from the audit log ─────────────────────────
+  const dauByDay = Array.from({ length: 30 }, () => new Set<string>());
+  for (const a of activeAuditLogs30d) {
+    if (!a.userId) continue;
+    const idx = Math.floor((a.createdAt.getTime() - last30d.getTime()) / day);
+    if (idx >= 0 && idx < 30) dauByDay[idx]!.add(a.userId);
+  }
+  const dauSeries = dauByDay.map((s) => s.size);
+  const dauToday = dauSeries[dauSeries.length - 1] ?? 0;
+
+  // ── Tenant-active series + active-tenants count from audit log ──
+  const tenantAuditLogs30 = await db.auditLog.findMany({
+    where: { createdAt: { gte: last30d }, tenantId: { not: null } },
+    select: { tenantId: true, createdAt: true },
+  });
+  const activeTenantIds = new Set<string>();
+  const tenantActiveByDay = Array.from({ length: 30 }, () => new Set<string>());
+  for (const a of tenantAuditLogs30) {
+    if (!a.tenantId) continue;
+    activeTenantIds.add(a.tenantId);
+    const idx = Math.floor((a.createdAt.getTime() - last30d.getTime()) / day);
+    if (idx >= 0 && idx < 30) tenantActiveByDay[idx]!.add(a.tenantId);
+  }
+  const activeTenants30 = activeTenantIds.size;
+  const tenantSparkSeries = tenantActiveByDay.map((s) => s.size);
+
+  const engagementRate = totalTrackedTenants > 0
+    ? activeTenants30 / totalTrackedTenants
+    : 0;
+
+  const mauDeltaPct = membersActivePrev30d === 0
+    ? (membersActive30d > 0 ? 1 : 0)
+    : (membersActive30d - membersActivePrev30d) / membersActivePrev30d;
+
+  const signupsDeltaPct = newSignupsPrev === 0
+    ? (newSignupsRange > 0 ? 1 : 0)
+    : (newSignupsRange - newSignupsPrev) / newSignupsPrev;
+
+  // ── Trend chart data — 30 days of DAU ────────────────────────────
+  const trendData = dauSeries.map((value, i) => {
+    const d = new Date(last30d.getTime() + i * day);
+    return {
+      label: d.toISOString().slice(5, 10), // MM-DD
+      "Active users": value,
+    };
+  });
+
+  // ── Module adoption rows ─────────────────────────────────────────
+  const moduleRows: AdoptionRow[] = [
+    { label: "Customers",      tenantsUsing: customerTenants.length, recordsAll: customerAll, records30d: customerStats30 },
+    { label: "Quotes",         tenantsUsing: quoteTenants.length,    recordsAll: quoteAll,    records30d: quoteStats30 },
+    { label: "Orders",         tenantsUsing: orderTenants.length,    recordsAll: orderAll,    records30d: orderStats30 },
+    { label: "Proofs",         tenantsUsing: proofTenants.length,    recordsAll: proofAll,    records30d: proofStats30 },
+    { label: "Invoices",       tenantsUsing: invoiceTenants.length,  recordsAll: invoiceAll,  records30d: invoiceStats30 },
+    { label: "Install events", tenantsUsing: installTenants.length,  recordsAll: installAll,  records30d: installStats30 },
+    { label: "Tasks",          tenantsUsing: taskTenants.length,     recordsAll: taskAll,     records30d: taskStats30 },
+  ].sort((a, b) => b.tenantsUsing - a.tenantsUsing);
+
+  // ── Active members by plan ───────────────────────────────────────
   const activeMembersByPlan = new Map<string, number>();
-  for (const m of usageByPlan) {
+  for (const m of activeMembersByPlanRows) {
     const k = m.tenant.plan;
     activeMembersByPlan.set(k, (activeMembersByPlan.get(k) ?? 0) + 1);
   }
+  const planLabelByEnum = new Map<string, string>();
+  for (const p of plansForLabel) planLabelByEnum.set(p.slug.toUpperCase(), p.name);
 
-  const onboardingRate = tenantCountAll === 0
+  // Onboarding rate — used in the insight strip.
+  const onboardingRate = totalTrackedTenants === 0
     ? 0
-    : Math.round((onboardingDone / tenantCountAll) * 1000) / 10;
+    : Math.round((onboardingDone / totalTrackedTenants) * 1000) / 10;
 
+  // ── Insights ─────────────────────────────────────────────────────
+  const insights = buildUsageInsights({
+    dormantCount: dormant,
+    atRiskCount: atRisk,
+    totalTenants: totalTrackedTenants,
+    mauDeltaPct,
+    onboardingRate,
+    topModule: moduleRows[0],
+    bottomModule: moduleRows[moduleRows.length - 1],
+    activeTenants30,
+    signupsDeltaPct,
+  });
+
+  // ── Render ───────────────────────────────────────────────────────
   return (
-    <div className="space-y-10">
-      <PageHeader
-        title="Usage & adoption"
-        description="Module adoption, active-user trends, and signs of dormancy across all tenants."
-      />
+    <div className="space-y-8">
+      <header className="flex flex-wrap items-end justify-between gap-4">
+        <div>
+          <h1
+            className="text-2xl font-semibold tracking-tight"
+            style={{ color: "var(--text-default)" }}
+          >
+            Usage &amp; adoption
+          </h1>
+          <p className="mt-1 text-sm" style={{ color: "var(--text-muted)" }}>
+            {range.label} · how the platform is being used and where engagement is slipping.
+          </p>
+        </div>
+        <RevenueDateRangePicker />
+      </header>
 
-      {/* ── KPI row ─────────────────────────────────────────────── */}
-      <div className="grid grid-cols-2 gap-4 md:grid-cols-4">
-        <Kpi label="Active tenants"    value={String(activeTenants)}      sub={`of ${tenantCountAll} total`} />
-        <Kpi label="Active members (7 d)"  value={String(membersActive7d)}    sub={`${membersActive30d} in last 30 d`} />
-        <Kpi label="New sign-ups (30 d)"  value={String(newSignups30d)}      sub="Including trials" />
-        <Kpi label="Onboarding completion" value={`${onboardingRate}%`}        sub={`${onboardingDone} tenants finished setup`} />
+      <RevenueInsightStrip insights={insights} />
+
+      {/* ── Hero metrics ────────────────────────────────────────── */}
+      <div className="grid grid-cols-1 gap-4 sm:grid-cols-2 lg:grid-cols-4">
+        <RevenueMetricCard
+          label="Active tenants (30d)"
+          value={activeTenants30.toLocaleString()}
+          hint={`${(engagementRate * 100).toFixed(0)}% of ${totalTrackedTenants} live tenants`}
+          spark={tenantSparkSeries}
+          tone="accent"
+        />
+        <RevenueMetricCard
+          label="Active members (30d)"
+          value={membersActive30d.toLocaleString()}
+          hint={`${membersActive7d} in the last 7d · ${dauToday} today`}
+          deltaPct={mauDeltaPct}
+          spark={dauSeries}
+        />
+        <RevenueMetricCard
+          label="Engagement rate"
+          value={`${(engagementRate * 100).toFixed(0)}%`}
+          hint={`${activeTenants30} of ${totalTrackedTenants} live tenants active in 30d`}
+        />
+        <RevenueMetricCard
+          label={`New sign-ups (${range.label.toLowerCase()})`}
+          value={newSignupsRange.toLocaleString()}
+          hint={`vs ${newSignupsPrev} prior period · ${onboardingRate}% finished onboarding`}
+          deltaPct={signupsDeltaPct}
+        />
       </div>
 
-      {/* ── Module adoption table ──────────────────────────────── */}
-      <section>
-        <SectionHeader title="Module adoption" />
-        <p className="mt-1 text-xs" style={{ color: "var(--text-muted)" }}>
-          Records in the last 30 days, lifetime records, and the number of distinct tenants that have ever created one.
-        </p>
-        <div
-          className="mt-3 overflow-hidden rounded-lg"
-          style={{ background: "var(--surface-1)", border: "1px solid var(--border-subtle)" }}
-        >
-          <table className="w-full text-sm">
-            <thead>
-              <tr className="text-left" style={{ color: "var(--text-muted)" }}>
-                <Th>Module</Th>
-                <Th>Tenants using</Th>
-                <Th>Adoption</Th>
-                <Th>Records (30 d)</Th>
-                <Th>Lifetime</Th>
-              </tr>
-            </thead>
-            <tbody>
-              {modules.map((m) => {
-                const pct = activeTenants === 0 ? 0 : Math.round((m.tenantsUsing / activeTenants) * 100);
+      {/* ── Daily activity trend + tenant health side-by-side ──── */}
+      <div className="grid grid-cols-1 gap-4 lg:grid-cols-3">
+        <Card className="lg:col-span-2">
+          <CardHeader
+            title="Daily active users (30d)"
+            description="Distinct member logins per day, from the audit log."
+          />
+          <div className="px-5 pb-2 pt-2">
+            {dauSeries.some((v) => v > 0) ? (
+              <TrendChart
+                data={trendData}
+                series={[{ key: "Active users", label: "Active users", color: "var(--accent-primary)" }]}
+                height={240}
+                filled
+              />
+            ) : (
+              <div className="py-12 text-center text-sm" style={{ color: "var(--text-muted)" }}>
+                No audited activity in the last 30 days.
+              </div>
+            )}
+          </div>
+        </Card>
+
+        <Card>
+          <CardHeader
+            title="Tenant health"
+            description={`${totalTrackedTenants} live tenants tracked`}
+          />
+          <div className="px-5 pb-5 pt-3">
+            <UsageHealthBreakdown buckets={buckets} total={totalTrackedTenants} />
+          </div>
+        </Card>
+      </div>
+
+      {/* ── Adoption + plan-mix ─────────────────────────────────── */}
+      <div className="grid grid-cols-1 gap-4 lg:grid-cols-3">
+        <Card className="lg:col-span-2">
+          <CardHeader
+            title="Module adoption"
+            description="Share of tracked tenants who have ever created a record per module · most-adopted first."
+          />
+          <div className="px-5 pb-5 pt-4">
+            <UsageAdoptionBars
+              rows={moduleRows}
+              totalActiveTenants={totalTrackedTenants}
+            />
+          </div>
+        </Card>
+
+        <Card>
+          <CardHeader
+            title="Active members by plan"
+            description="Distinct members logged in within the last 30 days."
+          />
+          {plansForLabel.length === 0 ? (
+            <Empty>No published plans configured yet.</Empty>
+          ) : (
+            <ul>
+              {plansForLabel.map((p) => {
+                const enumKey = p.slug.toUpperCase();
+                const count = activeMembersByPlan.get(enumKey) ?? 0;
+                const totalActiveAcrossPlans = Array.from(activeMembersByPlan.values()).reduce(
+                  (s, n) => s + n,
+                  0,
+                );
+                const share = totalActiveAcrossPlans === 0
+                  ? 0
+                  : Math.round((count / totalActiveAcrossPlans) * 100);
                 return (
-                  <tr key={m.label} style={{ borderTop: "1px solid var(--border-subtle)" }}>
-                    <Td className="font-medium">{m.label}</Td>
-                    <Td>{m.tenantsUsing}</Td>
-                    <Td>
-                      <ShareBar pct={Math.min(100, pct)} />
-                    </Td>
-                    <Td>{m.records30d.toLocaleString()}</Td>
-                    <Td muted>{m.recordsAll.toLocaleString()}</Td>
-                  </tr>
+                  <li
+                    key={p.slug}
+                    className="px-5 py-3"
+                    style={{ borderTop: "1px solid var(--border-subtle)" }}
+                  >
+                    <div className="flex items-center justify-between gap-3">
+                      <span
+                        className="text-sm"
+                        style={{ color: "var(--text-default)" }}
+                      >
+                        {p.name}
+                      </span>
+                      <span
+                        className="text-sm font-semibold tabular-nums"
+                        style={{ color: "var(--text-default)" }}
+                      >
+                        {count}
+                      </span>
+                    </div>
+                    <div
+                      className="mt-1 h-1 w-full overflow-hidden rounded-full"
+                      style={{ background: "var(--surface-3)" }}
+                    >
+                      <div
+                        className="h-full rounded-full"
+                        style={{ width: `${share}%`, background: "var(--accent-primary)" }}
+                      />
+                    </div>
+                  </li>
                 );
               })}
-            </tbody>
-          </table>
-        </div>
-      </section>
+            </ul>
+          )}
+        </Card>
+      </div>
 
-      {/* ── Usage by plan ──────────────────────────────────────── */}
-      <section>
-        <SectionHeader title="Active members by plan (30 d)" />
-        <div
-          className="mt-3 grid grid-cols-2 gap-4 md:grid-cols-4"
-        >
-          {planList.map((plan) => {
-            // The membership query groups by tenant.plan (legacy enum);
-            // our slugs are lowercase mirrors of the enum per seed, so
-            // slug.toUpperCase() matches the map key.
-            const enumKey = plan.slug.toUpperCase();
-            return (
-              <div
-                key={plan.id}
-                className="rounded-lg px-4 py-4"
-                style={{ background: "var(--surface-1)", border: "1px solid var(--border-subtle)" }}
-              >
-                <div className="text-xs" style={{ color: "var(--text-muted)" }}>{plan.name}</div>
-                <div className="mt-1 text-2xl font-semibold">
-                  {activeMembersByPlan.get(enumKey) ?? 0}
-                </div>
-                <div className="mt-0.5 text-xs" style={{ color: "var(--text-faint)" }}>
-                  distinct active members
-                </div>
-              </div>
-            );
-          })}
-        </div>
-      </section>
-
-      {/* ── Dormant + engaged ──────────────────────────────────── */}
-      <div className="grid grid-cols-1 gap-4 lg:grid-cols-2">
-        <section>
-          <SectionHeader title="Going dormant" count={dormantTenants.length} tone="warning" />
-          <p className="mt-1 text-xs" style={{ color: "var(--text-muted)" }}>
-            Active / trial tenants where no member has been active in 30+ days. Candidate churn.
-          </p>
-          <div
-            className="mt-3 overflow-hidden rounded-lg"
-            style={{ background: "var(--surface-1)", border: "1px solid var(--border-subtle)" }}
-          >
-            {dormantTenants.length === 0 ? (
-              <Empty>No dormant tenants. Engagement is healthy.</Empty>
-            ) : (
-              <ul>
-                {dormantTenants.map((t) => {
-                  const age = Math.ceil((Date.now() - t.createdAt.getTime()) / day);
-                  return (
-                    <li
-                      key={t.id}
-                      className="flex items-center justify-between gap-3 px-4 py-3"
-                      style={{ borderTop: "1px solid var(--border-subtle)" }}
-                    >
-                      <div className="min-w-0">
-                        <Link href={`/platform/tenants/${t.id}`} className="truncate text-sm font-medium underline">
+      {/* ── Power users + dormant ───────────────────────────────── */}
+      <div id="dormant-list" className="grid grid-cols-1 gap-4 lg:grid-cols-2">
+        <Card>
+          <CardHeader
+            title="Power users"
+            description="Highest-engagement tenants by team size + records · your product showcases."
+          />
+          {topEngagedTenants.length === 0 ? (
+            <Empty>No tenant data yet.</Empty>
+          ) : (
+            <ul>
+              {topEngagedTenants.map((t, i) => {
+                const total = t._count.quotes + t._count.orders + t._count.invoices;
+                return (
+                  <li
+                    key={t.id}
+                    className="px-5 py-3"
+                    style={{ borderTop: "1px solid var(--border-subtle)" }}
+                  >
+                    <div className="flex items-center gap-3">
+                      <span
+                        className="inline-flex h-6 w-6 shrink-0 items-center justify-center rounded-md text-[11px] font-semibold"
+                        style={{
+                          background: i < 3 ? "var(--success-surface)" : "var(--surface-2)",
+                          color: i < 3 ? "var(--success-fg)" : "var(--text-muted)",
+                        }}
+                      >
+                        {i + 1}
+                      </span>
+                      <div className="min-w-0 flex-1">
+                        <Link
+                          href={`/platform/tenants/${t.id}`}
+                          className="truncate text-sm font-medium underline"
+                          style={{ color: "var(--text-default)" }}
+                        >
                           {t.name}
                         </Link>
-                        <div className="text-xs" style={{ color: "var(--text-muted)" }}>
-                          {t.plan} · {t.status} · created {age}d ago
+                        <div
+                          className="truncate text-xs"
+                          style={{ color: "var(--text-muted)" }}
+                        >
+                          {planLabelByEnum.get(t.plan) ?? t.plan.toLowerCase()} ·{" "}
+                          {t._count.memberships} member{t._count.memberships === 1 ? "" : "s"} ·{" "}
+                          {total.toLocaleString()} record{total === 1 ? "" : "s"}
+                        </div>
+                      </div>
+                    </div>
+                  </li>
+                );
+              })}
+            </ul>
+          )}
+        </Card>
+
+        <Card>
+          <CardHeader
+            title="At risk / dormant"
+            description={
+              dormantList.length === 0
+                ? "Engagement is healthy across the board."
+                : `${dormantList.length} live tenants with no activity in 30+ days`
+            }
+            tone={dormantList.length > 0 ? "warning" : "neutral"}
+          />
+          {dormantList.length === 0 ? (
+            <Empty>No dormant tenants.</Empty>
+          ) : (
+            <ul>
+              {dormantList.slice(0, 8).map((t) => {
+                const ageDays = Math.ceil(
+                  (Date.now() - t.createdAt.getTime()) / day,
+                );
+                const lastSeen = t.lastActivityAt
+                  ? Math.ceil((Date.now() - t.lastActivityAt.getTime()) / day)
+                  : null;
+                return (
+                  <li
+                    key={t.id}
+                    className="px-5 py-3"
+                    style={{ borderTop: "1px solid var(--border-subtle)" }}
+                  >
+                    <div className="flex items-center justify-between gap-3">
+                      <div className="min-w-0">
+                        <Link
+                          href={`/platform/tenants/${t.id}`}
+                          className="truncate text-sm font-medium underline"
+                          style={{ color: "var(--text-default)" }}
+                        >
+                          {t.name}
+                        </Link>
+                        <div
+                          className="truncate text-xs"
+                          style={{ color: "var(--text-muted)" }}
+                        >
+                          {planLabelByEnum.get(t.plan) ?? t.plan.toLowerCase()} ·{" "}
+                          created {ageDays}d ago
+                          {lastSeen != null && lastSeen !== ageDays
+                            ? ` · last seen ${lastSeen}d ago`
+                            : " · never seen"}
                         </div>
                       </div>
                       <span
-                        className="rounded-md px-1.5 py-0.5 text-[11px] font-semibold"
+                        className="rounded-full px-2 py-0.5 text-[11px] font-semibold uppercase tracking-wide"
                         style={{
                           background: "var(--warning-surface)",
                           color: "var(--warning-fg)",
@@ -288,143 +587,155 @@ export default async function PlatformUsagePage() {
                       >
                         At risk
                       </span>
-                    </li>
-                  );
-                })}
-              </ul>
-            )}
-          </div>
-        </section>
-
-        <section>
-          <SectionHeader title="Most engaged tenants" />
-          <p className="mt-1 text-xs" style={{ color: "var(--text-muted)" }}>
-            Ordered by team size and total records. These are your "product showcases".
-          </p>
-          <div
-            className="mt-3 overflow-hidden rounded-lg"
-            style={{ background: "var(--surface-1)", border: "1px solid var(--border-subtle)" }}
-          >
-            {topEngagedTenants.length === 0 ? (
-              <Empty>No data yet.</Empty>
-            ) : (
-              <ul>
-                {topEngagedTenants.map((t) => {
-                  const total = t._count.quotes + t._count.orders + t._count.invoices;
-                  return (
-                    <li
-                      key={t.id}
-                      className="flex items-center justify-between gap-3 px-4 py-3"
-                      style={{ borderTop: "1px solid var(--border-subtle)" }}
-                    >
-                      <div className="min-w-0">
-                        <Link href={`/platform/tenants/${t.id}`} className="truncate text-sm font-medium underline">
-                          {t.name}
-                        </Link>
-                        <div className="text-xs" style={{ color: "var(--text-muted)" }}>
-                          {t.plan} · {t._count.memberships} members · {total} records
-                        </div>
-                      </div>
-                      <span
-                        className="rounded-md px-1.5 py-0.5 text-[11px] font-semibold"
-                        style={{ background: "var(--success-surface)", color: "var(--success-fg)" }}
-                      >
-                        {t._count.memberships} ppl
-                      </span>
-                    </li>
-                  );
-                })}
-              </ul>
-            )}
-          </div>
-        </section>
+                    </div>
+                  </li>
+                );
+              })}
+            </ul>
+          )}
+        </Card>
       </div>
     </div>
   );
 }
 
-// ── Primitives ────────────────────────────────────────────────────
+// ── Insight generator ─────────────────────────────────────────────
 
-function PageHeader({ title, description }: { title: string; description?: string }) {
+function buildUsageInsights(args: {
+  dormantCount: number;
+  atRiskCount: number;
+  totalTenants: number;
+  mauDeltaPct: number;
+  onboardingRate: number;
+  topModule?: AdoptionRow;
+  bottomModule?: AdoptionRow;
+  activeTenants30: number;
+  signupsDeltaPct: number;
+}): RevenueInsight[] {
+  const out: RevenueInsight[] = [];
+
+  if (args.dormantCount > 0) {
+    const sharePct = (args.dormantCount / Math.max(1, args.totalTenants)) * 100;
+    out.push({
+      id: "dormant",
+      tone: "warning",
+      text: `${args.dormantCount} tenant${args.dormantCount === 1 ? "" : "s"} dormant for 30+ days (${sharePct.toFixed(0)}% of base) — outreach window before churn.`,
+      href: "#dormant-list",
+      hrefLabel: "Open list",
+    });
+  }
+
+  if (Math.abs(args.mauDeltaPct) >= 0.1) {
+    const up = args.mauDeltaPct > 0;
+    out.push({
+      id: "mau-delta",
+      tone: up ? "positive" : "warning",
+      text: `Active members ${up ? "up" : "down"} ${(Math.abs(args.mauDeltaPct) * 100).toFixed(0)}% vs prior 30 days.`,
+    });
+  }
+
+  if (args.atRiskCount > 0 && args.dormantCount === 0) {
+    out.push({
+      id: "at-risk",
+      tone: "info",
+      text: `${args.atRiskCount} tenant${args.atRiskCount === 1 ? "" : "s"} sliding toward dormancy — proactive check-in suggested.`,
+    });
+  }
+
+  if (args.onboardingRate < 50 && args.totalTenants > 0) {
+    out.push({
+      id: "onboarding",
+      tone: "warning",
+      text: `Only ${args.onboardingRate}% of tenants have completed onboarding — friction in the setup wizard.`,
+    });
+  }
+
+  if (args.bottomModule && args.bottomModule.tenantsUsing < args.totalTenants * 0.25 && args.totalTenants > 4) {
+    out.push({
+      id: "low-adoption",
+      tone: "info",
+      text: `${args.bottomModule.label} is only used by ${args.bottomModule.tenantsUsing} tenant${args.bottomModule.tenantsUsing === 1 ? "" : "s"} — lowest module adoption.`,
+    });
+  }
+
+  if (args.topModule && args.topModule.tenantsUsing > args.totalTenants * 0.6 && args.totalTenants > 0) {
+    out.push({
+      id: "high-adoption",
+      tone: "positive",
+      text: `${args.topModule.label} is the most-adopted module — used by ${args.topModule.tenantsUsing} of ${args.totalTenants} tenants.`,
+    });
+  }
+
+  if (Math.abs(args.signupsDeltaPct) >= 0.25) {
+    const up = args.signupsDeltaPct > 0;
+    out.push({
+      id: "signups-delta",
+      tone: up ? "positive" : "warning",
+      text: `New sign-ups ${up ? "up" : "down"} ${(Math.abs(args.signupsDeltaPct) * 100).toFixed(0)}% vs prior period.`,
+    });
+  }
+
+  // Cap at 4, warnings before info before positives.
+  const order: Record<string, number> = { warning: 0, info: 1, positive: 2 };
+  return out
+    .sort((a, b) => (order[a.tone] ?? 9) - (order[b.tone] ?? 9))
+    .slice(0, 4);
+}
+
+// ── Local primitives ──────────────────────────────────────────────
+
+function Card({ className, children }: { className?: string; children: React.ReactNode }) {
   return (
-    <div>
-      <h1 className="text-2xl font-semibold">{title}</h1>
-      {description && (
-        <p className="mt-1 text-sm" style={{ color: "var(--text-muted)" }}>
-          {description}
-        </p>
-      )}
+    <div
+      className={`overflow-hidden rounded-xl ${className ?? ""}`}
+      style={{
+        background: "var(--surface-1)",
+        border: "1px solid var(--border-subtle)",
+        boxShadow: "var(--shadow-sm)",
+      }}
+    >
+      {children}
     </div>
   );
 }
 
-function Kpi({ label, value, sub }: { label: string; value: string; sub?: string }) {
-  return (
-    <div className="rounded-lg px-4 py-4" style={{ background: "var(--surface-1)", border: "1px solid var(--border-subtle)" }}>
-      <div className="text-xs" style={{ color: "var(--text-muted)" }}>{label}</div>
-      <div className="mt-1 text-2xl font-semibold">{value}</div>
-      {sub && <div className="mt-0.5 text-xs" style={{ color: "var(--text-muted)" }}>{sub}</div>}
-    </div>
-  );
-}
-
-function SectionHeader({
+function CardHeader({
   title,
-  count,
+  description,
   tone = "neutral",
 }: {
   title: string;
-  count?: number;
+  description?: string;
   tone?: "neutral" | "warning";
 }) {
   return (
-    <h2 className="flex items-center gap-2 text-sm font-semibold uppercase tracking-wider" style={{ color: "var(--text-muted)" }}>
-      {title}
-      {count != null && (
-        <span
-          className="rounded-full px-1.5 py-0.5 text-[10px] font-semibold"
+    <div
+      className="flex items-baseline justify-between gap-3 px-5 py-4"
+      style={{ borderBottom: "1px solid var(--border-subtle)" }}
+    >
+      <div>
+        <h2
+          className="text-sm font-semibold"
           style={{
-            background: tone === "warning" ? "var(--warning-surface)" : "var(--surface-2)",
-            color: tone === "warning" ? "var(--warning-fg)" : "var(--text-muted)",
+            color: tone === "warning" ? "var(--warning-fg)" : "var(--text-default)",
           }}
         >
-          {count}
-        </span>
-      )}
-    </h2>
-  );
-}
-
-function Th({ children }: { children: React.ReactNode }) {
-  return <th className="px-4 py-3 text-xs font-normal uppercase tracking-wider">{children}</th>;
-}
-function Td({
-  children,
-  muted,
-  className,
-}: { children: React.ReactNode; muted?: boolean; className?: string }) {
-  return (
-    <td className={`px-4 py-3 ${className ?? ""}`} style={muted ? { color: "var(--text-muted)" } : undefined}>
-      {children}
-    </td>
-  );
-}
-function Empty({ children }: { children: React.ReactNode }) {
-  return <p className="px-4 py-6 text-center text-sm" style={{ color: "var(--text-muted)" }}>{children}</p>;
-}
-
-function ShareBar({ pct }: { pct: number }) {
-  return (
-    <div className="flex items-center gap-2">
-      <div className="h-1.5 w-24 overflow-hidden rounded-full" style={{ background: "var(--surface-2)" }}>
-        <div
-          className="h-full rounded-full"
-          style={{ width: `${pct}%`, background: "var(--accent-primary)" }}
-        />
+          {title}
+        </h2>
+        {description && (
+          <p className="mt-0.5 text-xs" style={{ color: "var(--text-muted)" }}>
+            {description}
+          </p>
+        )}
       </div>
-      <span className="w-10 text-xs tabular-nums" style={{ color: "var(--text-muted)" }}>
-        {pct}%
-      </span>
+    </div>
+  );
+}
+
+function Empty({ children }: { children: React.ReactNode }) {
+  return (
+    <div className="px-5 py-8 text-center text-sm" style={{ color: "var(--text-muted)" }}>
+      {children}
     </div>
   );
 }
