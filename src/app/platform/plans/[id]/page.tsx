@@ -5,7 +5,6 @@ import { requirePlatformStaff } from "@/lib/platform";
 import {
   savePlanDetails,
   savePlanPricing,
-  savePlanFeatures,
   savePlanMarketing,
   publishPlan,
   unpublishPlan,
@@ -23,6 +22,7 @@ import { formatMoney } from "@/lib/format";
 import { PlanHeaderBar } from "@/components/platform/PlanHeaderBar";
 import { PlanTabs, type PlanTabKey, type PlanTab } from "@/components/platform/PlanTabs";
 import { PlanCardPreview, type PlanCardData } from "@/components/platform/PlanCardPreview";
+import { PlanFeaturesEditor } from "@/components/platform/PlanFeaturesEditor";
 
 // /platform/plans/[id] — plan editor (transformation rewrite).
 //
@@ -246,7 +246,12 @@ export default async function PlatformPlanEditorPage({
         <PricingTab plan={plan} cardData={cardData} canWrite={canWrite} />
       )}
       {activeTab === "features"  && (
-        <FeaturesTab plan={plan} features={allFeatures} valueByFeature={valueByFeature} canWrite={canWrite} />
+        <PlanFeaturesEditor
+          planId={plan.id}
+          features={allFeatures}
+          valueByFeature={valueByFeature}
+          canWrite={canWrite}
+        />
       )}
       {activeTab === "addons"    && (
         <AddOnsTab plan={plan} addOns={plan.addOns} canWrite={canWrite} />
@@ -481,226 +486,6 @@ function PricingTab({
         </div>
       </div>
     </div>
-  );
-}
-
-// ────────────────────────────────────────────────────────────────
-// FEATURES TAB
-// ────────────────────────────────────────────────────────────────
-
-type PlanFeatureRow = {
-  id: string;
-  key: string;
-  label: string;
-  groupLabel: string | null;
-  description: string | null;
-  valueType: "BOOLEAN" | "NUMBER" | "TEXT";
-  enforcement: "GATE" | "MARKETING_ONLY";
-  sortOrder: number;
-  groupSortOrder: number;
-};
-type PlanFeatureValueRow = {
-  id: string;
-  planId: string;
-  featureId: string;
-  valueBool: boolean | null;
-  valueNumber: number | null;
-  valueText: string | null;
-  footnote: string | null;
-  highlight: boolean;
-};
-
-function FeaturesTab({
-  plan,
-  features,
-  valueByFeature,
-  canWrite,
-}: {
-  plan: { id: string };
-  features: PlanFeatureRow[];
-  valueByFeature: Map<string, PlanFeatureValueRow>;
-  canWrite: boolean;
-}) {
-  const groups = new Map<string, PlanFeatureRow[]>();
-  for (const f of features) {
-    const key = f.groupLabel ?? "Other";
-    const arr = groups.get(key) ?? [];
-    arr.push(f);
-    groups.set(key, arr);
-  }
-
-  if (features.length === 0) {
-    return (
-      <Section
-        title="Features"
-        description="No feature library defined yet."
-      >
-        <p className="px-2 py-6 text-center text-sm" style={{ color: "var(--text-muted)" }}>
-          Run the pricing seed script to populate the feature library.
-        </p>
-      </Section>
-    );
-  }
-
-  return (
-    <form action={savePlanFeatures.bind(null, plan.id)} className="space-y-6">
-      <div
-        className="rounded-md px-4 py-3 text-xs"
-        style={{ background: "var(--surface-2)", color: "var(--text-muted)", border: "1px solid var(--border-subtle)" }}
-      >
-        <b style={{ color: "var(--text-default)" }}>Resolution:</b> tenant override beats global override beats this plan's value.
-        Boolean = checkbox · Numeric: cap (-1 = unlimited) · Text: free-form label · Highlight = render in accent color on /pricing.
-      </div>
-
-      {Array.from(groups.entries()).map(([group, rows]) => (
-        <Section
-          key={group}
-          title={group}
-          description={`${rows.length} feature${rows.length === 1 ? "" : "s"}`}
-        >
-          <ul className="-mx-5 -my-5">
-            {rows.map((f, idx) => {
-              const v = valueByFeature.get(f.id);
-              const enforcementBadge =
-                f.enforcement === "GATE"
-                  ? { label: "Gated", bg: "var(--warning-surface)", fg: "var(--warning-fg)" }
-                  : { label: "Marketing", bg: "var(--surface-2)", fg: "var(--text-muted)" };
-              return (
-                <li
-                  key={f.id}
-                  className="grid gap-3 px-5 py-4 md:grid-cols-[1fr_240px_240px_60px] md:items-start"
-                  style={{ borderTop: idx === 0 ? "none" : "1px solid var(--border-subtle)" }}
-                >
-                  <div className="min-w-0">
-                    <div className="flex flex-wrap items-center gap-2">
-                      <span className="text-sm font-medium" style={{ color: "var(--text-default)" }}>
-                        {f.label}
-                      </span>
-                      <span
-                        className="rounded-full px-1.5 py-0.5 text-[10px] font-medium"
-                        style={{ background: enforcementBadge.bg, color: enforcementBadge.fg }}
-                      >
-                        {enforcementBadge.label}
-                      </span>
-                      <span
-                        className="rounded-full px-1.5 py-0.5 text-[10px] font-medium"
-                        style={{ background: "var(--surface-2)", color: "var(--text-muted)" }}
-                      >
-                        {f.valueType.toLowerCase()}
-                      </span>
-                    </div>
-                    <div className="mt-1 font-mono text-[10px]" style={{ color: "var(--text-faint)" }}>
-                      {f.key}
-                    </div>
-                    {f.description && (
-                      <div className="mt-1 text-xs" style={{ color: "var(--text-muted)" }}>
-                        {f.description}
-                      </div>
-                    )}
-                  </div>
-                  <div>
-                    <FeatureValueInput feature={f} value={v} disabled={!canWrite} />
-                  </div>
-                  <div>
-                    <input
-                      type="text"
-                      name={`feature[${f.id}][footnote]`}
-                      defaultValue={v?.footnote ?? ""}
-                      maxLength={120}
-                      disabled={!canWrite}
-                      placeholder='e.g. "+$12/seat after 15"'
-                      className="ts-focus w-full rounded-md px-2 py-1.5 text-xs outline-none"
-                      style={{
-                        background: "var(--surface-1)",
-                        border: "1px solid var(--border-default)",
-                        color: "var(--text-default)",
-                      }}
-                    />
-                  </div>
-                  <div className="flex items-center justify-center pt-1">
-                    <label className="flex items-center gap-1.5 text-xs" style={{ color: "var(--text-muted)" }}>
-                      <input
-                        type="checkbox"
-                        name={`feature[${f.id}][highlight]`}
-                        defaultChecked={v?.highlight ?? false}
-                        disabled={!canWrite}
-                      />
-                      <span>★</span>
-                    </label>
-                  </div>
-                </li>
-              );
-            })}
-          </ul>
-        </Section>
-      ))}
-
-      {canWrite && (
-        <div className="flex justify-end">
-          <button
-            type="submit"
-            className="ts-focus rounded-md px-4 py-2 text-sm font-medium"
-            style={{ background: "var(--accent-primary)", color: "var(--accent-fg)" }}
-          >
-            Save all features
-          </button>
-        </div>
-      )}
-    </form>
-  );
-}
-
-function FeatureValueInput({
-  feature,
-  value,
-  disabled,
-}: {
-  feature: PlanFeatureRow;
-  value: PlanFeatureValueRow | undefined;
-  disabled: boolean;
-}) {
-  const inputStyle: React.CSSProperties = {
-    background: "var(--surface-1)",
-    border: "1px solid var(--border-default)",
-    color: "var(--text-default)",
-  };
-  if (feature.valueType === "BOOLEAN") {
-    return (
-      <label className="flex items-center gap-2 text-sm" style={{ color: "var(--text-default)" }}>
-        <input
-          type="checkbox"
-          name={`feature[${feature.id}][bool]`}
-          defaultChecked={value?.valueBool ?? false}
-          disabled={disabled}
-        />
-        <span style={{ color: "var(--text-muted)" }}>Included</span>
-      </label>
-    );
-  }
-  if (feature.valueType === "NUMBER") {
-    return (
-      <input
-        type="number"
-        name={`feature[${feature.id}][number]`}
-        defaultValue={value?.valueNumber == null ? "" : String(value.valueNumber)}
-        placeholder="e.g. 5 (-1 unlimited)"
-        disabled={disabled}
-        className="ts-focus w-full rounded-md px-2 py-1.5 text-xs outline-none"
-        style={inputStyle}
-      />
-    );
-  }
-  return (
-    <input
-      type="text"
-      name={`feature[${feature.id}][text]`}
-      defaultValue={value?.valueText ?? ""}
-      placeholder='e.g. "Priority + chat"'
-      maxLength={120}
-      disabled={disabled}
-      className="ts-focus w-full rounded-md px-2 py-1.5 text-xs outline-none"
-      style={inputStyle}
-    />
   );
 }
 
