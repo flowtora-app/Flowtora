@@ -7,17 +7,16 @@ import { cn } from "@/lib/cn";
 import { Logomark, Wordmark } from "@/components/brand/BrandMark";
 import { Icon, type IconName } from "@/components/shell/icons";
 
-// Platform admin sidebar. Visually identical to the tenant Sidebar via
-// the shared `.ts-nav-*` primitives in globals.css. Grouped into five
-// clusters so the 18+ links stay scannable:
-//   Overview      — the dashboard + global search
-//   Business      — revenue, tenants, leads, plans (the money side)
-//   Operations    — support, feedback, readiness, announcements
-//   Reliability   — health, audit log, compliance, feature flags
-//   Admin         — settings + design system (internal knobs)
+// Platform admin sidebar — flat 21-item layout in domain order.
+//
+// Single visual list (no group headers) because the order itself is
+// the cognitive scaffold. Some items are hubs that link to existing
+// surfaces (Marketing, Security, Infrastructure, Legal, Communications);
+// others are previews — the route loads but the page explains the
+// section is on the roadmap.
 //
 // Active state matches by prefix so nested routes keep the parent link
-// highlighted. Overview matches exactly because "/platform" is the
+// highlighted. Dashboard matches exactly because "/platform" is the
 // prefix of every other link in the nav.
 
 type NavItem = {
@@ -32,63 +31,29 @@ type NavItem = {
   preview?: boolean;
 };
 
-type NavGroup = { label: string; items: NavItem[] };
-
-const GROUPS: NavGroup[] = [
-  {
-    label: "Overview",
-    items: [
-      { href: "/platform",        label: "Overview", icon: "Dashboard", exact: true },
-      { href: "/platform/search", label: "Search",   icon: "Search" },
-    ],
-  },
-  {
-    label: "Business",
-    items: [
-      { href: "/platform/revenue",   label: "Revenue",   icon: "Revenue" },
-      { href: "/platform/billing",   label: "Billing ops", icon: "Invoices" },
-      { href: "/platform/analytics", label: "Analytics", icon: "Globe" },
-      { href: "/platform/tenants",   label: "Tenants",   icon: "Building" },
-      { href: "/platform/usage",     label: "Usage",     icon: "Activity" },
-      { href: "/platform/leads",     label: "Leads",     icon: "Target" },
-      { href: "/platform/plans",     label: "Plans",     icon: "Package" },
-      { href: "/platform/features",  label: "Features",  icon: "Sparkles" },
-    ],
-  },
-  {
-    label: "Operations",
-    items: [
-      { href: "/platform/support",       label: "Support",       icon: "Support" },
-      { href: "/platform/feedback",      label: "Feedback",      icon: "MessageSquare" },
-      { href: "/platform/readiness",     label: "Readiness",     icon: "Rocket" },
-      { href: "/platform/announcements", label: "Announcements", icon: "Megaphone", preview: true },
-    ],
-  },
-  {
-    label: "Trust & Safety",
-    items: [
-      { href: "/platform/users", label: "Users",        icon: "Customers" },
-      { href: "/platform/abuse", label: "Abuse & bans", icon: "Shield" },
-    ],
-  },
-  {
-    label: "Reliability",
-    items: [
-      { href: "/platform/health",        label: "Health",        icon: "Heartbeat" },
-      { href: "/platform/audit",         label: "Audit log",     icon: "FileText" },
-      { href: "/platform/compliance",    label: "Compliance",    icon: "Scale" },
-      { href: "/platform/feature-flags", label: "Feature flags", icon: "Flag" },
-    ],
-  },
-  {
-    label: "Admin",
-    items: [
-      { href: "/platform/staff",         label: "Staff & roles", icon: "Shield" },
-      { href: "/platform/notifications", label: "Notifications", icon: "Bell" },
-      { href: "/platform/settings",      label: "Settings",      icon: "Settings" },
-      { href: "/platform/design",        label: "Design system", icon: "Palette" },
-    ],
-  },
+// Single flat list — the user gave us this order, we keep it.
+const NAV_ITEMS: NavItem[] = [
+  { href: "/platform",                  label: "Dashboard",         icon: "Dashboard", exact: true },
+  { href: "/platform/tenants",          label: "Tenants",           icon: "Building" },
+  { href: "/platform/billing",          label: "Billing & Revenue", icon: "Revenue" },
+  { href: "/platform/users",            label: "Users",             icon: "Customers" },
+  { href: "/platform/industry-config",  label: "Industry Config",   icon: "Target",       preview: true },
+  { href: "/platform/cms",              label: "CMS",               icon: "FileText",     preview: true },
+  { href: "/platform/marketing",        label: "Marketing",         icon: "Megaphone" },
+  { href: "/platform/analytics",        label: "Analytics",         icon: "Globe" },
+  { href: "/platform/support",          label: "Support",           icon: "Support" },
+  { href: "/platform/integrations",     label: "Integrations",      icon: "Activity",     preview: true },
+  { href: "/platform/settings",         label: "Settings",          icon: "Settings" },
+  { href: "/platform/security",         label: "Security",          icon: "Shield" },
+  { href: "/platform/infrastructure",   label: "Infrastructure",    icon: "Heartbeat" },
+  { href: "/platform/mobile-apps",      label: "Mobile Apps",       icon: "Monitor",      preview: true },
+  { href: "/platform/legal",            label: "Legal",             icon: "Scale" },
+  { href: "/platform/communications",   label: "Communications",    icon: "MessageSquare" },
+  { href: "/platform/marketplace",      label: "Marketplace",       icon: "Package",      preview: true },
+  { href: "/platform/training",         label: "Training",          icon: "Bookmark",     preview: true },
+  { href: "/platform/ai-automation",    label: "AI & Automation",   icon: "Sparkles",     preview: true },
+  { href: "/platform/resellers",        label: "Resellers",         icon: "Vendors",      preview: true },
+  { href: "/platform/profile",          label: "Profile",           icon: "User" },
 ];
 
 export interface PlatformNavProps {
@@ -141,17 +106,14 @@ export function PlatformNav({
         className="flex-1 overflow-y-auto px-2.5 py-3"
         aria-label="Platform"
       >
-        {GROUPS.map((group) => (
-          <div key={group.label} className="ts-nav-group">
-            <div className="ts-nav-group-label">{group.label}</div>
-            {group.items.map((item) => {
-              const active = item.exact
-                ? pathname === item.href
-                : pathname === item.href || pathname.startsWith(item.href + "/");
-              return <PlatformNavItem key={item.href} item={item} active={active} />;
-            })}
-          </div>
-        ))}
+        <div className="ts-nav-group">
+          {NAV_ITEMS.map((item) => {
+            const active = item.exact
+              ? pathname === item.href
+              : pathname === item.href || pathname.startsWith(item.href + "/");
+            return <PlatformNavItem key={item.href} item={item} active={active} />;
+          })}
+        </div>
       </nav>
 
       {/* ── Bottom cluster ─────────────────────────────────────────── */}
