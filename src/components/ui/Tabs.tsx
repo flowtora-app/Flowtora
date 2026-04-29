@@ -2,23 +2,31 @@ import * as React from "react";
 import Link from "next/link";
 import { cn } from "@/lib/cn";
 
-// Tabs — link-based tabs for server components (no client state). Each
-// tab is a NextLink with an active/inactive visual state driven by the
-// `activeHref` prop. The parent page decides what "active" means — this
-// component stays dumb about pathname matching so it works in any tree.
+// Tabs — Spec Page 0 §0.5.22.
 //
-// Usage:
+// Variants:
+//   line       — underline indicator (default; ideal for in-page nav)
+//   pill       — rounded-md filled active, gray inactive
+//   segmented  — single border container, dividers between tabs
+// Sizes: sm 32, md 36 (default), lg 40.
+// With badge counts.
+// Overflow: horizontal scroll on the parent nav.
+//
+// Link-based for server components. The parent page decides what
+// "active" means via `activeHref`/`prefixMatch`, which keeps Tabs
+// stateless and lets it slot anywhere.
+//
 //   <Tabs
+//     variant="pill"
 //     items={[
 //       { label: "Profile", href: `/t/${slug}/settings/profile` },
 //       { label: "Team",    href: `/t/${slug}/settings/team`, badge: 3 },
 //     ]}
 //     activeHref={currentPath}
 //   />
-//
-// For a controlled (non-link) tab surface we'll add a separate
-// <ButtonTabs> later — most of our UI is server-rendered so links are
-// the right default.
+
+type Variant = "line" | "pill" | "segmented";
+type Size = "sm" | "md" | "lg";
 
 export interface TabItem {
   label: React.ReactNode;
@@ -31,17 +39,57 @@ export interface TabsProps {
   items: TabItem[];
   activeHref?: string;
   className?: string;
-  // When true, the active tab is detected by prefix match instead of
-  // exact. Useful for parent "Settings" routes where the URL deepens.
+  /** Spec §0.5.22 variants. Default: line. */
+  variant?: Variant;
+  /** Spec sizes. Default: md (36px). */
+  size?: Size;
+  /** When true, the active tab is detected by prefix match instead of
+   *  exact. Useful for parent "Settings" routes where the URL deepens. */
   prefixMatch?: boolean;
 }
 
-export function Tabs({ items, activeHref, className, prefixMatch = false }: TabsProps) {
+const SIZE_HEIGHT: Record<Size, string> = {
+  sm: "h-8  px-2.5 text-[12px]",
+  md: "h-9  px-3   text-[13px]",
+  lg: "h-10 px-3.5 text-[14px]",
+};
+
+export function Tabs({
+  items,
+  activeHref,
+  className,
+  variant = "line",
+  size = "md",
+  prefixMatch = false,
+}: TabsProps) {
+  const ariaLabel = "Section tabs";
+
+  // Variant-driven container styling. Segmented gets a border + radius
+  // around the whole strip; line gets an underline; pill is just gap.
+  const navStyle: React.CSSProperties =
+    variant === "segmented"
+      ? {
+          background: "var(--surface-1)",
+          border: "1px solid var(--border-default)",
+          borderRadius: "var(--radius-md, 6px)",
+          padding: "2px",
+        }
+      : variant === "line"
+      ? { borderBottom: "1px solid var(--border-subtle)" }
+      : {};
+
   return (
     <nav
-      className={cn("flex items-end gap-0.5 text-sm", className)}
-      style={{ borderBottom: "1px solid var(--border-subtle)" }}
-      aria-label="Section tabs"
+      className={cn(
+        "flex items-end overflow-x-auto",
+        variant === "line" && "gap-0.5",
+        variant === "pill" && "gap-1.5",
+        variant === "segmented" && "gap-0",
+        className,
+      )}
+      style={navStyle}
+      aria-label={ariaLabel}
+      role="tablist"
     >
       {items.map((tab) => {
         const isActive =
@@ -49,58 +97,116 @@ export function Tabs({ items, activeHref, className, prefixMatch = false }: Tabs
           (prefixMatch
             ? activeHref === tab.href || activeHref.startsWith(tab.href + "/")
             : activeHref === tab.href);
-        if (tab.disabled) {
-          return (
-            <span
-              key={tab.href}
-              className="relative inline-flex items-center gap-2 px-3 py-2 text-xs opacity-50"
-              style={{ color: "var(--text-muted)" }}
-              aria-disabled
-            >
-              {tab.label}
-              {tab.badge != null && <TabBadge>{tab.badge}</TabBadge>}
-            </span>
-          );
-        }
         return (
-          <Link
+          <TabRender
             key={tab.href}
-            href={tab.href}
-            aria-current={isActive ? "page" : undefined}
-            className={cn(
-              "ts-focus relative inline-flex items-center gap-2 px-3 py-2 text-xs transition-colors",
-              !isActive &&
-                "hover:bg-[color:var(--surface-1)] hover:text-[color:var(--text-default)]",
-            )}
-            style={{
-              color: isActive ? "var(--text-default)" : "var(--text-muted)",
-              fontWeight: isActive ? 600 : 500,
-            }}
-          >
-            {tab.label}
-            {tab.badge != null && <TabBadge>{tab.badge}</TabBadge>}
-            {isActive && (
-              <span
-                aria-hidden
-                className="absolute left-0 right-0 bottom-[-1px] h-[2px]"
-                style={{ background: "var(--accent-primary)" }}
-              />
-            )}
-          </Link>
+            tab={tab}
+            active={!!isActive}
+            variant={variant}
+            size={size}
+          />
         );
       })}
     </nav>
   );
 }
 
-function TabBadge({ children }: { children: React.ReactNode }) {
+function TabRender({
+  tab,
+  active,
+  variant,
+  size,
+}: {
+  tab: TabItem;
+  active: boolean;
+  variant: Variant;
+  size: Size;
+}) {
+  const sizeClass = SIZE_HEIGHT[size];
+  const baseClass = cn(
+    "ts-focus relative inline-flex shrink-0 items-center gap-2 transition-colors",
+    sizeClass,
+  );
+
+  // Variant-specific styling.
+  const variantStyle: React.CSSProperties = (() => {
+    if (variant === "line") {
+      return {
+        color: active ? "var(--text-default)" : "var(--text-muted)",
+        fontWeight: active ? 600 : 500,
+      };
+    }
+    if (variant === "pill") {
+      return {
+        color: active ? "var(--text-default)" : "var(--text-muted)",
+        fontWeight: active ? 600 : 500,
+        background: active ? "var(--surface-2)" : "transparent",
+        borderRadius: "var(--radius-md, 6px)",
+      };
+    }
+    // segmented
+    return {
+      color: active ? "var(--text-default)" : "var(--text-muted)",
+      fontWeight: active ? 600 : 500,
+      background: active ? "var(--surface-2)" : "transparent",
+      borderRadius: "calc(var(--radius-md, 6px) - 2px)",
+    };
+  })();
+
+  const variantClass = (() => {
+    if (variant === "pill") {
+      return active ? "" : "hover:bg-[var(--surface-1)] hover:text-[var(--text-default)]";
+    }
+    if (variant === "segmented") {
+      return active ? "" : "hover:text-[var(--text-default)]";
+    }
+    // line
+    return active ? "" : "hover:bg-[var(--surface-1)] hover:text-[var(--text-default)]";
+  })();
+
+  if (tab.disabled) {
+    return (
+      <span
+        className={cn(baseClass, "opacity-50")}
+        style={{ ...variantStyle, color: "var(--text-muted)" }}
+        aria-disabled
+      >
+        {tab.label}
+        {tab.badge != null && <TabBadge active={active}>{tab.badge}</TabBadge>}
+      </span>
+    );
+  }
+
+  return (
+    <Link
+      href={tab.href}
+      role="tab"
+      aria-selected={active}
+      aria-current={active ? "page" : undefined}
+      className={cn(baseClass, variantClass)}
+      style={variantStyle}
+    >
+      {tab.label}
+      {tab.badge != null && <TabBadge active={active}>{tab.badge}</TabBadge>}
+      {variant === "line" && active && (
+        <span
+          aria-hidden
+          className="absolute left-0 right-0 bottom-[-1px] h-[2px]"
+          style={{ background: "var(--accent-primary)" }}
+        />
+      )}
+    </Link>
+  );
+}
+
+function TabBadge({ children, active }: { children: React.ReactNode; active: boolean }) {
   return (
     <span
       className="inline-flex h-4 min-w-[1rem] items-center justify-center rounded-full px-1 text-[10px] font-medium"
       style={{
-        background: "var(--surface-2)",
-        color: "var(--text-muted)",
-        border: "1px solid var(--border-subtle)",
+        background: active ? "var(--accent-surface)" : "var(--surface-2)",
+        color: active ? "var(--accent-primary)" : "var(--text-muted)",
+        border: active ? "1px solid var(--accent-primary)" : "1px solid var(--border-subtle)",
       }}
     >
       {children}

@@ -56,6 +56,12 @@ export type { BannerProps } from "./Banner";
 export { Tabs } from "./Tabs";
 export type { TabsProps, TabItem } from "./Tabs";
 
+export { Accordion, AccordionItem } from "./Accordion";
+export type { AccordionProps, AccordionItemProps } from "./Accordion";
+
+export { Stepper } from "./Stepper";
+export type { StepperProps, StepperStep, StepState } from "./Stepper";
+
 export { ToastProvider, useToast } from "./Toast";
 export type { ToastOptions } from "./Toast";
 

@@ -1,10 +1,14 @@
 import * as React from "react";
 import { cn } from "@/lib/cn";
 
-// Stepper — multi-step progress indicator (horizontal or vertical).
-// Each step is described declaratively; the component figures out
-// which dot is filled, ringed, or marked with an error glyph based on
-// the `state`, with `current` automatically computed when omitted.
+// Stepper — Spec Page 0 §0.5.24 (Stepper / Wizard).
+//
+// Orientation: horizontal (top), vertical (left rail).
+// Step:   filled emerald-500 when complete (with check); brand-600
+//         ring when current; gray when upcoming. Spec colors —
+//         intentionally distinct from the brand accent so "done" reads
+//         differently from "active step." Errors get a rose ring + ×.
+// Connector: line; turns brand-600 when crossed.
 //
 //   <Stepper
 //     orientation="horizontal"
@@ -75,7 +79,7 @@ export function Stepper({
                   style={{
                     minHeight: 18,
                     background:
-                      state === "completed" ? "var(--accent-primary)" : "var(--border-default)",
+                      state === "completed" ? "var(--brand-600, var(--accent-primary))" : "var(--border-default)",
                   }}
                 />
               )}
@@ -140,22 +144,25 @@ function Dot({ state, index }: { state: StepState; index: number }) {
   };
 
   if (state === "completed") {
+    // Spec: filled emerald-500 with check.
     Object.assign(baseStyle, {
-      background: "var(--accent-primary)",
-      borderColor: "var(--accent-primary)",
-      color: "var(--accent-fg)",
+      background: "var(--emerald-500, var(--success))",
+      borderColor: "var(--emerald-500, var(--success))",
+      color: "#ffffff",
     });
   } else if (state === "current") {
+    // Spec: brand-600 ring around the dot.
     Object.assign(baseStyle, {
-      borderColor: "var(--accent-primary)",
-      color: "var(--accent-primary)",
-      boxShadow: "0 0 0 4px var(--accent-surface)",
+      borderColor: "var(--brand-600, var(--accent-primary))",
+      color: "var(--brand-700, var(--accent-primary))",
+      boxShadow: "0 0 0 4px var(--brand-100, var(--accent-surface))",
     });
   } else if (state === "error") {
+    // Spec: rose ring + ! icon.
     Object.assign(baseStyle, {
-      background: "var(--danger-surface)",
-      borderColor: "var(--danger-border, var(--danger))",
-      color: "var(--danger-fg)",
+      background: "var(--rose-50, var(--danger-surface))",
+      borderColor: "var(--rose-500, var(--danger))",
+      color: "var(--rose-700, var(--danger-fg))",
     });
   }
 
@@ -166,10 +173,8 @@ function Dot({ state, index }: { state: StepState; index: number }) {
           <polyline points="3.5,8.5 6.5,11.5 12.5,5" />
         </svg>
       ) : state === "error" ? (
-        <svg width={12} height={12} viewBox="0 0 16 16" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round">
-          <line x1="4" y1="4" x2="12" y2="12" />
-          <line x1="12" y1="4" x2="4" y2="12" />
-        </svg>
+        // Spec §0.5.24 — rose ring + "!" glyph.
+        <span aria-hidden style={{ fontSize: 13, fontWeight: 700, lineHeight: 1 }}>!</span>
       ) : (
         index + 1
       )}

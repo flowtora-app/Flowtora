@@ -5,10 +5,12 @@ import Link from "next/link";
 import { cn } from "@/lib/cn";
 import { Popover } from "@/components/ui/Popover";
 
-// Breadcrumb — hierarchical nav with smart truncation. When the path
-// has more items than `maxItems`, the middle items collapse into a "…"
-// trigger that opens a Popover listing the hidden ones. First and last
-// items always stay visible.
+// Breadcrumb — Spec Page 0 §0.5.25.
+//
+// Separator: "/" slash, neutral-300.
+// Truncation: when >4 levels, collapse middle into "..." dropdown.
+// Last item: non-link, text-primary; previous items text-link.
+// Each previous segment optionally opens a sibling list (via Popover).
 //
 //   <Breadcrumb items={[
 //     { label: "Customers", href: "/t/demo-shop/customers" },
@@ -107,7 +109,7 @@ export function Breadcrumb({
                 <Link
                   href={item.href}
                   className="inline-flex items-center gap-1.5 rounded transition-colors hover:underline"
-                  style={{ color: "var(--text-muted)" }}
+                  style={{ color: "var(--text-link, var(--accent-primary))" }}
                 >
                   {item.icon}
                   <span className="max-w-xs truncate">{item.label}</span>
@@ -138,10 +140,14 @@ export function Breadcrumb({
 }
 
 function Sep() {
+  // Spec §0.5.25 — separator is "/" slash, neutral-300.
   return (
-    <svg width={10} height={10} viewBox="0 0 16 16" fill="none" stroke="currentColor" strokeWidth="1.5" strokeLinecap="round" strokeLinejoin="round" aria-hidden>
-      <polyline points="6,3 11,8 6,13" />
-    </svg>
+    <span
+      aria-hidden
+      style={{ color: "var(--slate-300, var(--text-faint))", userSelect: "none" }}
+    >
+      /
+    </span>
   );
 }
 
