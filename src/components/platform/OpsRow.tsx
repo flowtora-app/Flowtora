@@ -104,7 +104,7 @@ export function OpsRow({
         sub={emailsOut24h > 0 ? "Outbound flowing" : "No mail sent today"}
         tone={emailsOut24h > 0 ? "success" : "neutral"}
         icon="✉"
-        href="/platform/notifications"
+        href="/platform/communications"
       />
       <Tile
         label="Impersonations"
@@ -112,7 +112,7 @@ export function OpsRow({
         sub={activeImpersonations === 0 ? "None active" : "Active sessions — review"}
         tone={impersonationTone}
         icon="⎆"
-        href="/platform/audit"
+        href="/platform/security"
       />
       <Tile
         label="Data exports"
@@ -126,7 +126,7 @@ export function OpsRow({
         }
         tone={exportsTone}
         icon="⤓"
-        href="/platform/health"
+        href="/platform/legal"
       />
       <Tile
         label="Payment success (30d)"
@@ -138,7 +138,7 @@ export function OpsRow({
         }
         tone={paymentsTone}
         icon="✓"
-        href="/platform/revenue"
+        href="/platform/billing"
       />
     </section>
   );

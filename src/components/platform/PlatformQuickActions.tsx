@@ -1,8 +1,9 @@
 import { QuickActions, type QuickAction } from "@/components/dashboard/QuickActions";
 
-// Platform-admin quick actions. Curated for the operator persona: spin
-// up offerings, reach customers, dive into the tenant list, or jump to
-// config surfaces. Ordered roughly by frequency of use.
+// Platform-admin quick actions. Aligned with the 21-item top-level
+// nav: each shortcut lands on a hub that is itself in the sidebar so
+// operators always know where they are. Ordered by frequency-of-use
+// for the operator persona.
 
 const PLATFORM_ACTIONS: QuickAction[] = [
   {
@@ -13,16 +14,16 @@ const PLATFORM_ACTIONS: QuickAction[] = [
     primary: true,
   },
   {
-    label: "Notification templates",
-    href: "/platform/notifications",
-    hint: "Edit transactional emails and in-app messages",
-    icon: "✉",
+    label: "Billing & Revenue",
+    href: "/platform/billing",
+    hint: "Coupons, dunning, manual invoices, MRR analytics",
+    icon: "$",
   },
   {
-    label: "Plans & pricing",
-    href: "/platform/plans",
-    hint: "Manage pricing plans and feature gates",
-    icon: "$",
+    label: "Users",
+    href: "/platform/users",
+    hint: "Cross-tenant user search, ban + merge",
+    icon: "◉",
   },
   {
     label: "Support queue",
@@ -31,33 +32,28 @@ const PLATFORM_ACTIONS: QuickAction[] = [
     icon: "?",
   },
   {
-    label: "Audit log",
-    href: "/platform/audit",
-    hint: "Every privileged action, searchable",
-    icon: "≡",
+    label: "Security",
+    href: "/platform/security",
+    hint: "Staff & roles, abuse + bans, audit log",
+    icon: "♦",
   },
   {
-    label: "Design system",
-    href: "/platform/design",
-    hint: "Theme tokens, components, and previews",
+    label: "Communications",
+    href: "/platform/communications",
+    hint: "Transactional templates and announcements",
+    icon: "✉",
+  },
+  {
+    label: "Marketing",
+    href: "/platform/marketing",
+    hint: "Leads, plans, features, public-site copy",
     icon: "◧",
   },
   {
-    // Announcements is a roadmap stub — the page loads and documents
-    // the intended shape but there is no Announcement model yet. Keep
-    // the quick action visible so staff can discover it, with a hint
-    // that flags the preview state. See docs/transformation-plan.md
-    // §Phase 1.
-    label: "Announcements",
-    href: "/platform/announcements",
-    hint: "Preview — model not yet wired up; see the page for current alternatives",
-    icon: "◉",
-  },
-  {
-    label: "Platform health",
-    href: "/platform/health",
-    hint: "Exports, deletions, and background jobs",
-    icon: "♥",
+    label: "Settings",
+    href: "/platform/settings",
+    hint: "Maintenance mode, feature freeze, platform-wide knobs",
+    icon: "≡",
   },
 ];
 

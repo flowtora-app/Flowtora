@@ -505,7 +505,7 @@ export async function loadAlerts(): Promise<Alert[]> {
       id: "failed-payments",
       severity: "critical",
       label: `${failedPayments24h} failed payment${failedPayments24h === 1 ? "" : "s"}`,
-      href: "/platform/revenue",
+      href: "/platform/billing/dunning",
       count: failedPayments24h,
     });
   }
@@ -559,7 +559,7 @@ export async function loadAlerts(): Promise<Alert[]> {
       id: "stale-exports",
       severity: "warning",
       label: `${stalePendingExports} export${stalePendingExports === 1 ? "" : "s"} >24h old`,
-      href: "/platform/health",
+      href: "/platform/legal",
       count: stalePendingExports,
     });
   }
@@ -568,7 +568,7 @@ export async function loadAlerts(): Promise<Alert[]> {
       id: "scheduled-deletions",
       severity: "info",
       label: `${scheduledDeletions} deletion${scheduledDeletions === 1 ? "" : "s"} this week`,
-      href: "/platform/health",
+      href: "/platform/legal",
       count: scheduledDeletions,
     });
   }
@@ -577,7 +577,7 @@ export async function loadAlerts(): Promise<Alert[]> {
       id: "stale-impersonations",
       severity: "info",
       label: `${openImpersonations} impersonation${openImpersonations === 1 ? "" : "s"} open >30m`,
-      href: "/platform/audit",
+      href: "/platform/security",
       count: openImpersonations,
     });
   }

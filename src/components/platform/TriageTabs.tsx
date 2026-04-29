@@ -13,10 +13,10 @@ import { SectionCard } from "@/components/platform/SectionCard";
 type TabKey = "payments" | "support" | "trials" | "deletions" | "unhealthy";
 
 const TAB_META: Record<TabKey, { label: string; viewAllHref: string; empty: string; tone: string }> = {
-  payments:  { label: "Failed payments", viewAllHref: "/platform/revenue",            empty: "No failed payments. 🎉",         tone: "var(--danger)"  },
+  payments:  { label: "Failed payments", viewAllHref: "/platform/billing/dunning",    empty: "No failed payments. 🎉",         tone: "var(--danger)"  },
   support:   { label: "Support",         viewAllHref: "/platform/support",            empty: "Support queue is clear.",         tone: "var(--warning)" },
   trials:    { label: "Trials ending",   viewAllHref: "/platform/tenants?status=TRIAL", empty: "No trials ending this week.",   tone: "var(--info)"    },
-  deletions: { label: "Deletions",       viewAllHref: "/platform/health",             empty: "No deletions scheduled.",         tone: "var(--warning)" },
+  deletions: { label: "Deletions",       viewAllHref: "/platform/legal",              empty: "No deletions scheduled.",         tone: "var(--warning)" },
   unhealthy: { label: "Unhealthy",       viewAllHref: "/platform/tenants?status=PAST_DUE", empty: "All tenants healthy.",       tone: "var(--danger)"  },
 };
 
