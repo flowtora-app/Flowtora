@@ -19,6 +19,130 @@
 :root {
   color-scheme: dark;
 
+  /* ─────────────────────────────────────────────────────────────────
+   * SPEC PAGE 0 — 11-stop color palettes. Defined once on :root so
+   * every theme can reference the same raw scales; semantic tokens
+   * below resolve them per theme. Light-theme block at the bottom of
+   * this file overrides the semantic tokens, not these scales.
+   * ───────────────────────────────────────────────────────────────── */
+
+  /* Brand — Indigo-Violet */
+  --brand-50:  #F5F3FF;
+  --brand-100: #EDE9FE;
+  --brand-200: #DDD6FE;
+  --brand-300: #C4B5FD;
+  --brand-400: #A78BFA;
+  --brand-500: #8B5CF6;
+  --brand-600: #7C3AED;
+  --brand-700: #6D28D9;
+  --brand-800: #5B21B6;
+  --brand-900: #4C1D95;
+  --brand-950: #2E1065;
+
+  /* Cyan — secondary brand, used for highlights */
+  --cyan-50:  #ECFEFF;
+  --cyan-100: #CFFAFE;
+  --cyan-200: #A5F3FC;
+  --cyan-300: #67E8F9;
+  --cyan-400: #22D3EE;
+  --cyan-500: #06B6D4;
+  --cyan-600: #0891B2;
+  --cyan-700: #0E7490;
+  --cyan-800: #155E75;
+  --cyan-900: #164E63;
+  --cyan-950: #083344;
+
+  /* Amber — accent + warning */
+  --amber-50:  #FFFBEB;
+  --amber-100: #FEF3C7;
+  --amber-200: #FDE68A;
+  --amber-300: #FCD34D;
+  --amber-400: #FBBF24;
+  --amber-500: #F59E0B;
+  --amber-600: #D97706;
+  --amber-700: #B45309;
+  --amber-800: #92400E;
+  --amber-900: #78350F;
+  --amber-950: #451A03;
+
+  /* Slate — neutrals */
+  --slate-50:  #F8FAFC;
+  --slate-100: #F1F5F9;
+  --slate-200: #E2E8F0;
+  --slate-300: #CBD5E1;
+  --slate-400: #94A3B8;
+  --slate-500: #64748B;
+  --slate-600: #475569;
+  --slate-700: #334155;
+  --slate-800: #1E293B;
+  --slate-900: #0F172A;
+  --slate-950: #020617;
+
+  /* Emerald — success */
+  --emerald-50:  #ECFDF5;
+  --emerald-100: #D1FAE5;
+  --emerald-200: #A7F3D0;
+  --emerald-300: #6EE7B7;
+  --emerald-400: #34D399;
+  --emerald-500: #10B981;
+  --emerald-600: #059669;
+  --emerald-700: #047857;
+  --emerald-800: #065F46;
+  --emerald-900: #064E3B;
+  --emerald-950: #022C22;
+
+  /* Rose — destructive / error */
+  --rose-50:  #FFF1F2;
+  --rose-100: #FFE4E6;
+  --rose-200: #FECDD3;
+  --rose-300: #FDA4AF;
+  --rose-400: #FB7185;
+  --rose-500: #F43F5E;
+  --rose-600: #E11D48;
+  --rose-700: #BE123C;
+  --rose-800: #9F1239;
+  --rose-900: #881337;
+  --rose-950: #4C0519;
+
+  /* Sky — info */
+  --sky-50:  #F0F9FF;
+  --sky-100: #E0F2FE;
+  --sky-200: #BAE6FD;
+  --sky-300: #7DD3FC;
+  --sky-400: #38BDF8;
+  --sky-500: #0EA5E9;
+  --sky-600: #0284C7;
+  --sky-700: #0369A1;
+  --sky-800: #075985;
+  --sky-900: #0C4A6E;
+  --sky-950: #082F49;
+
+  /* ─────────────────────────────────────────────────────────────────
+   * Type scale (Page 0 §0.3). Sizes given as rem with line-height +
+   * weight + tracking. Components consume via the helper utility
+   * classes at the bottom of this file (.ts-text-display-xl etc.) or
+   * by reading the underlying tokens directly.
+   * ───────────────────────────────────────────────────────────────── */
+  --font-sans: var(--font-inter), ui-sans-serif, system-ui, -apple-system, "Segoe UI", Roboto, sans-serif;
+  --font-display: var(--font-inter), ui-sans-serif, system-ui, sans-serif;
+  --font-mono: var(--font-jetbrains-mono), ui-monospace, SFMono-Regular, Menlo, Monaco, "Cascadia Mono", monospace;
+
+  --text-display-xl: 3rem;       /* 48px */
+  --text-display-l:  2.25rem;    /* 36px */
+  --text-h1:         1.875rem;   /* 30px */
+  --text-h2:         1.5rem;     /* 24px */
+  --text-h3:         1.25rem;    /* 20px */
+  --text-h4:         1.125rem;   /* 18px */
+  --text-h5:         1rem;       /* 16px */
+  --text-h6:         0.875rem;   /* 14px */
+  --text-body-l:     1rem;
+  --text-body-m:     0.875rem;
+  --text-body-s:     0.8125rem;  /* 13px */
+  --text-caption:    0.75rem;    /* 12px */
+  --text-overline:   0.6875rem;  /* 11px */
+  --text-label:      0.8125rem;
+  --text-code:       0.8125rem;
+
   /* Surface layers — stacked from deepest to shallowest. Dark mode uses
      a cool, slightly blue-shifted neutral that sits nicely with the
      accent blue without feeling sterile. */
@@ -39,13 +163,14 @@
   --text-faint: #555e6b;
   --text-inverse: #0b0d10;
 
-  /* Accent (primary brand) */
-  --accent-primary: #4f8cff;
-  --accent-hover: #6a9fff;
-  --accent-active: #3b7ae5;
-  --accent-fg: #ffffff;          /* text on accent bg */
-  --accent-surface: rgba(79, 140, 255, 0.14);
-  --accent-surface-strong: rgba(79, 140, 255, 0.22);
+  /* Accent (primary brand) — Spec Page 0 §0.2: brand-500 in dark, brand-600 in light. */
+  --accent-primary: var(--brand-500);
+  --accent-hover:   var(--brand-400);
+  --accent-active:  var(--brand-600);
+  --accent-fg:      #ffffff;     /* text on accent bg */
+  --accent-on-primary: #ffffff;  /* alias used by some newer components */
+  --accent-surface:        color-mix(in oklab, var(--brand-500) 16%, transparent);
+  --accent-surface-strong: color-mix(in oklab, var(--brand-500) 24%, transparent);
 
   /* Semantic — success */
   --success: #22c55e;
@@ -131,12 +256,13 @@
   --text-faint: #8b94a4;
   --text-inverse: #ffffff;
 
-  --accent-primary: #2f6bf5;
-  --accent-hover: #4a7fff;
-  --accent-active: #1f55d4;
+  --accent-primary: var(--brand-600);
+  --accent-hover:   var(--brand-700);
+  --accent-active:  var(--brand-800);
   --accent-fg: #ffffff;
-  --accent-surface: rgba(47, 107, 245, 0.10);
-  --accent-surface-strong: rgba(47, 107, 245, 0.18);
+  --accent-on-primary: #ffffff;
+  --accent-surface:        color-mix(in oklab, var(--brand-600) 10%, transparent);
+  --accent-surface-strong: color-mix(in oklab, var(--brand-600) 18%, transparent);
 
   --success: #16a34a;
   --success-fg: #15803d;
@@ -270,6 +396,27 @@ button.underline:not([class*="ts-btn"]):not(:disabled):hover {
 }
 .ts-btn-ghost:not(:disabled):hover {
   background: var(--surface-3);
+}
+
+/* Spec §0.5.1 — tertiary: transparent bg, hover surface tint, primary text. */
+.ts-btn-tertiary {
+  background: transparent;
+  color: var(--text-default);
+  border-color: transparent;
+}
+.ts-btn-tertiary:not(:disabled):hover {
+  background: var(--surface-3);
+}
+
+/* Spec §0.5.1 — outline: transparent bg, strong border. */
+.ts-btn-outline {
+  background: transparent;
+  color: var(--text-default);
+  border-color: var(--border-strong);
+}
+.ts-btn-outline:not(:disabled):hover {
+  background: var(--surface-3);
+  border-color: var(--border-strong);
 }
 
 .ts-btn-danger {

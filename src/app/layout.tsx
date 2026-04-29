@@ -1,6 +1,23 @@
 import type { Metadata } from "next";
 import { cookies } from "next/headers";
+import { Inter, JetBrains_Mono } from "next/font/google";
 import "./globals.css";
+
+// Spec Page 0 §0.3 — UI font Inter (variable), monospace JetBrains
+// Mono. Both loaded via next/font with display:swap so we don't
+// block first paint on web fonts. Variables expose them to CSS so
+// the type-scale tokens in globals.css can resolve them.
+const inter = Inter({
+  subsets: ["latin"],
+  display: "swap",
+  variable: "--font-inter",
+});
+
+const jetbrainsMono = JetBrains_Mono({
+  subsets: ["latin"],
+  display: "swap",
+  variable: "--font-jetbrains-mono",
+});
 
 // Root metadata. Per-page `export const metadata` in marketing routes
 // overrides `title` (via the template below) and `description`, while
@@ -105,7 +122,12 @@ export default async function RootLayout({ children }: { children: React.ReactNo
     // prefers-color-scheme can resolve to a value that differs from the
     // server default). The mismatch is intentional and scoped to the
     // <html> element only.
-    <html lang="en" data-theme={initialTheme} suppressHydrationWarning>
+    <html
+      lang="en"
+      data-theme={initialTheme}
+      className={`${inter.variable} ${jetbrainsMono.variable}`}
+      suppressHydrationWarning
+    >
       <head>
         <script dangerouslySetInnerHTML={{ __html: THEME_BOOT_SCRIPT }} />
       </head>

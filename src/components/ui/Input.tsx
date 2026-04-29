@@ -1,29 +1,34 @@
 import * as React from "react";
 import { cn } from "@/lib/cn";
 
-// Input — the core text field primitive. Supports labels, hints, errors,
-// and optional prefix/suffix slots (for icons, units, currency symbols).
+// Input — Spec Page 0 §0.5.3.
 //
-// We expose a few variants via props rather than a visual mode:
-//   - `label`/`hint`/`error` wrap the input in a label stack
-//   - `prefix`/`suffix` drop inline decorations (e.g. "$", search icon)
-//   - `size` matches the Button primitive (sm / md / lg)
+// Subtypes: text, email, password, number, search, tel, url. We don't
+// (yet) bundle a show/hide toggle for password or a clear button for
+// search; both are slotted in by the call site via `suffix` for now.
 //
-// When `error` is truthy the border turns danger-colored and the hint is
-// replaced with the error text. `aria-invalid` is set for screen readers.
+// Sizes from spec: sm 32px (h-8), md 36px (h-9, default), lg 40px (h-10).
+//
+// States: default, hover (border-strong), focus (border-focus +
+// shadow-focus), filled, disabled (bg-muted, text-disabled), readonly,
+// invalid (border-error, error text), warning (amber border).
 
 type Size = "sm" | "md" | "lg";
 
 const SIZE_CLASS: Record<Size, string> = {
-  sm: "h-7 text-xs px-2",
-  md: "h-9 text-sm px-3",
-  lg: "h-11 text-sm px-3.5",
+  sm: "h-8  text-[13px] px-2.5",
+  md: "h-9  text-[14px] px-3",
+  lg: "h-10 text-[14px] px-3.5",
 };
 
 export interface InputProps extends Omit<React.InputHTMLAttributes<HTMLInputElement>, "size" | "prefix"> {
   label?: string;
   hint?: string;
   error?: string;
+  /** Spec §0.5.3 — amber border + warning text-color. Used for soft
+   *  validation (e.g. "this field is unusual but not invalid"). Ignored
+   *  when `error` is set. */
+  warning?: string;
   prefix?: React.ReactNode;
   suffix?: React.ReactNode;
   size?: Size;
@@ -35,6 +40,7 @@ export const Input = React.forwardRef<HTMLInputElement, InputProps>(function Inp
     label,
     hint,
     error,
+    warning,
     prefix,
     suffix,
     size = "md",
@@ -51,15 +57,22 @@ export const Input = React.forwardRef<HTMLInputElement, InputProps>(function Inp
   const inputId = id ?? autoId;
   const describedById = error || hint ? `${inputId}-desc` : undefined;
 
+  const borderColor = error
+    ? "var(--danger-border, var(--rose-500))"
+    : warning
+    ? "var(--warning-fg, var(--amber-500))"
+    : "var(--border-default)";
+
   const field = (
     <div
       className={cn(
         "flex items-center rounded-md transition-colors",
         "focus-within:shadow-[var(--shadow-focus)]",
+        !error && !warning && "hover:border-[var(--border-strong)]",
       )}
       style={{
         background: "var(--surface-1)",
-        border: `1px solid ${error ? "var(--danger-border)" : "var(--border-default)"}`,
+        border: `1px solid ${borderColor}`,
         color: "var(--text-default)",
       }}
     >
@@ -98,26 +111,32 @@ export const Input = React.forwardRef<HTMLInputElement, InputProps>(function Inp
     </div>
   );
 
-  if (!label && !hint && !error) {
+  if (!label && !hint && !error && !warning) {
     return <div className={containerClassName}>{field}</div>;
   }
 
   return (
     <div className={cn("flex flex-col gap-1", containerClassName)}>
       {label && (
-        <label htmlFor={inputId} className="text-xs font-medium" style={{ color: "var(--text-muted)" }}>
+        <label htmlFor={inputId} className="text-[13px] font-medium" style={{ color: "var(--text-default)" }}>
           {label}
           {required && <span aria-hidden style={{ color: "var(--danger-fg)" }}> *</span>}
         </label>
       )}
       {field}
-      {(error || hint) && (
+      {(error || warning || hint) && (
         <span
           id={describedById}
-          className="text-xs"
-          style={{ color: error ? "var(--danger-fg)" : "var(--text-faint)" }}
+          className="text-[12px]"
+          style={{
+            color: error
+              ? "var(--danger-fg, var(--rose-600))"
+              : warning
+              ? "var(--warning-fg, var(--amber-700))"
+              : "var(--text-faint)",
+          }}
         >
-          {error ?? hint}
+          {error ?? warning ?? hint}
         </span>
       )}
     </div>

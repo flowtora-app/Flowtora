@@ -1,16 +1,25 @@
 import * as React from "react";
 import { cn } from "@/lib/cn";
 
-// Card — primary container primitive. Three elevation levels:
-//   flat     — transparent/subtle, for inline groupings
-//   default  — surface-1 panel (the vast majority of cards)
-//   elevated — surface-2 with shadow, for floating blocks / modal-like
+// Card — Spec Page 0 §0.5.18.
+//
+// Variants (spec):
+//   default     — border + surface-1 (most common)
+//   elevated    — shadow-sm, no border (floating)
+//   interactive — hover shadow-md, cursor-pointer (clickable cards)
+//   gradient    — brand soft tint (call-out / highlight)
+//
+// Backward-compat: existing `flat` elevation kept as a legacy alias.
+//
+// Padding: sm 12px / md 16px / lg 24px (spec §0.5.18). The legacy
+// `padded` boolean still works (= "md" when true, "none" when false).
 //
 // CardHeader + CardBody + CardFooter give the typical vertical layout
-// with a separator line. Pass `padded={false}` to the Card itself when
+// with separator lines. Pass `padded={false}` to the Card itself when
 // the children manage their own padding (e.g. a full-bleed table).
 
-type Elevation = "flat" | "default" | "elevated";
+type Elevation = "flat" | "default" | "elevated" | "interactive" | "gradient";
+type Padding   = "none" | "sm" | "md" | "lg";
 
 const ELEVATION_STYLE: Record<Elevation, React.CSSProperties> = {
   flat: {
@@ -26,16 +35,38 @@ const ELEVATION_STYLE: Record<Elevation, React.CSSProperties> = {
     border: "1px solid var(--border-default)",
     boxShadow: "var(--shadow-md)",
   },
+  interactive: {
+    background: "var(--surface-1)",
+    border: "1px solid var(--border-subtle)",
+    cursor: "pointer",
+  },
+  gradient: {
+    background: "linear-gradient(135deg, var(--brand-50) 0%, var(--brand-100) 100%)",
+    border: "1px solid var(--brand-200)",
+  },
+};
+
+const PADDING_CLASS: Record<Padding, string> = {
+  none: "",
+  sm:   "p-3",
+  md:   "p-4",
+  lg:   "p-6",
 };
 
 export interface CardProps extends React.HTMLAttributes<HTMLDivElement> {
   elevation?: Elevation;
+  /** Spec padding scale. `padded` (boolean) is kept as a backward-compat
+   *  alias: true → "md", false → "none". Explicit `padding` wins. */
+  padding?: Padding;
+  /** @deprecated Use `padding` instead. */
   padded?: boolean;
+  /** @deprecated Use `elevation="interactive"` instead. */
   interactive?: boolean;
 }
 
 export function Card({
   elevation = "default",
+  padding,
   padded = false,
   interactive = false,
   className,
@@ -43,16 +74,27 @@ export function Card({
   children,
   ...rest
 }: CardProps) {
+  // Resolve the effective elevation: if the legacy `interactive` flag
+  // is set, upgrade `default` to `interactive` so the spec hover state
+  // applies without changing call sites.
+  const effectiveElevation: Elevation =
+    interactive && elevation === "default" ? "interactive" : elevation;
+
+  // Resolve the effective padding from the new prop, falling back to
+  // the legacy `padded` boolean.
+  const effectivePadding: Padding =
+    padding ?? (padded ? "md" : "none");
+
   return (
     <div
       {...rest}
       className={cn(
-        "rounded-lg",
-        padded && "p-5",
-        interactive && "ts-card-interactive",
+        "rounded-lg transition-shadow",
+        PADDING_CLASS[effectivePadding],
+        effectiveElevation === "interactive" && "ts-card-interactive hover:shadow-md",
         className,
       )}
-      style={{ ...ELEVATION_STYLE[elevation], ...style }}
+      style={{ ...ELEVATION_STYLE[effectiveElevation], ...style }}
     >
       {children}
     </div>

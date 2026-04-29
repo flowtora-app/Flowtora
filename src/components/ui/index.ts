@@ -29,6 +29,15 @@ export type { BreadcrumbProps, BreadcrumbItem } from "./Breadcrumb";
 export { Badge } from "./Badge";
 export type { BadgeProps } from "./Badge";
 
+export { StatusPill } from "./StatusPill";
+export type { StatusPillProps } from "./StatusPill";
+
+export { Avatar, AvatarGroup } from "./Avatar";
+export type { AvatarProps, AvatarGroupProps } from "./Avatar";
+
+export { Kbd } from "./Kbd";
+export type { KbdProps } from "./Kbd";
+
 export { EmptyState } from "./EmptyState";
 export type { EmptyStateProps } from "./EmptyState";
 
