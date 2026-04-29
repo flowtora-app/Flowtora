@@ -4,23 +4,27 @@ import * as React from "react";
 import { createPortal } from "react-dom";
 import { cn } from "@/lib/cn";
 
-// Drawer — sheet-style overlay anchored to the right or bottom of the
-// viewport. Useful for filter panels, mobile-style quick actions, and
-// detail flyouts. Closes on backdrop click, Escape, or the close button
-// in the header.
+// Drawer — Spec Page 0 §0.5.29 (Slide-Over Drawer).
+//
+// Sides: right (default), left. Bottom is kept as a non-spec extension
+// for mobile-style sheets.
+// Widths (spec): sm 400, md 520, lg 720, xl 960.
+// Anatomy: header (sticky) + optional tabs (sticky) + body (scroll) +
+// footer (sticky).
+// Use cases: quick view, edit, multi-step forms, comments.
 //
 //   <Drawer open={open} onOpenChange={setOpen} side="right" size="md" title="Filters">
 //     <FilterPanel />
 //   </Drawer>
 
-type Side = "right" | "bottom";
+type Side = "right" | "left" | "bottom";
 type Size = "sm" | "md" | "lg" | "xl" | "full";
 
-const RIGHT_WIDTH: Record<Size, string> = {
-  sm:   "320px",
-  md:   "440px",
-  lg:   "560px",
-  xl:   "720px",
+const SIDE_WIDTH: Record<Size, string> = {
+  sm:   "400px",
+  md:   "520px",
+  lg:   "720px",
+  xl:   "960px",
   full: "100vw",
 };
 
@@ -88,11 +92,22 @@ export function Drawer({
           top: 0,
           right: 0,
           bottom: 0,
-          width: RIGHT_WIDTH[size],
+          width: SIDE_WIDTH[size],
           maxWidth: "100vw",
           background: "var(--surface-1)",
           borderInlineStart: "1px solid var(--border-default)",
-          boxShadow: "var(--shadow-lg)",
+          boxShadow: "var(--shadow-2xl, var(--shadow-lg))",
+        }
+      : side === "left"
+      ? {
+          top: 0,
+          left: 0,
+          bottom: 0,
+          width: SIDE_WIDTH[size],
+          maxWidth: "100vw",
+          background: "var(--surface-1)",
+          borderInlineEnd: "1px solid var(--border-default)",
+          boxShadow: "var(--shadow-2xl, var(--shadow-lg))",
         }
       : {
           left: 0,
@@ -102,7 +117,7 @@ export function Drawer({
           maxHeight: "100vh",
           background: "var(--surface-1)",
           borderTop: "1px solid var(--border-default)",
-          boxShadow: "var(--shadow-lg)",
+          boxShadow: "var(--shadow-2xl, var(--shadow-lg))",
           borderTopLeftRadius: "var(--radius-xl)",
           borderTopRightRadius: "var(--radius-xl)",
         };

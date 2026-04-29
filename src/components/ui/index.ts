@@ -44,8 +44,14 @@ export type { EmptyStateProps } from "./EmptyState";
 export { Skeleton, SkeletonText, SkeletonCard } from "./Skeleton";
 export type { SkeletonProps } from "./Skeleton";
 
-export { Dialog, DialogHeader, DialogBody, DialogFooter } from "./Dialog";
-export type { DialogProps, DialogHeaderProps } from "./Dialog";
+export { Dialog, DialogHeader, DialogBody, DialogFooter, ConfirmDialog } from "./Dialog";
+export type { DialogProps, DialogHeaderProps, DialogFooterProps, ConfirmDialogProps } from "./Dialog";
+
+export { Drawer } from "./Drawer";
+export type { DrawerProps } from "./Drawer";
+
+export { Banner } from "./Banner";
+export type { BannerProps } from "./Banner";
 
 export { Tabs } from "./Tabs";
 export type { TabsProps, TabItem } from "./Tabs";
