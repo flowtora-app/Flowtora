@@ -208,7 +208,16 @@ model Tenant {
   archivedAt          DateTime?
   archivedBy          String?
   archiveReason       String?
+  // Categorized cancellation reason — populated alongside archiveReason
+  // when an admin archives the tenant. Drives the "why are tenants
+  // leaving?" analytics on /platform/tenants.
+  archiveReasonCode   ArchiveReasonCode?
   scheduledDeletionAt DateTime?
+
+  // Platform-side tags for organizing tenants — internal only; tenants
+  // never see these. Free-form lowercase strings, e.g. "vip", "beta",
+  // "at-risk", "enterprise-pilot".
+  adminTags String[] @default([])
   // Trial nudge tracking — stamped when the "ends in Xd" banner is first
   // acknowledged or dismissed so we don't hammer owners with the same
   // warning. Billing alert tracking does the same for PAST_DUE.
@@ -392,6 +401,32 @@ enum BetaCohort {
   PILOT
 }
 
+// Categorized reasons a tenant gets archived. Drives the "why are
+// they leaving?" analytics on /platform/tenants. ADMIN_DECISION is
+// the catch-all for platform-staff-initiated archives that don't map
+// to a tenant-side cancellation reason.
+enum ArchiveReasonCode {
+  NOT_A_FIT
+  TOO_EXPENSIVE
+  MISSING_FEATURES
+  SWITCHED_TO_COMPETITOR
+  BUSINESS_CLOSED
+  TEMPORARY_PAUSE
+  TECHNICAL_ISSUES
+  POOR_SUPPORT
+  ADMIN_DECISION
+  OTHER
+}
+
+// Theme preference per user. AUTO follows the OS prefers-color-scheme;
+// LIGHT / DARK lock the choice. Persisted on User so it's stable across
+// devices.
+enum ThemePreference {
+  AUTO
+  LIGHT
+  DARK
+}
+
 enum Plan {
   STARTER
   GROWTH
@@ -466,6 +501,15 @@ model User {
 
   twoFactorEnabled Boolean   @default(false)
   lastLoginAt      DateTime?
+
+  // ── Personal profile (Phase 23) ──
+  // Optional self-service fields surfaced on /platform/profile (admin)
+  // and /t/[slug]/settings/profile (tenant). Free-form text; nothing
+  // wired into RBAC or routing.
+  bio        String?
+  timezone   String?           // IANA, e.g. "America/Los_Angeles"
+  // UI preference; AUTO follows OS prefers-color-scheme.
+  themePreference ThemePreference @default(AUTO)
 
   // ── Phase 2 (Auth/Security) ──
   // Bump this on password change or "sign out everywhere". The session

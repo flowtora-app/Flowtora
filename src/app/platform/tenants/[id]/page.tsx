@@ -13,6 +13,7 @@ import {
   restoreTenant,
   startImpersonation,
   resetTenantSandbox,
+  setTenantTags,
 } from "@/app/actions/platform";
 import {
   upsertPriceOverride,
@@ -249,6 +250,7 @@ export default async function PlatformTenantDetailPage({
   const saveNotes   = updateTenantNotes.bind(null, tenant.id);
   const saveEnv     = updateTenantEnvironment.bind(null, tenant.id);
   const saveCohort  = updateTenantCohort.bind(null, tenant.id);
+  const saveTags    = setTenantTags.bind(null, tenant.id);
   const doArchive   = archiveTenant.bind(null, tenant.id);
   const doRestore   = restoreTenant.bind(null, tenant.id);
   const resetSandbox = resetTenantSandbox.bind(null, tenant.id);
@@ -456,6 +458,7 @@ export default async function PlatformTenantDetailPage({
           saveEnv={saveEnv}
           saveCohort={saveCohort}
           resetSandbox={resetSandbox}
+          saveTags={saveTags}
         />
       )}
 
@@ -772,8 +775,10 @@ function SettingsTab({
   saveEnv,
   saveCohort,
   resetSandbox,
+  saveTags,
 }: {
   tenant: {
+    id: string;
     environment: string;
     betaCohort: string;
     sampleDataLoadedAt: Date | null;
@@ -786,14 +791,53 @@ function SettingsTab({
     region: string | null;
     country: string | null;
     taxId: string | null;
+    adminTags: string[];
   };
   canWrite: boolean;
   saveEnv: (formData: FormData) => Promise<void>;
   saveCohort: (formData: FormData) => Promise<void>;
   resetSandbox: (formData: FormData) => Promise<void>;
+  saveTags: (formData: FormData) => Promise<void>;
 }) {
   return (
     <div className="space-y-6">
+      <Section
+        title="Admin tags"
+        description='Internal tags for organizing tenants — never shown to the tenant. Lowercase, kebab-case, e.g. "vip", "at-risk", "enterprise-pilot". Comma- or space-separated.'
+      >
+        <form action={saveTags} className="space-y-3">
+          <div className="flex flex-wrap items-center gap-1.5 mb-3">
+            {tenant.adminTags.length === 0 ? (
+              <span className="text-xs italic" style={{ color: "var(--text-faint)" }}>
+                No tags set yet.
+              </span>
+            ) : tenant.adminTags.map((t) => (
+              <span
+                key={t}
+                className="inline-block rounded-full px-2 py-0.5 text-[11px] font-medium"
+                style={{
+                  background: "var(--accent-surface)",
+                  color: "var(--accent-primary)",
+                  border: "1px solid var(--accent-primary)",
+                }}
+              >
+                {t}
+              </span>
+            ))}
+          </div>
+          <Field
+            label="Tags"
+            name="tags"
+            defaultValue={tenant.adminTags.join(", ")}
+            placeholder="vip, beta-pilot, at-risk"
+            hint="Up to 20 tags. Invalid characters dropped silently."
+          />
+          <Button type="submit" disabled={!canWrite}>
+            {canWrite ? "Save tags" : "Requires admin role"}
+          </Button>
+        </form>
+      </Section>
+
       <div className="grid gap-4 md:grid-cols-2">
         <Section title="Environment" description="LIVE = real customer · DEMO = sales/marketing demo · TEST = QA sandbox.">
           <form action={saveEnv} className="space-y-3">
@@ -1042,8 +1086,25 @@ function AdminTab({
                   </p>
                 </div>
                 <form action={doArchive} className="space-y-3">
+                  <SelectField
+                    label="Cancellation reason category"
+                    name="reasonCode"
+                    defaultValue="ADMIN_DECISION"
+                    options={[
+                      { value: "ADMIN_DECISION",         label: "Admin decision (catch-all)" },
+                      { value: "NOT_A_FIT",              label: "Not a fit for our product" },
+                      { value: "TOO_EXPENSIVE",          label: "Too expensive" },
+                      { value: "MISSING_FEATURES",       label: "Missing features" },
+                      { value: "SWITCHED_TO_COMPETITOR", label: "Switched to competitor" },
+                      { value: "BUSINESS_CLOSED",        label: "Business closed / no longer operating" },
+                      { value: "TEMPORARY_PAUSE",        label: "Temporary pause" },
+                      { value: "TECHNICAL_ISSUES",       label: "Technical issues" },
+                      { value: "POOR_SUPPORT",           label: "Poor support experience" },
+                      { value: "OTHER",                  label: "Other" },
+                    ]}
+                  />
                   <Field
-                    label="Reason (logged)"
+                    label="Reason (free-form, logged)"
                     name="reason"
                     placeholder="e.g. Owner requested closure — ticket #291"
                   />

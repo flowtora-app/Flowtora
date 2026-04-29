@@ -150,21 +150,14 @@ export function PlatformNav({
         className="shrink-0 space-y-1 px-2.5 py-2.5"
         style={{ borderTop: "1px solid var(--border-subtle)" }}
       >
-        {/* User identity + sign-out — Discord/Slack-style footer card.
-            The whole row submits the sign-out form; the right-side
-            arrow telegraphs that intent. */}
-        <form action={signOutAction}>
-          <button
-            type="submit"
-            className="ts-focus flex w-full items-center gap-2 rounded-md px-2 py-1.5 text-left transition-colors"
-            style={{ background: "transparent" }}
-            title="Sign out"
-            onMouseEnter={(e) => {
-              e.currentTarget.style.background = "var(--surface-3)";
-            }}
-            onMouseLeave={(e) => {
-              e.currentTarget.style.background = "transparent";
-            }}
+        {/* User identity (links to /platform/profile) + sign-out icon.
+            The avatar + name area is a profile link; sign-out is its
+            own icon button so the two intents don't collide. */}
+        <div className="flex items-center gap-1">
+          <Link
+            href="/platform/profile"
+            className="ts-focus flex min-w-0 flex-1 items-center gap-2 rounded-md px-2 py-1.5 transition-colors hover:bg-[var(--surface-3)]"
+            title="Profile, security, preferences"
           >
             <span
               className="flex h-8 w-8 shrink-0 items-center justify-center overflow-hidden rounded-full text-[12px] font-semibold"
@@ -185,7 +178,7 @@ export function PlatformNav({
                 initials
               )}
             </span>
-            <span className="min-w-0 flex-1">
+            <span className="min-w-0 flex-1 text-left">
               <span
                 className="block truncate text-[13px] font-semibold leading-tight"
                 style={{ color: "var(--text-default)" }}
@@ -199,9 +192,18 @@ export function PlatformNav({
                 {roleLabel}
               </span>
             </span>
-            <Icon.SignOut size={14} style={{ color: "var(--text-muted)", flexShrink: 0 }} />
-          </button>
-        </form>
+          </Link>
+          <form action={signOutAction}>
+            <button
+              type="submit"
+              className="ts-focus inline-flex h-8 w-8 items-center justify-center rounded-md transition-colors hover:bg-[var(--surface-3)]"
+              title="Sign out"
+              aria-label="Sign out"
+            >
+              <Icon.SignOut size={14} style={{ color: "var(--text-muted)" }} />
+            </button>
+          </form>
+        </div>
       </div>
     </aside>
   );

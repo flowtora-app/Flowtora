@@ -578,6 +578,13 @@ export async function restoreCannedReply(id: string) {
 const archiveSchema = z.object({
   reason:     z.string().max(500).optional().or(z.literal("")),
   graceDays:  z.string().optional().or(z.literal("")),
+  // Categorized reason for analytics rollups. UI offers a select with
+  // ArchiveReasonCode values; free-form `reason` stays alongside.
+  reasonCode: z.enum([
+    "NOT_A_FIT", "TOO_EXPENSIVE", "MISSING_FEATURES", "SWITCHED_TO_COMPETITOR",
+    "BUSINESS_CLOSED", "TEMPORARY_PAUSE", "TECHNICAL_ISSUES", "POOR_SUPPORT",
+    "ADMIN_DECISION", "OTHER",
+  ]).optional().or(z.literal("")),
 });
 
 /**
@@ -606,6 +613,13 @@ export async function archiveTenant(tenantId: string, formData: FormData) {
 
   const scheduledDeletionAt = new Date(Date.now() + graceDays * 24 * 60 * 60 * 1000);
 
+  const reasonCode = parsed.success && parsed.data.reasonCode && parsed.data.reasonCode.length > 0
+    ? (parsed.data.reasonCode as
+        | "NOT_A_FIT" | "TOO_EXPENSIVE" | "MISSING_FEATURES" | "SWITCHED_TO_COMPETITOR"
+        | "BUSINESS_CLOSED" | "TEMPORARY_PAUSE" | "TECHNICAL_ISSUES" | "POOR_SUPPORT"
+        | "ADMIN_DECISION" | "OTHER")
+    : null;
+
   await db.tenant.update({
     where: { id: tenantId },
     data: {
@@ -613,6 +627,7 @@ export async function archiveTenant(tenantId: string, formData: FormData) {
       archivedAt: new Date(),
       archivedBy: ctx.userId,
       archiveReason: reason,
+      archiveReasonCode: reasonCode,
       scheduledDeletionAt,
       // Clear suspension reason — archive is its own thing.
       suspensionReason: null,
@@ -865,4 +880,181 @@ export async function stopImpersonation() {
     redirect(`/platform/tenants/${active.tenantId}`);
   }
   redirect(userId ? "/platform/tenants" : "/");
+}
+
+// ────────────────────────────────────────────────────────────
+// Phase 2 polish — tenant tags, bulk operations.
+// ────────────────────────────────────────────────────────────
+
+const TAG_RX = /^[a-z0-9][a-z0-9-]{0,30}$/;
+
+const setTagsSchema = z.object({
+  tags: z.string().max(500).optional().or(z.literal("")),
+});
+
+/**
+ * Replace the full set of admin-side tags on a tenant. Tags are
+ * lowercase kebab-case (e.g. "vip", "beta-pilot", "at-risk"); invalid
+ * entries are silently dropped. Submitting an empty string clears all.
+ */
+export async function setTenantTags(tenantId: string, formData: FormData) {
+  const ctx = await requirePlatformAdmin();
+  const parsed = setTagsSchema.safeParse(Object.fromEntries(formData.entries()));
+  if (!parsed.success) {
+    redirect(`/platform/tenants/${tenantId}?error=${encodeURIComponent("Invalid tags")}`);
+  }
+  const raw = parsed.data.tags ?? "";
+  const tags = Array.from(new Set(
+    raw.split(/[,\s]/)
+      .map((t) => t.trim().toLowerCase())
+      .filter((t) => t.length > 0 && TAG_RX.test(t))
+      .slice(0, 20),
+  ));
+
+  const tenant = await db.tenant.findUnique({
+    where: { id: tenantId },
+    select: { id: true, adminTags: true },
+  });
+  if (!tenant) {
+    redirect(`/platform/tenants?error=${encodeURIComponent("Not found")}`);
+  }
+
+  await db.tenant.update({
+    where: { id: tenantId },
+    data:  { adminTags: tags },
+  });
+
+  await logPlatformAudit({
+    userId:     ctx.userId,
+    tenantId:   tenant.id,
+    action:     "platform.tenant_tags_set",
+    entityType: "Tenant",
+    entityId:   tenant.id,
+    metadata:   { actor: ctx.email, before: tenant.adminTags, after: tags },
+  });
+
+  revalidatePath("/platform/tenants");
+  revalidatePath(`/platform/tenants/${tenantId}`);
+  redirect(`/platform/tenants/${tenantId}?ok=tags_saved`);
+}
+
+const bulkActionSchema = z.object({
+  action: z.enum(["ARCHIVE", "ADD_TAG", "REMOVE_TAG"]),
+  ids:    z.string().min(1),
+  tag:    z.string().max(40).optional().or(z.literal("")),
+});
+
+/**
+ * Bulk operation across selected tenants. Supports:
+ *   • ARCHIVE      — soft-delete all selected (skips already-archived)
+ *   • ADD_TAG      — append a single tag to all selected
+ *   • REMOVE_TAG   — remove a single tag from all selected
+ */
+export async function bulkUpdateTenants(formData: FormData) {
+  const ctx = await requirePlatformAdmin();
+  const parsed = bulkActionSchema.safeParse(Object.fromEntries(formData.entries()));
+  if (!parsed.success) {
+    redirect(`/platform/tenants?error=${encodeURIComponent("Invalid bulk action")}`);
+  }
+  const ids = parsed.data.ids.split(",").map((s) => s.trim()).filter(Boolean);
+  if (ids.length === 0) {
+    redirect(`/platform/tenants?error=${encodeURIComponent("No tenants selected")}`);
+  }
+
+  if (parsed.data.action === "ARCHIVE") {
+    const scheduledDeletionAt = new Date(Date.now() + DEFAULT_ARCHIVE_GRACE_DAYS * 24 * 60 * 60 * 1000);
+    const updated = await db.tenant.updateMany({
+      where: { id: { in: ids }, status: { not: "ARCHIVED" } },
+      data: {
+        status: "ARCHIVED",
+        archivedAt: new Date(),
+        archivedBy: ctx.userId,
+        archiveReasonCode: "ADMIN_DECISION",
+        scheduledDeletionAt,
+      },
+    });
+    await logPlatformAudit({
+      userId:     ctx.userId,
+      tenantId:   null,
+      action:     "platform.tenants_bulk_archived",
+      entityType: "Tenant",
+      metadata:   { actor: ctx.email, ids, count: updated.count },
+    });
+    revalidatePath("/platform/tenants");
+    redirect(`/platform/tenants?ok=bulk_archived&count=${updated.count}`);
+  }
+
+  // Tag operations
+  const tag = parsed.data.tag?.trim().toLowerCase() ?? "";
+  if (!tag || !TAG_RX.test(tag)) {
+    redirect(`/platform/tenants?error=${encodeURIComponent("Invalid tag")}`);
+  }
+  const targets = await db.tenant.findMany({
+    where:  { id: { in: ids } },
+    select: { id: true, adminTags: true },
+  });
+  for (const t of targets) {
+    const next = parsed.data.action === "ADD_TAG"
+      ? Array.from(new Set([...t.adminTags, tag])).slice(0, 20)
+      : t.adminTags.filter((existing) => existing !== tag);
+    if (JSON.stringify(next) === JSON.stringify(t.adminTags)) continue;
+    await db.tenant.update({ where: { id: t.id }, data: { adminTags: next } });
+  }
+  await logPlatformAudit({
+    userId:     ctx.userId,
+    tenantId:   null,
+    action:     parsed.data.action === "ADD_TAG"
+      ? "platform.tenants_bulk_tag_added"
+      : "platform.tenants_bulk_tag_removed",
+    entityType: "Tenant",
+    metadata:   { actor: ctx.email, ids, tag, count: targets.length },
+  });
+  revalidatePath("/platform/tenants");
+  redirect(`/platform/tenants?ok=bulk_tag_${parsed.data.action === "ADD_TAG" ? "added" : "removed"}&count=${targets.length}`);
+}
+
+// ────────────────────────────────────────────────────────────
+// Phase 23 — admin self-service profile + preferences.
+// ────────────────────────────────────────────────────────────
+
+const profileSchema = z.object({
+  name:     z.string().max(120).optional().or(z.literal("")),
+  bio:      z.string().max(500).optional().or(z.literal("")),
+  timezone: z.string().max(60).optional().or(z.literal("")),
+});
+
+export async function updatePlatformProfile(formData: FormData) {
+  const ctx = await requirePlatformStaff();
+  const parsed = profileSchema.safeParse(Object.fromEntries(formData.entries()));
+  if (!parsed.success) {
+    redirect(`/platform/profile?error=${encodeURIComponent("Invalid input")}`);
+  }
+  await db.user.update({
+    where: { id: ctx.userId },
+    data: {
+      name:     parsed.data.name && parsed.data.name.length > 0 ? parsed.data.name : null,
+      bio:      parsed.data.bio && parsed.data.bio.length > 0 ? parsed.data.bio : null,
+      timezone: parsed.data.timezone && parsed.data.timezone.length > 0 ? parsed.data.timezone : null,
+    },
+  });
+  revalidatePath("/platform/profile");
+  redirect(`/platform/profile?ok=profile_saved`);
+}
+
+const themeSchema = z.object({
+  themePreference: z.enum(["AUTO", "LIGHT", "DARK"]),
+});
+
+export async function updateThemePreference(formData: FormData) {
+  const ctx = await requirePlatformStaff();
+  const parsed = themeSchema.safeParse(Object.fromEntries(formData.entries()));
+  if (!parsed.success) {
+    redirect(`/platform/profile?error=${encodeURIComponent("Invalid theme")}`);
+  }
+  await db.user.update({
+    where: { id: ctx.userId },
+    data:  { themePreference: parsed.data.themePreference },
+  });
+  revalidatePath("/platform/profile");
+  redirect(`/platform/profile?ok=theme_saved`);
 }

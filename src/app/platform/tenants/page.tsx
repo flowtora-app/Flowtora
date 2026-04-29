@@ -405,6 +405,25 @@ export default async function PlatformTenantsPage({
                                 {cohortLabel(t.betaCohort)}
                               </span>
                             )}
+                            {t.adminTags.slice(0, 3).map((tag) => (
+                              <span
+                                key={tag}
+                                className="rounded-full px-1.5 py-0.5 text-[9px] font-medium"
+                                style={{
+                                  background: "var(--accent-surface)",
+                                  color: "var(--accent-primary)",
+                                  border: "1px solid var(--accent-primary)",
+                                }}
+                                title="Admin tag"
+                              >
+                                {tag}
+                              </span>
+                            ))}
+                            {t.adminTags.length > 3 && (
+                              <span className="text-[9px]" style={{ color: "var(--text-faint)" }}>
+                                +{t.adminTags.length - 3}
+                              </span>
+                            )}
                           </div>
                           <div
                             className="truncate text-xs"
