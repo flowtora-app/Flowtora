@@ -10,9 +10,11 @@ import {
   unpublishAnnouncement,
   archiveAnnouncement,
   deleteAnnouncement,
+  sendAnnouncementEmails,
   liveStatus,
   type LiveStatus,
 } from "@/app/actions/announcements";
+import { MarkdownEditor } from "@/components/MarkdownEditor";
 
 // /platform/announcements/[id] — announcement composer + state machine.
 //
@@ -54,6 +56,21 @@ export default async function PlatformAnnouncementEditPage({
 
   const live = liveStatus(a, new Date());
   const canDelete = a.status === "DRAFT";
+
+  // Analytics — single grouped read pass.
+  const [viewCount, dismissCount, distinctTenants] = await Promise.all([
+    db.platformAnnouncementView.count({ where: { announcementId: a.id } }),
+    db.platformAnnouncementView.count({ where: { announcementId: a.id, dismissedAt: { not: null } } }),
+    db.platformAnnouncementView.findMany({
+      where:    { announcementId: a.id },
+      distinct: ["tenantId"],
+      select:   { tenantId: true },
+    }),
+  ]);
+  const dismissRate = viewCount === 0 ? 0 : (dismissCount / viewCount) * 100;
+  const isLiveOrSchedReady =
+    a.status === "PUBLISHED" ||
+    (a.status === "SCHEDULED" && a.publishAt && a.publishAt.getTime() <= Date.now());
 
   return (
     <div className="space-y-6">
@@ -164,33 +181,27 @@ export default async function PlatformAnnouncementEditPage({
               placeholder='e.g. "Scheduled maintenance — Sunday 2026-04-26 02:00 UTC"'
               disabled={!ctx.canWrite}
             />
-            <label className="block">
+            <div className="block">
               <span className="mb-1 block text-sm font-medium" style={{ color: "var(--text-default)" }}>
                 Body
               </span>
-              <textarea
+              <MarkdownEditor
                 name="body"
                 defaultValue={a.body}
-                rows={8}
+                rows={10}
                 maxLength={8000}
+                disabled={!ctx.canWrite}
                 placeholder={[
                   "What changed, why, and what tenants should do.",
                   "",
-                  "• Markdown links work: [text](url)",
-                  "• Keep the first line punchy — it's the banner preview.",
+                  "Use the toolbar (or ⌘B / ⌘I / ⌘K) for **bold**, *italic*, and [links](https://…).",
+                  "Switch to Preview to see how it'll render.",
                 ].join("\n")}
-                disabled={!ctx.canWrite}
-                className="ts-focus w-full rounded-md px-3 py-2 text-sm outline-none"
-                style={{
-                  background: "var(--surface-1)",
-                  border: "1px solid var(--border-default)",
-                  color: "var(--text-default)",
-                }}
               />
               <span className="mt-1 block text-xs" style={{ color: "var(--text-muted)" }}>
-                Up to 8,000 chars. Plain text or markdown.
+                Up to 8,000 chars. The same markdown subset is used in transactional emails.
               </span>
-            </label>
+            </div>
             <FormField
               label="Tags"
               name="tags"
@@ -383,6 +394,86 @@ export default async function PlatformAnnouncementEditPage({
         )}
       </form>
 
+      {/* ── Analytics ───────────────────────────────────── */}
+      <Section
+        title="Reach & analytics"
+        description="Read receipts come from the in-app banner. View counts include logged-in tenant members across every workspace they're in."
+      >
+        <div className="grid grid-cols-2 gap-3 md:grid-cols-4">
+          <Stat
+            label="Views"
+            value={viewCount.toLocaleString()}
+            hint={viewCount === 0 ? "Not yet seen by any tenant" : "Unique users"}
+            tone={viewCount > 0 ? "accent" : "default"}
+          />
+          <Stat
+            label="Tenants reached"
+            value={distinctTenants.length.toLocaleString()}
+            hint="Distinct workspaces"
+            tone="default"
+          />
+          <Stat
+            label="Dismissed"
+            value={dismissCount.toLocaleString()}
+            hint={viewCount > 0 ? `${dismissRate.toFixed(0)}% dismiss rate` : "—"}
+            tone="default"
+          />
+          <Stat
+            label="Emailed"
+            value={a.emailedRecipientCount.toLocaleString()}
+            hint={
+              a.emailedAt
+                ? `Last sent ${a.emailedAt.toISOString().slice(0, 16).replace("T", " ")} UTC`
+                : "Not yet emailed"
+            }
+            tone={a.emailedRecipientCount > 0 ? "success" : "default"}
+          />
+        </div>
+      </Section>
+
+      {/* ── Email fan-out ───────────────────────────────── */}
+      <Section
+        title="Email matching tenants"
+        description={
+          a.emailedAt
+            ? "An email was already sent. Re-clicking will send a fresh email to every currently-matching tenant member — use sparingly."
+            : "Sends a branded email to every active member of every tenant matching the audience above. The in-app banner appears the moment you publish; this is for reaching folks who don't open the app daily."
+        }
+      >
+        {!isLiveOrSchedReady ? (
+          <div
+            className="rounded-md px-3 py-2 text-xs"
+            style={{
+              background: "var(--surface-2)",
+              border: "1px solid var(--border-subtle)",
+              color: "var(--text-muted)",
+            }}
+          >
+            Publish first — emails can only be sent for live announcements.
+          </div>
+        ) : (
+          <form action={sendAnnouncementEmails.bind(null, a.id)} className="flex items-center justify-between gap-3">
+            <div className="text-xs" style={{ color: "var(--text-muted)" }}>
+              {a.emailedAt
+                ? <>Last fan-out: <b style={{ color: "var(--text-default)" }}>{a.emailedRecipientCount}</b> recipient{a.emailedRecipientCount === 1 ? "" : "s"}</>
+                : "No emails sent yet."}
+            </div>
+            <button
+              type="submit"
+              disabled={!ctx.canWrite}
+              className="ts-focus rounded-md px-4 py-2 text-sm font-medium disabled:opacity-50"
+              style={{
+                background: a.emailedAt ? "var(--surface-2)" : "var(--accent-primary)",
+                color:      a.emailedAt ? "var(--text-default)" : "var(--accent-fg)",
+                border:     `1px solid ${a.emailedAt ? "var(--border-default)" : "var(--accent-primary)"}`,
+              }}
+            >
+              {a.emailedAt ? "Re-send email" : "Send email to matching tenants"}
+            </button>
+          </form>
+        )}
+      </Section>
+
       {/* ── Metadata footer ─────────────────────────────── */}
       <div
         className="grid gap-2 rounded-md px-5 py-4 text-xs md:grid-cols-2"
@@ -403,6 +494,49 @@ export default async function PlatformAnnouncementEditPage({
           {a.authorId && <> · by {a.authorId.slice(0, 8)}</>}
         </div>
       </div>
+    </div>
+  );
+}
+
+function Stat({
+  label,
+  value,
+  hint,
+  tone,
+}: {
+  label: string;
+  value: string;
+  hint?: string;
+  tone: "default" | "accent" | "success";
+}) {
+  const palette =
+    tone === "accent"  ? { bg: "var(--accent-surface)",  border: "var(--accent-primary)", label: "var(--accent-primary)" } :
+    tone === "success" ? { bg: "var(--success-surface)", border: "var(--success-fg)",     label: "var(--success-fg)"     } :
+                          { bg: "var(--surface-1)",       border: "var(--border-subtle)",  label: "var(--text-muted)"     };
+  return (
+    <div
+      className="rounded-xl p-4"
+      style={{
+        background: palette.bg,
+        border: `1px solid ${palette.border}`,
+        boxShadow: "var(--shadow-sm)",
+      }}
+    >
+      <div
+        className="text-xs font-medium uppercase tracking-wide"
+        style={{ color: palette.label }}
+      >
+        {label}
+      </div>
+      <div
+        className="mt-2 text-xl font-semibold tabular-nums tracking-tight"
+        style={{ color: "var(--text-default)" }}
+      >
+        {value}
+      </div>
+      {hint && (
+        <div className="mt-1 text-xs" style={{ color: "var(--text-muted)" }}>{hint}</div>
+      )}
     </div>
   );
 }

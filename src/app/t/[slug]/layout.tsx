@@ -399,6 +399,7 @@ export default async function TenantLayout({
             betaCohort: tenant.betaCohort,
           })).map((a) => ({
             id: a.id,
+            tenantId: tenant.id,
             title: a.title,
             body: a.body,
             type: a.type,

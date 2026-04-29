@@ -1,10 +1,14 @@
 "use server";
 
+import { auth } from "@/auth";
 import { redirect } from "next/navigation";
 import { revalidatePath } from "next/cache";
 import { z } from "zod";
 import { db } from "@/lib/db";
 import { requirePlatformStaff, logPlatformAudit } from "@/lib/platform";
+import { sendEmail, brandedEmailLayout, brandedTextLayout } from "@/lib/email";
+import { renderMarkdownLite } from "@/lib/notifications/markdown";
+import { loadBrand } from "@/lib/notifications/brand";
 import type {
   AnnouncementType,
   AnnouncementPriority,
@@ -285,6 +289,166 @@ export async function activeAnnouncementsForTenant(tenant: {
     orderBy: [{ priority: "desc" }, { publishedAt: "desc" }, { createdAt: "desc" }],
     take: 5,
   });
+}
+
+// ────────────────────────────────────────────────────────────────
+// VIEW TRACKING — called from the tenant-side banner. The banner mounts
+// once we've SSR'd the matching announcements; on first render it pings
+// recordAnnouncementView, and on dismiss it pings recordAnnouncementDismissal.
+// Both are no-throw and return void so the UI never blocks on them.
+// ────────────────────────────────────────────────────────────────
+
+/**
+ * Mark this announcement as seen by the calling user. Idempotent —
+ * upserts on (announcementId, userId), so re-mounts don't duplicate.
+ * Stores tenantId from the active session for the analytics rollup.
+ */
+export async function recordAnnouncementView(announcementId: string, tenantId: string) {
+  const session = await auth();
+  const userId = session?.user?.id;
+  if (!userId) return;
+  try {
+    await db.platformAnnouncementView.upsert({
+      where:  { announcementId_userId: { announcementId, userId } },
+      create: { announcementId, userId, tenantId },
+      // Keep the original seenAt; only refresh implicitly via a no-op
+      // update so we don't bump it on every page load.
+      update: {},
+    });
+  } catch {
+    // Schema race / unique violation — silently swallow. The banner
+    // doesn't surface this; analytics tolerate eventual consistency.
+  }
+}
+
+/**
+ * Stamp dismissedAt for the calling user. Implies "seen" too — upserts
+ * the row in case the user somehow dismissed before the view ping landed.
+ */
+export async function recordAnnouncementDismissal(announcementId: string, tenantId: string) {
+  const session = await auth();
+  const userId = session?.user?.id;
+  if (!userId) return;
+  try {
+    await db.platformAnnouncementView.upsert({
+      where:  { announcementId_userId: { announcementId, userId } },
+      create: { announcementId, userId, tenantId, dismissedAt: new Date() },
+      update: { dismissedAt: new Date() },
+    });
+  } catch {
+    // Same tolerance as recordAnnouncementView.
+  }
+}
+
+// ────────────────────────────────────────────────────────────────
+// EMAIL FAN-OUT — explicit admin action. Picks all matching tenants
+// per the audience selector, expands each to its active members, and
+// sends a branded email to every member. We stamp emailedAt and the
+// recipient count for the analytics panel; re-clicks re-send (admin's
+// call), so the button label flips to "Re-send" after the first send.
+// ────────────────────────────────────────────────────────────────
+
+export async function sendAnnouncementEmails(id: string) {
+  const ctx = await requirePlatformStaff();
+  if (!ctx.canWrite) {
+    redirect(`/platform/announcements/${id}?error=${encodeURIComponent("Requires admin role")}`);
+  }
+  const a = await db.platformAnnouncement.findUnique({ where: { id } });
+  if (!a) {
+    redirect(`/platform/announcements?error=${encodeURIComponent("Not found")}`);
+  }
+  if (a.status !== "PUBLISHED" && !(a.status === "SCHEDULED" && a.publishAt && a.publishAt.getTime() <= Date.now())) {
+    redirect(`/platform/announcements/${id}?error=${encodeURIComponent("Publish before sending emails.")}`);
+  }
+
+  // Resolve the matching tenants. Mirrors activeAnnouncementsForTenant
+  // but on the tenant side instead of the announcement side.
+  const tenantWhere: Prisma.TenantWhereInput = a.audience === "ALL"
+    ? { status: { not: "ARCHIVED" } }
+    : a.audience === "PLAN"
+    ? { status: { not: "ARCHIVED" }, plan: { in: a.audiencePlans as Array<"STARTER" | "GROWTH" | "PRO" | "ENTERPRISE"> } }
+    : a.audience === "COHORT"
+    ? { status: { not: "ARCHIVED" }, betaCohort: { in: a.audienceCohorts as Array<"NONE" | "ALPHA" | "BETA" | "PILOT"> } }
+    : { status: { not: "ARCHIVED" }, id: { in: a.audienceTenantIds } };
+
+  const tenants = await db.tenant.findMany({
+    where:  tenantWhere,
+    select: { id: true },
+  });
+  if (tenants.length === 0) {
+    redirect(`/platform/announcements/${id}?error=${encodeURIComponent("No tenants match the audience.")}`);
+  }
+
+  // Pull every active member of every matching tenant. We deduplicate
+  // by user email at the end — same person on multiple tenants
+  // shouldn't get N copies of the same announcement.
+  const memberships = await db.membership.findMany({
+    where: {
+      tenantId: { in: tenants.map((t) => t.id) },
+      status:   "ACTIVE",
+    },
+    select: { user: { select: { id: true, email: true, name: true } } },
+  });
+  const uniqRecipients = new Map<string, { id: string; email: string; name: string | null }>();
+  for (const m of memberships) {
+    if (m.user?.email) uniqRecipients.set(m.user.email.toLowerCase(), m.user);
+  }
+
+  const brand = await loadBrand();
+  const subject = `${brand.productName}: ${a.title}`;
+  const bodyHtml = renderMarkdownLite(a.body || "");
+
+  // Send sequentially to keep load on Resend modest. For very large
+  // tenant bases this should be moved to a worker job — fine for now
+  // since active recipient counts are in the hundreds at most.
+  let sentCount = 0;
+  for (const u of uniqRecipients.values()) {
+    const html = brandedEmailLayout({
+      previewText: a.title,
+      heading: a.title,
+      subheading: a.type.replace("_", " ").toLowerCase(),
+      sections: [
+        ...(bodyHtml ? [{ kind: "text" as const, html: bodyHtml }] : []),
+        { kind: "fallbackLink" as const, label: "Open Flowtora", href: "https://flowtora.com" },
+      ],
+      footerNote: "You're receiving this because you're on the Flowtora platform.",
+    });
+    const text = brandedTextLayout({
+      heading: a.title,
+      body: a.body || "",
+    });
+    try {
+      await sendEmail({
+        to: u.email,
+        subject,
+        html,
+        text,
+      });
+      sentCount++;
+    } catch {
+      // Best-effort fan-out; one bad recipient shouldn't block the rest.
+    }
+  }
+
+  await db.platformAnnouncement.update({
+    where: { id },
+    data: {
+      emailedAt: new Date(),
+      emailedRecipientCount: sentCount,
+    },
+  });
+  await logPlatformAudit({
+    userId:     ctx.userId,
+    tenantId:   null,
+    action:     "platform.announcement_emailed",
+    entityType: "PlatformAnnouncement",
+    entityId:   id,
+    metadata:   { actor: ctx.email, recipients: sentCount, audience: a.audience },
+  });
+
+  revalidatePath(`/platform/announcements/${id}`);
+  revalidatePath("/platform/announcements");
+  redirect(`/platform/announcements/${id}?ok=emailed&count=${sentCount}`);
 }
 
 // ────────────────────────────────────────────────────────────────
