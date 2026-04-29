@@ -3175,6 +3175,30 @@ enum AnnouncementAudience {
   TENANT
 }
 
+// Singleton row that holds platform-wide operational state. Only one
+// row exists, with a fixed id so reads + upserts stay simple.
+model PlatformSetting {
+  id String @id @default("singleton")
+
+  // ── Maintenance mode ──
+  // When ON, every tenant route redirects to /maintenance. Platform
+  // staff bypass via their platformRole. The message is shown on the
+  // /maintenance page.
+  maintenanceMode    Boolean @default(false)
+  maintenanceMessage String?
+
+  // ── Feature freeze ──
+  // Advisory flag — does NOT block writes. Surfaces a banner everywhere
+  // admins land so the team knows not to ship more changes during a
+  // release window.
+  featureFreezeMode    Boolean @default(false)
+  featureFreezeReason  String?
+
+  updatedBy String?
+  updatedAt DateTime @updatedAt
+  createdAt DateTime @default(now())
+}
+
 model PlatformAnnouncement {
   id    String @id @default(cuid())
   title String

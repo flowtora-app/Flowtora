@@ -269,6 +269,98 @@ export async function endAllActiveImpersonations() {
 }
 
 // ────────────────────────────────────────────────────────────
+// Platform settings — maintenance mode + feature freeze toggles.
+// Singleton row in PlatformSetting, audit-logged on every change.
+// ────────────────────────────────────────────────────────────
+
+const platformSettingsSchema = z.object({
+  maintenanceMode:     z.preprocess((v) => v === "on" || v === "true" || v === "1", z.boolean()),
+  maintenanceMessage:  z.string().max(500).optional().or(z.literal("")),
+  featureFreezeMode:   z.preprocess((v) => v === "on" || v === "true" || v === "1", z.boolean()),
+  featureFreezeReason: z.string().max(500).optional().or(z.literal("")),
+});
+
+export async function updatePlatformSettings(formData: FormData) {
+  const ctx = await requirePlatformAdmin();
+  const parsed = platformSettingsSchema.safeParse(Object.fromEntries(formData.entries()));
+  if (!parsed.success) {
+    redirect(`/platform/settings?error=${encodeURIComponent("Invalid input")}`);
+  }
+  const d = parsed.data;
+
+  // Read previous to know what actually changed (for audit metadata).
+  const prev = await db.platformSetting.findUnique({ where: { id: "singleton" } });
+
+  await db.platformSetting.upsert({
+    where: { id: "singleton" },
+    update: {
+      maintenanceMode:     d.maintenanceMode,
+      maintenanceMessage:  d.maintenanceMessage && d.maintenanceMessage.length > 0 ? d.maintenanceMessage : null,
+      featureFreezeMode:   d.featureFreezeMode,
+      featureFreezeReason: d.featureFreezeReason && d.featureFreezeReason.length > 0 ? d.featureFreezeReason : null,
+      updatedBy: ctx.userId,
+    },
+    create: {
+      id: "singleton",
+      maintenanceMode:     d.maintenanceMode,
+      maintenanceMessage:  d.maintenanceMessage && d.maintenanceMessage.length > 0 ? d.maintenanceMessage : null,
+      featureFreezeMode:   d.featureFreezeMode,
+      featureFreezeReason: d.featureFreezeReason && d.featureFreezeReason.length > 0 ? d.featureFreezeReason : null,
+      updatedBy: ctx.userId,
+    },
+  });
+
+  // Audit log — emit a discrete event for each toggle that actually
+  // flipped, so /platform/audit can show a clean before/after.
+  if (prev?.maintenanceMode !== d.maintenanceMode) {
+    await logPlatformAudit({
+      userId:     ctx.userId,
+      tenantId:   null,
+      action:     d.maintenanceMode ? "platform.setting_maintenance_on" : "platform.setting_maintenance_off",
+      entityType: "PlatformSetting",
+      entityId:   "singleton",
+      metadata:   { actor: ctx.email, message: d.maintenanceMessage ?? null },
+    });
+  }
+  if (prev?.featureFreezeMode !== d.featureFreezeMode) {
+    await logPlatformAudit({
+      userId:     ctx.userId,
+      tenantId:   null,
+      action:     d.featureFreezeMode ? "platform.setting_freeze_on" : "platform.setting_freeze_off",
+      entityType: "PlatformSetting",
+      entityId:   "singleton",
+      metadata:   { actor: ctx.email, reason: d.featureFreezeReason ?? null },
+    });
+  }
+  // Catch-all event for message / reason text edits where the toggle
+  // didn't change — keeps the history complete.
+  const messageChanged = (prev?.maintenanceMessage ?? null) !== (d.maintenanceMessage || null);
+  const reasonChanged = (prev?.featureFreezeReason ?? null) !== (d.featureFreezeReason || null);
+  if (
+    messageChanged && prev?.maintenanceMode === d.maintenanceMode ||
+    reasonChanged && prev?.featureFreezeMode === d.featureFreezeMode
+  ) {
+    await logPlatformAudit({
+      userId:     ctx.userId,
+      tenantId:   null,
+      action:     "platform.setting_text_updated",
+      entityType: "PlatformSetting",
+      entityId:   "singleton",
+      metadata:   {
+        actor: ctx.email,
+        messageChanged,
+        reasonChanged,
+      },
+    });
+  }
+
+  revalidatePath("/platform/settings");
+  // Maintenance mode reaches into every tenant layout, so flush those too.
+  revalidatePath("/", "layout");
+  redirect(`/platform/settings?ok=settings_saved`);
+}
+
+// ────────────────────────────────────────────────────────────
 // Slice C — Feature flags / entitlement overrides
 // ────────────────────────────────────────────────────────────
 

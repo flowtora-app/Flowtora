@@ -20,6 +20,7 @@ import { MemberWelcomeCard } from "@/components/onboarding/MemberWelcomeCard";
 import { FloatingHelpButton } from "@/components/support/FloatingHelpButton";
 import { PlatformAnnouncementBanner } from "@/components/PlatformAnnouncementBanner";
 import { activeAnnouncementsForTenant } from "@/app/actions/announcements";
+import { getPlatformSettings } from "@/lib/platform-settings";
 
 // Phase 18 Slice B — tenant layout.
 //
@@ -55,6 +56,18 @@ export default async function TenantLayout({
   const { slug } = await params;
   const ctx = await requireTenant(slug);
   const { tenant, role, userId } = ctx;
+
+  // Maintenance mode gate. When the singleton flag is on, every tenant
+  // request bounces to /maintenance — except for platform staff, who
+  // need a way in to flip the toggle off. We peek at session.user
+  // directly because the requireTenant context doesn't carry platformRole.
+  const platformSettings = await getPlatformSettings();
+  if (platformSettings.maintenanceMode) {
+    const peek = await auth();
+    if (!peek?.user?.platformRole) {
+      redirect("/maintenance");
+    }
+  }
 
   const path = (await headers()).get("x-pathname") ?? "";
   const inOnboarding = path.includes(`/t/${slug}/onboarding`);

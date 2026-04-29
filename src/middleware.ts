@@ -47,6 +47,7 @@ const PUBLIC_PATHS = new Set<string>([
   "/login",
   "/signup",
   "/account-suspended",
+  "/maintenance",
   // Marketing pages
   "/about",
   "/book-demo",

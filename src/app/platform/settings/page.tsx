@@ -2,6 +2,8 @@ import Link from "next/link";
 import { db } from "@/lib/db";
 import { requirePlatformStaff } from "@/lib/platform";
 import { listRegistrations } from "@/lib/notifications";
+import { getPlatformSettings } from "@/lib/platform-settings";
+import { updatePlatformSettings } from "@/app/actions/platform";
 import { SettingsKPIBand, type SettingsKpi } from "@/components/platform/SettingsKPIBand";
 
 // /platform/settings — platform control center (transformation rewrite).
@@ -74,10 +76,18 @@ const GROUP_META: Record<EnvVar["group"], { label: string; description: string; 
 
 const GROUP_ORDER: EnvVar["group"][] = ["core", "auth", "billing", "email", "storage", "monitoring"];
 
-export default async function PlatformSettingsPage() {
+export default async function PlatformSettingsPage({
+  searchParams,
+}: {
+  searchParams: Promise<{ ok?: string; error?: string }>;
+}) {
   const ctx = await requirePlatformStaff();
+  const sp = await searchParams;
   const now = new Date();
   const last24h = new Date(now.getTime() - DAY_MS);
+
+  // ── Platform settings singleton (maintenance + freeze) ──────
+  const platformSettings = await getPlatformSettings();
 
   // ── Env evaluation (server-only, never sent to client) ──────
   type EnvStatus = "set" | "missing" | "n/a";
@@ -147,11 +157,37 @@ export default async function PlatformSettingsPage() {
   // Integrations are healthy when: env vars are set + recent activity
   // shows the integration is actually working. We derive activity
   // from the same DB signals the health page uses.
-  const [emailFails7d, emailSent7d, fileWrites24h] = await Promise.all([
+  const [
+    emailFails7d, emailSent7d, fileWrites24h,
+    // Settings change history (audit-derived).
+    settingsAudit,
+    // Abuse signals — for the "rate limiting / abuse" summary card.
+    lockedLastHour, failedLogins24h, lockedTotal,
+    // Compliance signals for the backup card — proxy for "how big is
+    // the last manual export?" + "any pending requests?".
+    completedExports30d,
+    pendingExportsBackup,
+  ] = await Promise.all([
     db.emailEvent.count({ where: { failedAt: { gte: new Date(now.getTime() - 7 * DAY_MS) } } }),
     db.emailEvent.count({ where: { sentAt:   { gte: new Date(now.getTime() - 7 * DAY_MS) } } }),
     db.file.count({ where: { createdAt: { gte: last24h } } }),
+    db.auditLog.findMany({
+      where: { action: { startsWith: "platform.setting_" } },
+      orderBy: { createdAt: "desc" },
+      take: 15,
+    }),
+    db.securityEvent.count({ where: { kind: "LOGIN_LOCKED", createdAt: { gte: new Date(now.getTime() - 60 * 60 * 1000) } } }),
+    db.securityEvent.count({ where: { kind: "LOGIN_FAILED", createdAt: { gte: last24h } } }),
+    db.securityEvent.count({ where: { kind: "LOGIN_LOCKED" } }),
+    db.dataExportRequest.count({ where: { status: "COMPLETED", completedAt: { gte: new Date(now.getTime() - 30 * DAY_MS) } } }),
+    db.dataExportRequest.count({ where: { status: "PENDING" } }),
   ]);
+  // Resolve actor names for the settings audit timeline.
+  const settingsActorIds = Array.from(new Set(settingsAudit.map((a) => a.userId).filter((x): x is string => Boolean(x))));
+  const settingsActors = settingsActorIds.length
+    ? await db.user.findMany({ where: { id: { in: settingsActorIds } }, select: { id: true, email: true, name: true } })
+    : [];
+  const settingsActorById = new Map(settingsActors.map((u) => [u.id, u]));
 
   const integrations = [
     {
@@ -262,6 +298,14 @@ export default async function PlatformSettingsPage() {
         </p>
       </div>
 
+      {/* ── Save banners ────────────────────────────────── */}
+      {sp.ok === "settings_saved" && (
+        <Banner tone="success" title="Saved" body="Platform settings updated. Tenants pick up changes immediately." />
+      )}
+      {sp.error && (
+        <Banner tone="danger" title="Action failed" body={decodeURIComponent(sp.error)} />
+      )}
+
       {/* ── KPI band ───────────────────────────────────── */}
       <SettingsKPIBand kpis={kpis} />
 
@@ -273,6 +317,142 @@ export default async function PlatformSettingsPage() {
           body="The platform may not function correctly until these are set in your hosting provider and the app is redeployed."
         />
       )}
+
+      {/* ── System controls (maintenance + freeze) ─────── */}
+      <Section
+        title="System controls"
+        description="Platform-wide kill switches. Both flags audit-log every change. Maintenance redirects every tenant to /maintenance — admins (you) bypass."
+      >
+        <form action={updatePlatformSettings} className="space-y-5">
+          {/* Maintenance mode */}
+          <div
+            className="rounded-lg p-4"
+            style={{
+              background: platformSettings.maintenanceMode ? "var(--danger-surface)" : "var(--surface-2)",
+              border: `1px solid ${platformSettings.maintenanceMode ? "var(--danger-fg)" : "var(--border-subtle)"}`,
+            }}
+          >
+            <div className="flex items-start justify-between gap-3">
+              <div className="min-w-0 flex-1">
+                <div className="flex items-center gap-2">
+                  <span aria-hidden className="text-base">🛠</span>
+                  <span className="text-sm font-semibold" style={{ color: "var(--text-default)" }}>
+                    Maintenance mode
+                  </span>
+                  {platformSettings.maintenanceMode && (
+                    <span
+                      className="rounded-full px-1.5 py-0.5 text-[10px] font-semibold uppercase tracking-wide"
+                      style={{ background: "var(--danger-fg)", color: "var(--text-inverse)" }}
+                    >
+                      ACTIVE
+                    </span>
+                  )}
+                </div>
+                <p className="mt-1 text-xs" style={{ color: "var(--text-muted)" }}>
+                  When ON, every tenant request bounces to /maintenance with the message below.
+                  Platform staff bypass via their role. Use during deploys or incident response.
+                </p>
+              </div>
+              <ToggleSwitch
+                name="maintenanceMode"
+                checked={platformSettings.maintenanceMode}
+                disabled={!ctx.canWrite}
+              />
+            </div>
+            <label className="mt-3 block">
+              <span className="mb-1 block text-xs font-medium" style={{ color: "var(--text-muted)" }}>
+                Message shown to tenants (optional)
+              </span>
+              <textarea
+                name="maintenanceMessage"
+                defaultValue={platformSettings.maintenanceMessage ?? ""}
+                rows={2}
+                maxLength={500}
+                placeholder='e.g. "Back online by 02:30 UTC. Sorry for the interruption."'
+                disabled={!ctx.canWrite}
+                className="ts-focus w-full rounded-md px-3 py-2 text-sm outline-none"
+                style={{
+                  background: "var(--surface-1)",
+                  border: "1px solid var(--border-default)",
+                  color: "var(--text-default)",
+                }}
+              />
+            </label>
+          </div>
+
+          {/* Feature freeze */}
+          <div
+            className="rounded-lg p-4"
+            style={{
+              background: platformSettings.featureFreezeMode ? "var(--warning-surface)" : "var(--surface-2)",
+              border: `1px solid ${platformSettings.featureFreezeMode ? "var(--warning-fg)" : "var(--border-subtle)"}`,
+            }}
+          >
+            <div className="flex items-start justify-between gap-3">
+              <div className="min-w-0 flex-1">
+                <div className="flex items-center gap-2">
+                  <span aria-hidden className="text-base">❄</span>
+                  <span className="text-sm font-semibold" style={{ color: "var(--text-default)" }}>
+                    Feature freeze
+                  </span>
+                  {platformSettings.featureFreezeMode && (
+                    <span
+                      className="rounded-full px-1.5 py-0.5 text-[10px] font-semibold uppercase tracking-wide"
+                      style={{ background: "var(--warning-fg)", color: "var(--text-inverse)" }}
+                    >
+                      FROZEN
+                    </span>
+                  )}
+                </div>
+                <p className="mt-1 text-xs" style={{ color: "var(--text-muted)" }}>
+                  Advisory flag. Surfaces a banner on every platform admin page so the team knows
+                  not to ship more during a release window. Does NOT block writes — it's a reminder.
+                </p>
+              </div>
+              <ToggleSwitch
+                name="featureFreezeMode"
+                checked={platformSettings.featureFreezeMode}
+                disabled={!ctx.canWrite}
+              />
+            </div>
+            <label className="mt-3 block">
+              <span className="mb-1 block text-xs font-medium" style={{ color: "var(--text-muted)" }}>
+                Reason (optional, shown to platform admins)
+              </span>
+              <input
+                type="text"
+                name="featureFreezeReason"
+                defaultValue={platformSettings.featureFreezeReason ?? ""}
+                maxLength={500}
+                placeholder='e.g. "Q2 release window — no merges through 2026-05-05"'
+                disabled={!ctx.canWrite}
+                className="ts-focus w-full rounded-md px-3 py-2 text-sm outline-none"
+                style={{
+                  background: "var(--surface-1)",
+                  border: "1px solid var(--border-default)",
+                  color: "var(--text-default)",
+                }}
+              />
+            </label>
+          </div>
+
+          <div className="flex items-center justify-between gap-3">
+            <p className="text-xs" style={{ color: "var(--text-muted)" }}>
+              {platformSettings.updatedBy
+                ? <>Last edited by <b style={{ color: "var(--text-default)" }}>{platformSettings.updatedBy.slice(0, 8)}</b> · {platformSettings.updatedAt.toISOString().slice(0, 16).replace("T", " ")} UTC</>
+                : "No changes recorded yet"}
+            </p>
+            <button
+              type="submit"
+              disabled={!ctx.canWrite}
+              className="ts-focus rounded-md px-4 py-2 text-sm font-medium disabled:opacity-50"
+              style={{ background: "var(--accent-primary)", color: "var(--accent-fg)" }}
+            >
+              {ctx.canWrite ? "Save controls" : "Read-only"}
+            </button>
+          </div>
+        </form>
+      </Section>
 
       {/* ── Environment configuration (grouped) ────────── */}
       <Section
@@ -492,6 +672,190 @@ export default async function PlatformSettingsPage() {
             tone={supportOpen > 5 ? "warning" : "default"}
           />
         </div>
+      </Section>
+
+      {/* ── Abuse + backup row ──────────────────────────── */}
+      <div className="grid gap-4 md:grid-cols-2">
+        <Section
+          title="Rate limiting & abuse"
+          description="Read-only summary derived from SecurityEvent. There's no app-level rate limit engine yet — this surfaces what we'd want to act on if we built one."
+        >
+          <dl className="space-y-3 text-sm">
+            <DT label="Locked (1h)" value={lockedLastHour.toString()} success={lockedLastHour === 0} />
+            <DT label="Failed logins (24h)" value={failedLogins24h.toLocaleString()} success={failedLogins24h < 50} />
+            <DT label="Lockouts (lifetime)" value={lockedTotal.toLocaleString()} />
+          </dl>
+          <div className="mt-4 flex flex-wrap gap-2">
+            <Link
+              href="/platform/health"
+              className="ts-focus rounded-md px-3 py-1.5 text-xs font-medium"
+              style={{
+                background: "var(--surface-2)",
+                color: "var(--text-default)",
+                border: "1px solid var(--border-default)",
+              }}
+            >
+              Open Health dashboard →
+            </Link>
+            <Link
+              href="/platform/audit?action=login"
+              className="ts-focus rounded-md px-3 py-1.5 text-xs font-medium"
+              style={{
+                background: "var(--surface-2)",
+                color: "var(--text-default)",
+                border: "1px solid var(--border-default)",
+              }}
+            >
+              Audit login events →
+            </Link>
+          </div>
+          <div
+            className="mt-3 rounded-md px-3 py-2 text-[11px]"
+            style={{
+              background: "var(--surface-2)",
+              color: "var(--text-muted)",
+              border: "1px solid var(--border-subtle)",
+            }}
+          >
+            <b style={{ color: "var(--text-default)" }}>Heads-up:</b> auth lockouts work today (5
+            failed attempts → temporary lock recorded as <code>LOGIN_LOCKED</code>). A full per-IP /
+            per-tenant rate-limit engine would need Upstash/Redis or similar — flag if you want it.
+          </div>
+        </Section>
+
+        <Section
+          title="Backups & recovery"
+          description="Postgres lives on Neon (managed). Continuous PITR is provided by the host; manual exports run from /platform/compliance."
+        >
+          <dl className="space-y-3 text-sm">
+            <DT label="DB host" value="Neon (managed Postgres)" mono />
+            <DT label="PITR window" value="7-day point-in-time recovery (Neon free tier)" />
+            <DT label="Manual exports (30d)" value={completedExports30d.toLocaleString()} />
+            <DT
+              label="Pending exports"
+              value={pendingExportsBackup.toLocaleString()}
+              success={pendingExportsBackup === 0}
+            />
+          </dl>
+          <div className="mt-4 flex flex-wrap gap-2">
+            <Link
+              href="/platform/compliance"
+              className="ts-focus rounded-md px-3 py-1.5 text-xs font-medium"
+              style={{
+                background: "var(--surface-2)",
+                color: "var(--text-default)",
+                border: "1px solid var(--border-default)",
+              }}
+            >
+              Manage exports & deletions →
+            </Link>
+            <a
+              href="https://console.neon.tech"
+              target="_blank"
+              rel="noreferrer"
+              className="ts-focus rounded-md px-3 py-1.5 text-xs font-medium"
+              style={{
+                background: "var(--surface-2)",
+                color: "var(--text-default)",
+                border: "1px solid var(--border-default)",
+              }}
+            >
+              Open Neon console ↗
+            </a>
+          </div>
+          <div
+            className="mt-3 rounded-md px-3 py-2 text-[11px]"
+            style={{
+              background: "var(--surface-2)",
+              color: "var(--text-muted)",
+              border: "1px solid var(--border-subtle)",
+            }}
+          >
+            <b style={{ color: "var(--text-default)" }}>Restore procedure:</b> for a full restore,
+            use Neon's PITR UI (not exposed here on purpose — restore is destructive and deserves
+            a separate process). Manual JSON exports are tenant-scoped via the compliance flow.
+          </div>
+        </Section>
+      </div>
+
+      {/* ── API & webhooks (forward-looking stub) ───────── */}
+      <Section
+        title="API & webhooks"
+        description="Public API tokens, webhook endpoints, and per-key rate limits. Not yet built — Flowtora's app surface is fully internal today."
+      >
+        <div
+          className="rounded-md p-4 text-sm"
+          style={{
+            background: "var(--surface-2)",
+            color: "var(--text-muted)",
+            border: "1px dashed var(--border-default)",
+          }}
+        >
+          <div className="flex items-start gap-3">
+            <span aria-hidden className="text-base leading-none">🔌</span>
+            <div className="min-w-0">
+              <div className="font-semibold" style={{ color: "var(--text-default)" }}>
+                No public API exists yet — by design, not by accident
+              </div>
+              <p className="mt-1 text-xs">
+                Tenants reach Flowtora through the web UI; partner integrations don't have a stable contract
+                to depend on yet. The infra to add later (issued API keys, scoped tokens, per-key rate
+                limits, webhook signing) is straightforward — but there's nothing meaningful to ship
+                until there's an API surface to gate.
+              </p>
+              <div className="mt-3 grid gap-2 md:grid-cols-3">
+                <BulletCard title="When this is needed" body="When a tenant or partner asks to programmatically read/write their data — e.g. a Zapier-style integration." />
+                <BulletCard title="What we'd add" body="PlatformApiKey table with hashed secret, scopes, expiresAt, lastUsedAt + a /api/v1/* surface that auths via Bearer." />
+                <BulletCard title="What we'd need" body="A per-key rate limit (Upstash/Redis), webhook delivery service for outbound events, public API docs." />
+              </div>
+            </div>
+          </div>
+        </div>
+      </Section>
+
+      {/* ── Config change history ──────────────────────── */}
+      <Section
+        title="Configuration change history"
+        description="Every flip of a maintenance / freeze toggle is audit-logged. Env-var changes happen in your hosting provider and aren't visible here."
+      >
+        {settingsAudit.length === 0 ? (
+          <p className="text-sm" style={{ color: "var(--text-muted)" }}>
+            No platform-setting changes recorded yet.
+          </p>
+        ) : (
+          <ol className="-mx-5 -mb-5">
+            {settingsAudit.map((a, idx) => {
+              const u = a.userId ? settingsActorById.get(a.userId) : null;
+              const tone =
+                a.action === "platform.setting_maintenance_on"  ? { fg: "var(--danger-fg)",   label: "Maintenance ON" } :
+                a.action === "platform.setting_maintenance_off" ? { fg: "var(--success-fg)", label: "Maintenance OFF" } :
+                a.action === "platform.setting_freeze_on"       ? { fg: "var(--warning-fg)", label: "Freeze ON" } :
+                a.action === "platform.setting_freeze_off"      ? { fg: "var(--success-fg)", label: "Freeze OFF" } :
+                a.action === "platform.setting_text_updated"    ? { fg: "var(--text-muted)", label: "Text updated" } :
+                                                                   { fg: "var(--text-muted)", label: a.action };
+              return (
+                <li
+                  key={a.id}
+                  className="flex items-baseline justify-between gap-3 px-5 py-2.5 text-sm"
+                  style={{ borderTop: idx === 0 ? "none" : "1px solid var(--border-subtle)" }}
+                >
+                  <div className="flex flex-wrap items-baseline gap-2">
+                    <span aria-hidden className="inline-block h-1.5 w-1.5 rounded-full" style={{ background: tone.fg }} />
+                    <span className="text-xs font-semibold uppercase tracking-wide" style={{ color: tone.fg }}>
+                      {tone.label}
+                    </span>
+                    <span className="text-xs" style={{ color: "var(--text-muted)" }}>
+                      {u ? `by ${u.name ?? u.email}` : "by system"}
+                    </span>
+                  </div>
+                  <span className="text-xs whitespace-nowrap" style={{ color: "var(--text-muted)" }}>
+                    {a.createdAt.toISOString().slice(0, 16).replace("T", " ")} UTC
+                  </span>
+                </li>
+              );
+            })}
+          </ol>
+        )}
       </Section>
 
       {/* ── Security & access + Deployment ─────────────── */}
@@ -760,6 +1124,67 @@ function Banner({
         <div className="font-semibold">{title}</div>
         <div className="mt-0.5 text-xs" style={{ opacity: 0.85 }}>{body}</div>
       </div>
+    </div>
+  );
+}
+
+function ToggleSwitch({
+  name,
+  checked,
+  disabled,
+}: {
+  name: string;
+  checked: boolean;
+  disabled?: boolean;
+}) {
+  // Native checkbox styled as a toggle. Submits with the form, no JS
+  // required. Browsers send `on` when checked + nothing when not.
+  return (
+    <label
+      className="inline-flex cursor-pointer items-center"
+      style={{ cursor: disabled ? "not-allowed" : "pointer" }}
+    >
+      <input
+        type="checkbox"
+        name={name}
+        defaultChecked={checked}
+        disabled={disabled}
+        className="peer sr-only"
+      />
+      <span
+        className="relative inline-block h-6 w-11 rounded-full transition-colors"
+        style={{
+          background: checked ? "var(--accent-primary)" : "var(--surface-3)",
+          border: `1px solid ${checked ? "var(--accent-primary)" : "var(--border-default)"}`,
+          opacity: disabled ? 0.5 : 1,
+        }}
+        aria-hidden
+      >
+        <span
+          className="absolute top-0.5 inline-block h-4 w-4 rounded-full transition-all"
+          style={{
+            left: checked ? "calc(100% - 18px)" : "2px",
+            background: checked ? "var(--accent-fg)" : "var(--text-muted)",
+            transitionDuration: "var(--duration-base)",
+          }}
+        />
+      </span>
+    </label>
+  );
+}
+
+function BulletCard({ title, body }: { title: string; body: string }) {
+  return (
+    <div
+      className="rounded-md p-3 text-xs"
+      style={{
+        background: "var(--surface-1)",
+        border: "1px solid var(--border-subtle)",
+        color: "var(--text-muted)",
+      }}
+    >
+      <div className="font-semibold" style={{ color: "var(--text-default)" }}>{title}</div>
+      <div className="mt-1">{body}</div>
     </div>
   );
 }
