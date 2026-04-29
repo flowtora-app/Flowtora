@@ -14,6 +14,7 @@
 
 import { redirect } from "next/navigation";
 import { revalidatePath } from "next/cache";
+import { cookies } from "next/headers";
 import { z } from "zod";
 import { auth } from "@/auth";
 import { db } from "@/lib/db";
@@ -1051,10 +1052,35 @@ export async function updateThemePreference(formData: FormData) {
   if (!parsed.success) {
     redirect(`/platform/profile?error=${encodeURIComponent("Invalid theme")}`);
   }
+
+  // Persist on the User row (cross-device durable) AND set the
+  // `ts_theme` cookie so the existing theme boot script in the root
+  // layout picks it up on the next render. Mapping:
+  //   DB enum  →  cookie value
+  //   AUTO     →  "system"
+  //   LIGHT    →  "light"
+  //   DARK     →  "dark"
+  const cookieValue =
+    parsed.data.themePreference === "AUTO"  ? "system"
+    : parsed.data.themePreference === "LIGHT" ? "light"
+    : "dark";
+
   await db.user.update({
     where: { id: ctx.userId },
     data:  { themePreference: parsed.data.themePreference },
   });
+
+  const jar = await cookies();
+  jar.set("ts_theme", cookieValue, {
+    path: "/",
+    maxAge: 60 * 60 * 24 * 365, // one year
+    httpOnly: false,            // the boot script reads it to avoid FOUC
+    sameSite: "lax",
+  });
+
   revalidatePath("/platform/profile");
+  // Force every layout to re-render so the data-theme attribute reflects
+  // the new value without an extra hard refresh.
+  revalidatePath("/", "layout");
   redirect(`/platform/profile?ok=theme_saved`);
 }
