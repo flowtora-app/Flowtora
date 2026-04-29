@@ -1,80 +1,103 @@
 import Link from "next/link";
 import { db } from "@/lib/db";
 import { requirePlatformStaff } from "@/lib/platform";
+import { HealthKPIBand, type HealthKpi } from "@/components/platform/HealthKPIBand";
+import { ServiceStatusGrid, type ServiceCard, type ServiceStatus } from "@/components/platform/ServiceStatusGrid";
+import { HealthInsights, type HealthInsight } from "@/components/platform/HealthInsights";
 
 export const dynamic = "force-dynamic";
 
-// Phase D — System / platform health.
+// /platform/health — operational mission control (transformation rewrite).
 //
-// Flowtora doesn't self-instrument external services (that's Vercel's
-// job), so this page surfaces the health signals we can observe from
-// our own database:
+// Layout:
+//   1. Global health banner — Healthy / Degraded / Down
+//   2. KPI band — overall status, active sessions, errors (1h), failed
+//      jobs (24h), login fails (24h), open incidents proxy
+//   3. Auto-generated insights (warning / info / positive)
+//   4. Service status grid — Auth / Email / Stripe / Storage /
+//      Background / Database with status pills + headline metric
+//   5. Service drill-downs — Email delivery card + recent failures,
+//      Auth telemetry + spiking-user table
+//   6. Impersonation table (active sessions)
+//   7. Critical action timeline (audit-derived)
 //
-//   • Email delivery            — EmailEvent.failedAt hit rate (24 h / 7 d)
-//   • Auth / security posture   — SecurityEvent login-failed spikes, lockouts,
-//                                 2FA challenges failed
-//   • Impersonation activity    — active + recent sessions
-//   • Data exports / deletions  — pending ops count (SLA signal)
-//   • Critical audit actions    — platform.* / tenant.* suspensions, flag flips
-//
-// Each block answers one question: is this subsystem OK today? If the
-// numbers are clean, the block renders as "healthy" with a soft green;
-// if something's spiking it goes amber/red with a drill-down link.
+// Time range is URL-driven via ?range=1h|24h|7d|30d.
 
-type HealthTone = "good" | "warning" | "danger" | "info";
+const RANGE_OPTIONS = ["1h", "24h", "7d", "30d"] as const;
+type Range = (typeof RANGE_OPTIONS)[number];
 
-export default async function PlatformHealthPage() {
+const HOUR_MS = 3_600_000;
+const DAY_MS  = 86_400_000;
+
+function rangeToMs(r: Range): number {
+  return r === "1h" ? HOUR_MS : r === "24h" ? DAY_MS : r === "7d" ? 7 * DAY_MS : 30 * DAY_MS;
+}
+function rangeLabel(r: Range): string {
+  return r === "1h" ? "Last hour" : r === "24h" ? "Last 24 hours" : r === "7d" ? "Last 7 days" : "Last 30 days";
+}
+
+export default async function PlatformHealthPage({
+  searchParams,
+}: {
+  searchParams: Promise<{ range?: string }>;
+}) {
   await requirePlatformStaff();
+  const sp = await searchParams;
+  const rangeRaw = (sp.range ?? "24h").toLowerCase();
+  const range: Range = (RANGE_OPTIONS as readonly string[]).includes(rangeRaw)
+    ? (rangeRaw as Range)
+    : "24h";
+  const windowMs = rangeToMs(range);
 
   const now = new Date();
-  const day = 86_400_000;
-  const last24h = new Date(now.getTime() - day);
-  const last7d = new Date(now.getTime() - 7 * day);
-  const last30d = new Date(now.getTime() - 30 * day);
+  const lastHour    = new Date(now.getTime() - HOUR_MS);
+  const last24h     = new Date(now.getTime() - DAY_MS);
+  const last7d      = new Date(now.getTime() - 7 * DAY_MS);
+  const last30d     = new Date(now.getTime() - 30 * DAY_MS);
+  const windowStart = new Date(now.getTime() - windowMs);
 
+  // ── Parallel data fetch ──────────────────────────────────────
   const [
-    sent24h,
-    failed24h,
-    sent7d,
-    failed7d,
-    bounced7d,
-    failed24hSample,
-    loginFailed24h,
-    loginSuccess24h,
-    locked24h,
-    twoFactorFailed7d,
-    failedLoginsByUser,
-    activeImpersonations,
-    recentImpersonations,
-    pendingExports,
-    scheduledDeletions,
+    // Email
+    sentWindow, failedWindow, sent7d, failed7d, bounced7d, failedSample,
+    // Auth / security
+    loginSuccessWindow, loginFailedWindow, loginFailedHour,
+    locked24h, twoFactorFailed7d, failedLoginsByUser,
+    // Impersonation
+    activeImpersonations, recentImpersonations,
+    // Stripe / billing — pastDue tenant count is the rolling proxy
+    pastDueTenants, stripeMissingLive,
+    // Storage — uploads in window (signal: storage write path is alive)
+    uploadsWindow, uploadsPriorWindow,
+    // Background jobs — cron audit events in 24h
+    cronEventsWindow,
+    // Sessions (active)
+    activeSessions,
+    // Errors aggregate (email + 2FA + login locked) for the "errors in window" tile
+    errorsWindow,
+    // Pending ops
+    pendingExports, scheduledDeletions,
+    // Recent critical actions
     criticalAudits,
+    // Open incidents — surface CRITICAL announcements that are live
+    criticalAnnouncements,
   ] = await Promise.all([
-    db.emailEvent.count({ where: { sentAt: { gte: last24h } } }),
-    db.emailEvent.count({ where: { failedAt: { gte: last24h } } }),
-    db.emailEvent.count({ where: { sentAt: { gte: last7d } } }),
-    db.emailEvent.count({ where: { failedAt: { gte: last7d } } }),
-    db.emailEvent.count({
-      where: {
-        failedAt: { gte: last7d },
-        failReason: { contains: "bounce", mode: "insensitive" },
-      },
-    }),
+    db.emailEvent.count({ where: { sentAt:    { gte: windowStart } } }),
+    db.emailEvent.count({ where: { failedAt:  { gte: windowStart } } }),
+    db.emailEvent.count({ where: { sentAt:    { gte: last7d } } }),
+    db.emailEvent.count({ where: { failedAt:  { gte: last7d } } }),
+    db.emailEvent.count({ where: { failedAt:  { gte: last7d }, failReason: { contains: "bounce", mode: "insensitive" } } }),
     db.emailEvent.findMany({
-      where: { failedAt: { gte: last24h } },
+      where: { failedAt: { gte: windowStart } },
       orderBy: { failedAt: "desc" },
       take: 8,
-      select: {
-        id: true, toAddress: true, subject: true, failedAt: true,
-        failReason: true, kind: true, tenantId: true,
-      },
+      select: { id: true, toAddress: true, subject: true, failedAt: true, failReason: true, kind: true, tenantId: true },
     }),
-    db.securityEvent.count({ where: { kind: "LOGIN_FAILED", createdAt: { gte: last24h } } }),
-    db.securityEvent.count({ where: { kind: "LOGIN_SUCCESS", createdAt: { gte: last24h } } }),
-    db.securityEvent.count({ where: { kind: "LOGIN_LOCKED", createdAt: { gte: last24h } } }),
-    db.securityEvent.count({
-      where: { kind: "TWO_FACTOR_CHALLENGE_FAILED", createdAt: { gte: last7d } },
-    }),
+    db.securityEvent.count({ where: { kind: "LOGIN_SUCCESS", createdAt: { gte: windowStart } } }),
+    db.securityEvent.count({ where: { kind: "LOGIN_FAILED",  createdAt: { gte: windowStart } } }),
+    db.securityEvent.count({ where: { kind: "LOGIN_FAILED",  createdAt: { gte: lastHour } } }),
+    db.securityEvent.count({ where: { kind: "LOGIN_LOCKED",  createdAt: { gte: last24h } } }),
+    db.securityEvent.count({ where: { kind: "TWO_FACTOR_CHALLENGE_FAILED", createdAt: { gte: last7d } } }),
     db.securityEvent.groupBy({
       by: ["userId"],
       where: { kind: "LOGIN_FAILED", createdAt: { gte: last24h } },
@@ -86,17 +109,24 @@ export default async function PlatformHealthPage() {
       where: { endedAt: null },
       orderBy: { startedAt: "desc" },
       take: 10,
-      select: {
-        id: true, startedAt: true, reason: true,
-        tenantId: true, platformUserId: true,
+      select: { id: true, startedAt: true, reason: true, tenantId: true, platformUserId: true },
+    }),
+    db.impersonationSession.count({ where: { startedAt: { gte: last7d } } }),
+    db.tenant.count({ where: { status: "PAST_DUE" } }),
+    db.tenant.count({ where: { status: { in: ["ACTIVE", "PAST_DUE", "TRIAL"] }, environment: "LIVE", stripeCustomerId: null } }),
+    db.file.count({ where: { createdAt: { gte: windowStart } } }),
+    db.file.count({ where: { createdAt: { gte: new Date(windowStart.getTime() - windowMs), lt: windowStart } } }),
+    db.auditLog.count({
+      where: {
+        createdAt: { gte: last24h },
+        action: { startsWith: "cron." },
       },
     }),
-    db.impersonationSession.count({
-      where: { startedAt: { gte: last7d } },
-    }),
+    db.session.count({ where: { expires: { gt: now } } }),
+    db.emailEvent.count({ where: { failedAt: { gte: lastHour } } }),
     db.dataExportRequest.count({ where: { status: "PENDING" } }),
     db.accountDeletionRequest.count({
-      where: { status: "SCHEDULED", scheduledFor: { lte: new Date(now.getTime() + 7 * day) } },
+      where: { status: "SCHEDULED", scheduledFor: { lte: new Date(now.getTime() + 7 * DAY_MS) } },
     }),
     db.auditLog.findMany({
       where: {
@@ -110,181 +140,314 @@ export default async function PlatformHealthPage() {
         ],
       },
       orderBy: { createdAt: "desc" },
-      take: 10,
-      select: {
-        id: true, action: true, createdAt: true, entityType: true, entityId: true,
-        tenant: { select: { id: true, name: true } },
+      take: 12,
+      select: { id: true, action: true, createdAt: true, entityType: true, entityId: true, tenant: { select: { id: true, name: true } } },
+    }),
+    db.platformAnnouncement.count({
+      where: {
+        priority: "CRITICAL",
+        OR: [
+          { status: "PUBLISHED" },
+          { status: "SCHEDULED", publishAt: { lte: now } },
+        ],
+        AND: [{ OR: [{ expireAt: null }, { expireAt: { gt: now } }] }],
       },
     }),
   ]);
 
-  // Hydrate names for impersonations + spiking users
-  const impersonationUserIds = Array.from(new Set(activeImpersonations.map((s) => s.platformUserId)));
-  const impersonationTenantIds = Array.from(new Set(activeImpersonations.map((s) => s.tenantId)));
-  const loginSpikeUserIds = failedLoginsByUser.map((r) => r.userId);
+  // ── Resolve names ───────────────────────────────────────────
+  const impUserIds   = Array.from(new Set(activeImpersonations.map((s) => s.platformUserId)));
+  const impTenantIds = Array.from(new Set(activeImpersonations.map((s) => s.tenantId)));
+  const spikeIds     = failedLoginsByUser.map((r) => r.userId);
   const [impUsers, impTenants, spikeUsers] = await Promise.all([
-    impersonationUserIds.length
-      ? db.user.findMany({
-          where: { id: { in: impersonationUserIds } },
-          select: { id: true, email: true, name: true },
-        })
-      : Promise.resolve([] as { id: string; email: string; name: string | null }[]),
-    impersonationTenantIds.length
-      ? db.tenant.findMany({
-          where: { id: { in: impersonationTenantIds } },
-          select: { id: true, name: true },
-        })
-      : Promise.resolve([] as { id: string; name: string }[]),
-    loginSpikeUserIds.length
-      ? db.user.findMany({
-          where: { id: { in: loginSpikeUserIds } },
-          select: { id: true, email: true },
-        })
-      : Promise.resolve([] as { id: string; email: string }[]),
+    impUserIds.length   ? db.user.findMany({ where: { id: { in: impUserIds } },   select: { id: true, email: true, name: true } }) : Promise.resolve([] as { id: string; email: string; name: string | null }[]),
+    impTenantIds.length ? db.tenant.findMany({ where: { id: { in: impTenantIds } }, select: { id: true, name: true } })             : Promise.resolve([] as { id: string; name: string }[]),
+    spikeIds.length     ? db.user.findMany({ where: { id: { in: spikeIds } },     select: { id: true, email: true } })            : Promise.resolve([] as { id: string; email: string }[]),
   ]);
-  const impUserById = new Map(impUsers.map((u) => [u.id, u]));
+  const impUserById   = new Map(impUsers.map((u) => [u.id, u]));
   const impTenantById = new Map(impTenants.map((t) => [t.id, t]));
   const spikeUserById = new Map(spikeUsers.map((u) => [u.id, u]));
 
-  // ── Derived metrics ────────────────────────────────────────────
-  const deliveryRate24 = sent24h === 0 ? 100 : Math.round(((sent24h - failed24h) / sent24h) * 1000) / 10;
-  const deliveryRate7 = sent7d === 0 ? 100 : Math.round(((sent7d - failed7d) / sent7d) * 1000) / 10;
-  const loginFailureRate = loginSuccess24h + loginFailed24h === 0
+  // ── Derived metrics ─────────────────────────────────────────
+  const deliveryRateWindow = sentWindow === 0 ? 100 : ((sentWindow - failedWindow) / sentWindow) * 100;
+  const deliveryRate7d     = sent7d      === 0 ? 100 : ((sent7d - failed7d) / sent7d)         * 100;
+  const loginFailureRate   = (loginSuccessWindow + loginFailedWindow) === 0
     ? 0
-    : Math.round((loginFailed24h / (loginSuccess24h + loginFailed24h)) * 1000) / 10;
+    : (loginFailedWindow / (loginSuccessWindow + loginFailedWindow)) * 100;
 
-  const emailTone: HealthTone = deliveryRate7 >= 98 ? "good" : deliveryRate7 >= 92 ? "warning" : "danger";
-  const authTone: HealthTone = locked24h > 3 || loginFailureRate > 40 ? "warning" : "good";
-  const impersonationTone: HealthTone = activeImpersonations.length > 3 ? "warning" : "good";
+  // ── Service status derivation ───────────────────────────────
+  const authStatus: ServiceStatus =
+    locked24h > 5 || loginFailedHour > 50         ? "degraded"
+    : loginFailureRate > 60                       ? "degraded"
+    : "operational";
+  const emailStatus: ServiceStatus =
+    deliveryRate7d < 90                           ? "down"
+    : deliveryRate7d < 97 || failedWindow > 10    ? "degraded"
+    : "operational";
+  const stripeStatus: ServiceStatus =
+    pastDueTenants > 5 || stripeMissingLive > 0   ? "degraded"
+    : "operational";
+  const storageStatus: ServiceStatus =
+    uploadsWindow === 0 && uploadsPriorWindow > 0 ? "degraded"
+    : "operational";
+  const jobsStatus: ServiceStatus =
+    cronEventsWindow === 0                        ? "degraded"
+    : "operational";
+  const dbStatus: ServiceStatus = "operational"; // we just queried it successfully
 
-  // Overall banner: worst of the three
-  const worst: HealthTone = [emailTone, authTone, impersonationTone].includes("danger")
-    ? "danger"
-    : [emailTone, authTone, impersonationTone].includes("warning")
-      ? "warning"
-      : "good";
+  const services: ServiceCard[] = [
+    {
+      id: "auth",
+      name: "Authentication",
+      status: authStatus,
+      primary: `${loginFailureRate.toFixed(1)}% fail rate`,
+      secondary: `${loginSuccessWindow} OK · ${loginFailedWindow} failed (${rangeLabel(range).toLowerCase()})`,
+      footnote: `${locked24h} lockouts · ${twoFactorFailed7d} 2FA fails (7d)`,
+    },
+    {
+      id: "email",
+      name: "Email delivery",
+      status: emailStatus,
+      primary: `${deliveryRate7d.toFixed(1)}% delivered`,
+      secondary: `${sent7d} sent · ${failed7d} failed (7d)`,
+      footnote: `${bounced7d} bounces · ${sentWindow} sent in window`,
+    },
+    {
+      id: "stripe",
+      name: "Stripe billing",
+      status: stripeStatus,
+      primary: `${pastDueTenants} past-due`,
+      secondary: stripeMissingLive > 0
+        ? `${stripeMissingLive} live tenant${stripeMissingLive === 1 ? "" : "s"} missing Stripe linkage`
+        : "All live tenants linked",
+      footnote: "Derived from Tenant.status + Tenant.stripeCustomerId",
+    },
+    {
+      id: "storage",
+      name: "File storage",
+      status: storageStatus,
+      primary: uploadsWindow.toLocaleString() + " uploads",
+      secondary: `In window · ${uploadsPriorWindow} prior`,
+      footnote: "Cloudflare R2 (write path inferred from File table)",
+    },
+    {
+      id: "jobs",
+      name: "Background jobs",
+      status: jobsStatus,
+      primary: cronEventsWindow.toLocaleString() + " events",
+      secondary: cronEventsWindow === 0 ? "No cron activity in 24h" : "Cron heartbeat OK",
+      footnote: "AuditLog where action LIKE 'cron.*'",
+    },
+    {
+      id: "db",
+      name: "Database",
+      status: dbStatus,
+      primary: "Reachable",
+      secondary: `${activeSessions} active session${activeSessions === 1 ? "" : "s"}`,
+      footnote: "Postgres on Neon · query path proven by this page",
+    },
+  ];
+
+  // ── Global health derivation ─────────────────────────────────
+  const allStatuses = services.map((s) => s.status);
+  const overall: ServiceStatus =
+    allStatuses.includes("down")     ? "down"
+    : allStatuses.includes("degraded") ? "degraded"
+    : "operational";
+
+  // ── KPI tiles ────────────────────────────────────────────────
+  const overallToneKpi: HealthKpi["tone"] =
+    overall === "down" ? "danger" : overall === "degraded" ? "warning" : "success";
+  const overallLabel = overall === "operational" ? "All systems normal" : overall === "degraded" ? "Degraded" : "Down";
+
+  const kpis: HealthKpi[] = [
+    {
+      label: "Status",
+      value: overallLabel,
+      hint: rangeLabel(range),
+      tone: overallToneKpi,
+      dot: true,
+    },
+    {
+      label: "Active sessions",
+      value: activeSessions.toLocaleString(),
+      hint: "Currently signed-in users",
+      tone: "default",
+    },
+    {
+      label: "Errors (1h)",
+      value: errorsWindow.toLocaleString(),
+      hint: errorsWindow === 0 ? "Clean" : "Email failures last hour",
+      tone: errorsWindow === 0 ? "default" : errorsWindow > 5 ? "danger" : "warning",
+      deltaInvert: true,
+    },
+    {
+      label: "Login fails (1h)",
+      value: loginFailedHour.toLocaleString(),
+      hint: loginFailedHour > 30 ? "Possible brute-force" : "Last 60 minutes",
+      tone: loginFailedHour > 30 ? "danger" : loginFailedHour > 10 ? "warning" : "default",
+    },
+    {
+      label: "Open ops backlog",
+      value: (pendingExports + scheduledDeletions).toString(),
+      hint: `${pendingExports} exports · ${scheduledDeletions} deletions`,
+      tone: pendingExports + scheduledDeletions > 5 ? "warning" : "default",
+    },
+    {
+      label: "Open incidents",
+      value: criticalAnnouncements.toString(),
+      hint: criticalAnnouncements === 0 ? "No active alerts" : "Critical announcements live",
+      tone: criticalAnnouncements > 0 ? "danger" : "success",
+    },
+  ];
+
+  // ── Auto-generated insights ─────────────────────────────────
+  const insights: HealthInsight[] = [];
+  if (deliveryRate7d < 95) {
+    insights.push({
+      id: "email-low",
+      tone: deliveryRate7d < 90 ? "danger" : "warning",
+      text: `Email delivery dipped to ${deliveryRate7d.toFixed(1)}% over 7 days — investigate failed events.`,
+    });
+  }
+  if (loginFailedHour > 30) {
+    insights.push({
+      id: "login-spike",
+      tone: "warning",
+      text: `${loginFailedHour} failed logins in the last hour. Check for brute-force or credential-stuffing attempts.`,
+    });
+  }
+  if (locked24h > 3) {
+    insights.push({
+      id: "lockouts",
+      tone: "warning",
+      text: `${locked24h} accounts have been auto-locked in the last 24 hours.`,
+    });
+  }
+  if (activeImpersonations.length > 0) {
+    insights.push({
+      id: "imp-active",
+      tone: "info",
+      text: `${activeImpersonations.length} active impersonation session${activeImpersonations.length === 1 ? "" : "s"} running right now.`,
+    });
+  }
+  if (cronEventsWindow === 0) {
+    insights.push({
+      id: "cron-silent",
+      tone: "warning",
+      text: "No cron events in the last 24 hours — background jobs may not be firing.",
+    });
+  }
+  if (stripeMissingLive > 0) {
+    insights.push({
+      id: "stripe-missing",
+      tone: "warning",
+      text: `${stripeMissingLive} live tenant${stripeMissingLive === 1 ? "" : "s"} have no Stripe customer — billing won't run.`,
+    });
+  }
+  if (insights.length === 0 && overall === "operational") {
+    insights.push({
+      id: "all-good",
+      tone: "positive",
+      text: "All monitored services healthy. No action needed.",
+    });
+  }
 
   return (
-    <div className="space-y-10">
-      <PageHeader
-        title="Platform health"
-        description="Operational view across email delivery, authentication, impersonation, and critical admin actions."
-      />
-
-      {/* ── Overall status banner ──────────────────────────────── */}
-      <StatusBanner tone={worst} />
-
-      {/* ── KPI row ─────────────────────────────────────────────── */}
-      <div className="grid grid-cols-2 gap-4 md:grid-cols-4">
-        <Kpi
-          label="Email delivery (7 d)"
-          value={`${deliveryRate7}%`}
-          sub={`${sent7d} sent · ${failed7d} failed`}
-          tone={emailTone}
-        />
-        <Kpi
-          label="Login failure rate (24 h)"
-          value={`${loginFailureRate}%`}
-          sub={`${loginFailed24h} failed / ${loginSuccess24h} OK`}
-          tone={loginFailureRate > 40 ? "warning" : "good"}
-        />
-        <Kpi
-          label="Active impersonations"
-          value={String(activeImpersonations.length)}
-          sub={`${recentImpersonations} in last 7 d`}
-          tone={impersonationTone}
-        />
-        <Kpi
-          label="Ops backlog"
-          value={String(pendingExports + scheduledDeletions)}
-          sub={`${pendingExports} exports · ${scheduledDeletions} deletions`}
-          tone={pendingExports + scheduledDeletions > 5 ? "warning" : "good"}
-        />
+    <div className="space-y-6">
+      {/* ── Header ─────────────────────────────────────── */}
+      <div className="flex flex-wrap items-start justify-between gap-3">
+        <div>
+          <h1 className="text-2xl font-semibold tracking-tight" style={{ color: "var(--text-default)" }}>
+            Platform health
+          </h1>
+          <p className="mt-1 text-sm" style={{ color: "var(--text-muted)" }}>
+            Mission control across authentication, email, billing, storage, background jobs, and the database.
+            Status derived from observable signals; ranges aggregate across the selected window.
+          </p>
+        </div>
+        <RangeSelector active={range} />
       </div>
 
-      {/* ── Email delivery detail ───────────────────────────────── */}
-      <section>
-        <SectionHeader title="Email delivery" />
-        <div
-          className="mt-3 grid grid-cols-1 gap-4 md:grid-cols-2"
-        >
-          <Panel>
-            <PanelTitle>Delivery summary</PanelTitle>
-            <dl className="mt-2 grid grid-cols-2 gap-y-2 text-sm">
-              <Dt>Sent 24 h</Dt><Dd>{sent24h}</Dd>
-              <Dt>Failed 24 h</Dt><Dd danger={failed24h > 0}>{failed24h}</Dd>
-              <Dt>Delivery rate 24 h</Dt><Dd>{deliveryRate24}%</Dd>
-              <Dt>Bounces 7 d</Dt><Dd danger={bounced7d > 0}>{bounced7d}</Dd>
-              <Dt>Sent 7 d</Dt><Dd>{sent7d}</Dd>
-              <Dt>Delivery rate 7 d</Dt><Dd>{deliveryRate7}%</Dd>
-            </dl>
-          </Panel>
-          <Panel>
-            <PanelTitle>Recent failures</PanelTitle>
-            {failed24hSample.length === 0 ? (
-              <Empty>No email failures in the last 24 hours.</Empty>
+      {/* ── Global banner ──────────────────────────────── */}
+      <GlobalStatusBanner status={overall} />
+
+      {/* ── KPI band ───────────────────────────────────── */}
+      <HealthKPIBand kpis={kpis} />
+
+      {/* ── Insights strip ─────────────────────────────── */}
+      <HealthInsights insights={insights.slice(0, 4)} />
+
+      {/* ── Service grid ───────────────────────────────── */}
+      <div>
+        <SectionHeader title="Service status" />
+        <div className="mt-3">
+          <ServiceStatusGrid services={services} />
+        </div>
+      </div>
+
+      {/* ── Email + auth detail ────────────────────────── */}
+      <div>
+        <SectionHeader title="Drill-downs" />
+        <div className="mt-3 grid gap-4 lg:grid-cols-2">
+          <Section title="Email failures" description={`Most recent ${failedSample.length} failures in the active window.`}>
+            {failedSample.length === 0 ? (
+              <Empty icon="✉" body="No email failures in the selected window." />
             ) : (
-              <ul className="mt-1">
-                {failed24hSample.map((e) => (
-                  <li key={e.id} className="py-2" style={{ borderTop: "1px solid var(--border-subtle)" }}>
-                    <div className="flex items-center justify-between gap-3">
-                      <div className="min-w-0 text-sm">
-                        <div className="truncate font-medium">{e.subject ?? e.kind}</div>
+              <ul>
+                {failedSample.map((e, idx) => (
+                  <li
+                    key={e.id}
+                    className="px-1 py-3"
+                    style={{ borderTop: idx === 0 ? "none" : "1px solid var(--border-subtle)" }}
+                  >
+                    <div className="flex items-baseline justify-between gap-3">
+                      <div className="min-w-0 flex-1">
+                        <div className="truncate text-sm font-medium" style={{ color: "var(--text-default)" }}>
+                          {e.subject ?? e.kind}
+                        </div>
                         <div className="truncate text-xs" style={{ color: "var(--text-muted)" }}>
                           to {e.toAddress}
                         </div>
+                        {e.failReason && (
+                          <div className="mt-0.5 truncate text-[11px]" style={{ color: "var(--danger-fg)" }}>
+                            {e.failReason}
+                          </div>
+                        )}
                       </div>
-                      <div className="text-[11px] text-right" style={{ color: "var(--text-faint)" }}>
+                      <div className="text-right text-[11px]" style={{ color: "var(--text-faint)" }}>
                         {ageLabel(e.failedAt!)}
                       </div>
                     </div>
-                    {e.failReason && (
-                      <div className="mt-0.5 truncate text-[11px]" style={{ color: "var(--danger-fg)" }}>
-                        {e.failReason}
-                      </div>
-                    )}
                   </li>
                 ))}
               </ul>
             )}
-          </Panel>
-        </div>
-      </section>
+          </Section>
 
-      {/* ── Auth / security posture ─────────────────────────────── */}
-      <section>
-        <SectionHeader title="Authentication & security" />
-        <div className="mt-3 grid grid-cols-1 gap-4 md:grid-cols-2">
-          <Panel>
-            <PanelTitle>Login telemetry (24 h)</PanelTitle>
-            <dl className="mt-2 grid grid-cols-2 gap-y-2 text-sm">
-              <Dt>Successful</Dt><Dd>{loginSuccess24h}</Dd>
-              <Dt>Failed</Dt><Dd danger={loginFailed24h > 50}>{loginFailed24h}</Dd>
-              <Dt>Lockouts</Dt><Dd danger={locked24h > 0}>{locked24h}</Dd>
-              <Dt>2FA fails (7 d)</Dt><Dd danger={twoFactorFailed7d > 5}>{twoFactorFailed7d}</Dd>
-            </dl>
-          </Panel>
-          <Panel>
-            <PanelTitle>Users with most failed logins (24 h)</PanelTitle>
+          <Section title="Top failed-login users (24h)" description="Users with the most LOGIN_FAILED events in the last day.">
             {failedLoginsByUser.length === 0 ? (
-              <Empty>No failed logins today.</Empty>
+              <Empty icon="🔒" body="No failed logins in the last 24 hours." />
             ) : (
-              <ul className="mt-1">
-                {failedLoginsByUser.map((row) => {
+              <ul>
+                {failedLoginsByUser.map((row, idx) => {
                   const u = spikeUserById.get(row.userId);
+                  const dangerous = row._count._all > 5;
                   return (
                     <li
                       key={row.userId}
-                      className="flex items-center justify-between py-2 text-sm"
-                      style={{ borderTop: "1px solid var(--border-subtle)" }}
+                      className="flex items-center justify-between px-1 py-2.5 text-sm"
+                      style={{ borderTop: idx === 0 ? "none" : "1px solid var(--border-subtle)" }}
                     >
-                      <span className="truncate">{u?.email ?? row.userId}</span>
+                      <span className="truncate" style={{ color: "var(--text-default)" }}>
+                        {u?.email ?? row.userId}
+                      </span>
                       <span
-                        className="rounded-md px-1.5 py-0.5 text-[11px] font-semibold"
+                        className="rounded-md px-1.5 py-0.5 text-[11px] font-semibold tabular-nums"
                         style={{
-                          background: row._count._all > 5 ? "var(--danger-surface)" : "var(--surface-2)",
-                          color: row._count._all > 5 ? "var(--danger-fg)" : "var(--text-muted)",
-                          border: row._count._all > 5 ? "1px solid var(--danger-border)" : "1px solid var(--border-subtle)",
+                          background: dangerous ? "var(--danger-surface)" : "var(--surface-2)",
+                          color: dangerous ? "var(--danger-fg)" : "var(--text-muted)",
+                          border: `1px solid ${dangerous ? "var(--danger-fg)" : "var(--border-subtle)"}`,
                         }}
                       >
                         {row._count._all} attempts
@@ -294,16 +457,16 @@ export default async function PlatformHealthPage() {
                 })}
               </ul>
             )}
-          </Panel>
+          </Section>
         </div>
-      </section>
+      </div>
 
-      {/* ── Impersonation ───────────────────────────────────────── */}
-      <section>
+      {/* ── Impersonation ──────────────────────────────── */}
+      <div>
         <SectionHeader title="Impersonation" />
-        <Panel className="mt-3">
+        <Section className="mt-3" title="Active sessions" description={`${activeImpersonations.length} now · ${recentImpersonations} in the last 7 days.`}>
           {activeImpersonations.length === 0 ? (
-            <Empty>No platform staff are currently signed in as a tenant.</Empty>
+            <Empty icon="👥" body="No platform staff are currently signed in as a tenant." />
           ) : (
             <table className="w-full text-sm">
               <thead>
@@ -315,12 +478,12 @@ export default async function PlatformHealthPage() {
                 </tr>
               </thead>
               <tbody>
-                {activeImpersonations.map((s) => {
+                {activeImpersonations.map((s, idx) => {
                   const u = impUserById.get(s.platformUserId);
                   const t = impTenantById.get(s.tenantId);
                   const mins = Math.round((Date.now() - s.startedAt.getTime()) / 60000);
                   return (
-                    <tr key={s.id} style={{ borderTop: "1px solid var(--border-subtle)" }}>
+                    <tr key={s.id} style={{ borderTop: idx === 0 ? "none" : "1px solid var(--border-subtle)" }}>
                       <Td>{u?.name ?? u?.email ?? "unknown"}</Td>
                       <Td>
                         {t ? (
@@ -337,15 +500,15 @@ export default async function PlatformHealthPage() {
               </tbody>
             </table>
           )}
-        </Panel>
-      </section>
+        </Section>
+      </div>
 
-      {/* ── Critical audit actions ──────────────────────────────── */}
-      <section>
-        <SectionHeader title="Recent critical actions (30 d)" />
-        <Panel className="mt-3">
+      {/* ── Critical actions audit ─────────────────────── */}
+      <div>
+        <SectionHeader title="Critical actions (30d)" />
+        <Section className="mt-3" title="Audit-derived event log" description="Suspensions, archives, impersonations, deletions, and feature-flag flips across the platform.">
           {criticalAudits.length === 0 ? (
-            <Empty>No suspensions, impersonations, deletions, or feature-flag flips in the last 30 days.</Empty>
+            <Empty icon="📜" body="No suspensions, impersonations, deletions, or flag flips in the last 30 days." />
           ) : (
             <table className="w-full text-sm">
               <thead>
@@ -357,8 +520,8 @@ export default async function PlatformHealthPage() {
                 </tr>
               </thead>
               <tbody>
-                {criticalAudits.map((a) => (
-                  <tr key={a.id} style={{ borderTop: "1px solid var(--border-subtle)" }}>
+                {criticalAudits.map((a, idx) => (
+                  <tr key={a.id} style={{ borderTop: idx === 0 ? "none" : "1px solid var(--border-subtle)" }}>
                     <Td className="font-mono text-xs">{a.action}</Td>
                     <Td>
                       {a.tenant ? (
@@ -374,107 +537,176 @@ export default async function PlatformHealthPage() {
               </tbody>
             </table>
           )}
-          <div className="px-4 pb-3 pt-2 text-xs">
-            <Link href="/platform/audit" className="underline" style={{ color: "var(--text-muted)" }}>
+          <div className="border-t pt-3 text-xs" style={{ borderColor: "var(--border-subtle)" }}>
+            <Link href="/platform/audit" className="underline" style={{ color: "var(--accent-primary)" }}>
               Full audit log →
             </Link>
           </div>
-        </Panel>
-      </section>
+        </Section>
+      </div>
     </div>
   );
 }
 
-// ── Primitives ────────────────────────────────────────────────────
+/* ────────────────────────────────────────────────────────────── */
 
-function PageHeader({ title, description }: { title: string; description?: string }) {
+function RangeSelector({ active }: { active: Range }) {
   return (
-    <div>
-      <h1 className="text-2xl font-semibold">{title}</h1>
-      {description && (
-        <p className="mt-1 text-sm" style={{ color: "var(--text-muted)" }}>
-          {description}
-        </p>
-      )}
+    <div
+      className="inline-flex items-center gap-1 rounded-md p-1"
+      style={{ background: "var(--surface-2)", border: "1px solid var(--border-subtle)" }}
+    >
+      {RANGE_OPTIONS.map((r) => {
+        const isActive = r === active;
+        return (
+          <Link
+            key={r}
+            href={`/platform/health?range=${r}`}
+            className="ts-focus rounded px-2.5 py-1 text-xs font-medium transition-colors"
+            style={{
+              background: isActive ? "var(--surface-1)" : "transparent",
+              color:      isActive ? "var(--text-default)" : "var(--text-muted)",
+              border: `1px solid ${isActive ? "var(--border-default)" : "transparent"}`,
+            }}
+          >
+            {r}
+          </Link>
+        );
+      })}
     </div>
   );
 }
 
-function StatusBanner({ tone }: { tone: HealthTone }) {
-  const meta: Record<HealthTone, { bg: string; fg: string; border: string; label: string; desc: string }> = {
-    good:   { bg: "var(--success-surface)", fg: "var(--success-fg)", border: "1px solid var(--success)", label: "All systems operational", desc: "No critical anomalies detected in the last 24 hours." },
-    info:   { bg: "var(--info-surface)",    fg: "var(--info-fg)",    border: "1px solid var(--info)",    label: "Operational",             desc: "Nothing urgent." },
-    warning:{ bg: "var(--warning-surface)", fg: "var(--warning-fg)", border: "1px solid var(--warning)", label: "Watch a signal",          desc: "At least one subsystem is showing elevated failure rates." },
-    danger: { bg: "var(--danger-surface)",  fg: "var(--danger-fg)",  border: "1px solid var(--danger)",  label: "Incident-worthy signal",  desc: "A subsystem is failing above tolerated thresholds. Investigate." },
+function GlobalStatusBanner({ status }: { status: ServiceStatus }) {
+  const meta: Record<ServiceStatus, { bg: string; fg: string; border: string; icon: string; title: string; body: string }> = {
+    operational: {
+      bg: "var(--success-surface)", fg: "var(--success-fg)", border: "var(--success-fg)",
+      icon: "✓", title: "All systems operational",
+      body: "No critical anomalies detected across monitored services.",
+    },
+    degraded: {
+      bg: "var(--warning-surface)", fg: "var(--warning-fg)", border: "var(--warning-fg)",
+      icon: "⚠", title: "Degraded performance",
+      body: "At least one service is showing elevated failure rates. Investigate the service grid below.",
+    },
+    down: {
+      bg: "var(--danger-surface)", fg: "var(--danger-fg)", border: "var(--danger-fg)",
+      icon: "✖", title: "Major incident",
+      body: "A critical service is failing above tolerated thresholds. Open incident response.",
+    },
+    unknown: {
+      bg: "var(--surface-2)", fg: "var(--text-muted)", border: "var(--border-default)",
+      icon: "?", title: "Status unknown", body: "Health probes haven't reported yet.",
+    },
   };
-  const m = meta[tone];
+  const m = meta[status];
   return (
-    <div className="rounded-lg px-4 py-3 text-sm" style={{ background: m.bg, color: m.fg, border: m.border }}>
-      <div className="font-semibold">{m.label}</div>
-      <div className="text-xs opacity-90">{m.desc}</div>
-    </div>
-  );
-}
-
-function Kpi({ label, value, sub, tone = "good" }: { label: string; value: string; sub?: string; tone?: HealthTone }) {
-  const subColor: Record<HealthTone, string> = {
-    good: "var(--success-fg)",
-    info: "var(--info-fg)",
-    warning: "var(--warning-fg)",
-    danger: "var(--danger-fg)",
-  };
-  return (
-    <div className="rounded-lg px-4 py-4" style={{ background: "var(--surface-1)", border: "1px solid var(--border-subtle)" }}>
-      <div className="text-xs" style={{ color: "var(--text-muted)" }}>{label}</div>
-      <div className="mt-1 text-2xl font-semibold">{value}</div>
-      {sub && <div className="mt-0.5 text-xs" style={{ color: subColor[tone] }}>{sub}</div>}
+    <div
+      className="flex items-start gap-3 rounded-xl px-5 py-4"
+      style={{ background: m.bg, border: `1px solid ${m.border}` }}
+    >
+      <span
+        aria-hidden
+        className="inline-flex h-8 w-8 shrink-0 items-center justify-center rounded-full text-base font-bold"
+        style={{ background: m.fg, color: m.bg }}
+      >
+        {m.icon}
+      </span>
+      <div className="min-w-0 flex-1">
+        <div className="text-sm font-semibold" style={{ color: m.fg }}>
+          {m.title}
+        </div>
+        <div className="mt-0.5 text-xs" style={{ color: "var(--text-default)" }}>
+          {m.body}
+        </div>
+      </div>
     </div>
   );
 }
 
 function SectionHeader({ title }: { title: string }) {
   return (
-    <h2 className="text-sm font-semibold uppercase tracking-wider" style={{ color: "var(--text-muted)" }}>
+    <h2
+      className="text-xs font-semibold uppercase tracking-wide"
+      style={{ color: "var(--text-muted)" }}
+    >
       {title}
     </h2>
   );
 }
 
-function Panel({ children, className }: { children: React.ReactNode; className?: string }) {
+function Section({
+  title,
+  description,
+  children,
+  className,
+}: {
+  title: string;
+  description?: string;
+  children: React.ReactNode;
+  className?: string;
+}) {
   return (
-    <div
-      className={`rounded-lg ${className ?? ""}`}
-      style={{ background: "var(--surface-1)", border: "1px solid var(--border-subtle)" }}
+    <section
+      className={`overflow-hidden rounded-xl ${className ?? ""}`}
+      style={{
+        background: "var(--surface-1)",
+        border: "1px solid var(--border-subtle)",
+        boxShadow: "var(--shadow-sm)",
+      }}
     >
-      <div className="px-4 py-3">{children}</div>
+      <header
+        className="px-5 py-3"
+        style={{ borderBottom: "1px solid var(--border-subtle)" }}
+      >
+        <h3 className="text-sm font-semibold" style={{ color: "var(--text-default)" }}>
+          {title}
+        </h3>
+        {description && (
+          <p className="mt-0.5 text-xs" style={{ color: "var(--text-muted)" }}>
+            {description}
+          </p>
+        )}
+      </header>
+      <div className="p-5">{children}</div>
+    </section>
+  );
+}
+
+function Empty({ icon, body }: { icon: string; body: string }) {
+  return (
+    <div className="text-center" style={{ color: "var(--text-muted)" }}>
+      <div className="mb-1 text-xl" aria-hidden>{icon}</div>
+      <div className="text-sm">{body}</div>
     </div>
   );
 }
-function PanelTitle({ children }: { children: React.ReactNode }) {
-  return <div className="text-sm font-semibold">{children}</div>;
-}
-function Dt({ children }: { children: React.ReactNode }) {
-  return <dt className="text-xs" style={{ color: "var(--text-muted)" }}>{children}</dt>;
-}
-function Dd({ children, danger }: { children: React.ReactNode; danger?: boolean }) {
-  return <dd className="text-sm font-medium" style={danger ? { color: "var(--danger-fg)" } : undefined}>{children}</dd>;
-}
+
 function Th({ children }: { children: React.ReactNode }) {
-  return <th className="px-4 py-3 text-xs font-normal uppercase tracking-wider">{children}</th>;
+  return (
+    <th className="px-2 py-2 text-[10px] font-semibold uppercase tracking-wide">
+      {children}
+    </th>
+  );
 }
+
 function Td({ children, muted, className }: { children: React.ReactNode; muted?: boolean; className?: string }) {
-  return <td className={`px-4 py-3 ${className ?? ""}`} style={muted ? { color: "var(--text-muted)" } : undefined}>{children}</td>;
-}
-function Empty({ children }: { children: React.ReactNode }) {
-  return <p className="py-4 text-center text-sm" style={{ color: "var(--text-muted)" }}>{children}</p>;
+  return (
+    <td
+      className={`px-2 py-2 ${className ?? ""}`}
+      style={muted ? { color: "var(--text-muted)" } : undefined}
+    >
+      {children}
+    </td>
+  );
 }
 
 function ageLabel(d: Date): string {
   const mins = Math.round((Date.now() - d.getTime()) / 60000);
-  if (mins < 1) return "just now";
+  if (mins < 1)  return "just now";
   if (mins < 60) return `${mins}m ago`;
   const hrs = Math.round(mins / 60);
-  if (hrs < 24) return `${hrs}h ago`;
+  if (hrs < 24)  return `${hrs}h ago`;
   const days = Math.round(hrs / 24);
   return `${days}d ago`;
 }
