@@ -546,6 +546,22 @@ model User {
   failedLoginCount Int       @default(0)
   lockedUntil      DateTime?
 
+  // ── Phase 4 (Trust & Safety) — direct ban flags on User ──
+  // Denormalized so the auth path can refuse a banned user without a
+  // second query (it already loads the User row). The full ban record
+  // (who, why, when) lives in `BanRecord`; these mirror the most-recent
+  // active ban so the auth check stays simple.
+  bannedAt     DateTime?
+  bannedReason String?
+  // When the user is the source of a merge, we soft-delete and point
+  // here so historical references still resolve. Sign-in is refused
+  // when this is set. Cascade-null intentionally so removing the
+  // target user doesn't orphan the merge pointer.
+  mergedIntoId String?
+  mergedInto   User?     @relation("UserMerge", fields: [mergedIntoId], references: [id], onDelete: SetNull)
+  mergedFrom   User[]    @relation("UserMerge")
+  mergedAt     DateTime?
+
   createdAt DateTime @default(now())
   updatedAt DateTime @updatedAt
 
@@ -571,6 +587,13 @@ model User {
   // Phase 3 — platform-side billing artifacts created by this admin.
   couponsCreated          Coupon[]                 @relation("CouponCreator")
   platformInvoicesCreated PlatformBillingInvoice[] @relation("PlatformInvoiceCreator")
+
+  // Phase 4 — trust & safety. Ban records pointed at this user (when
+  // banned), bans this admin issued + lifted, merges this admin executed.
+  banRecords     BanRecord[]       @relation("BannedUser")
+  bansIssued     BanRecord[]       @relation("BanIssuer")
+  bansLifted     BanRecord[]       @relation("BanLifter")
+  mergesExecuted UserMergeRecord[] @relation("MergeExecutor")
 }
 
 // Platform-side roles. The first three (SUPER_ADMIN, SITE_MANAGER,
@@ -4755,4 +4778,83 @@ model PlatformBillingInvoiceItem {
   invoice PlatformBillingInvoice @relation(fields: [invoiceId], references: [id], onDelete: Cascade)
 
   @@index([invoiceId, position])
+}
+
+// ─────────────────────────────────────────────────────────────────────
+// Phase 4 — Platform Trust & Safety.
+//
+// `BanRecord` is polymorphic — one table covers user, IP, and
+// email-domain bans because the surrounding workflow (issue, audit,
+// list, lift) is identical and the ban targets are inherently exclusive
+// (a row is exactly one of: user, IP, or domain).
+//
+// `UserMergeRecord` captures cross-tenant identity reconciliation.
+// We don't rewrite historical authorship (audit logs, comments, etc.
+// keep the original userId for forensic value); we *do* consolidate
+// memberships, transfer auth Accounts, and soft-delete the source User
+// via the `mergedIntoId` pointer above.
+// ─────────────────────────────────────────────────────────────────────
+
+enum BanKind {
+  USER          // a specific User row
+  IP            // a single IPv4 or IPv6 address
+  EMAIL_DOMAIN  // anything @example.com
+}
+
+model BanRecord {
+  id          String  @id @default(cuid())
+  kind        BanKind
+  // Exactly one of these is non-null based on `kind`. Application code
+  // enforces; we don't use a CHECK constraint because Prisma's schema
+  // language doesn't model XOR cleanly.
+  userId      String?
+  ipAddress   String? // canonical lower-case form for v6
+  emailDomain String? // lower-case, no leading "@"
+  reason      String  // free-text — surfaced on the ban list + audit
+  issuedById  String
+  issuedAt    DateTime  @default(now())
+  // Optional auto-expiry. When set + reached, the row is considered
+  // inactive without being deleted (so the audit trail stays).
+  expiresAt   DateTime?
+  // Manual lift. Mutually exclusive with `expiresAt` triggering — once
+  // either is past, the ban is no longer active.
+  liftedAt    DateTime?
+  liftedById  String?
+  liftReason  String?
+
+  user     User? @relation("BannedUser", fields: [userId],     references: [id], onDelete: Cascade)
+  issuedBy User  @relation("BanIssuer",  fields: [issuedById], references: [id], onDelete: Restrict)
+  liftedBy User? @relation("BanLifter",  fields: [liftedById], references: [id], onDelete: SetNull)
+
+  // Active-ban lookups — auth path queries by (kind, target) with
+  // expiresAt/liftedAt filters; tight composite indexes keep that fast.
+  @@index([kind, userId, liftedAt])
+  @@index([kind, ipAddress, liftedAt])
+  @@index([kind, emailDomain, liftedAt])
+  @@index([issuedById])
+}
+
+model UserMergeRecord {
+  id           String   @id @default(cuid())
+  // The user that survives — receives memberships + auth links.
+  targetUserId String
+  // The user that was soft-deleted (User.mergedIntoId points at target).
+  sourceUserId String
+  // Cached snapshot — emails for both at merge time, in case the
+  // target's email later changes. Surfaces on the audit page.
+  targetEmail  String
+  sourceEmail  String
+  // What we actually moved.
+  membershipsMoved Int @default(0)
+  accountsMoved    Int @default(0)
+  conflicts        Int @default(0) // memberships dropped because target already had one for that tenant
+  reason           String
+  executedById     String
+  executedAt       DateTime @default(now())
+
+  executedBy User @relation("MergeExecutor", fields: [executedById], references: [id], onDelete: Restrict)
+
+  @@index([targetUserId])
+  @@index([sourceUserId])
+  @@index([executedAt])
 }

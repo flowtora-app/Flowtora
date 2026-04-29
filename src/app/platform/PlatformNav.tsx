@@ -65,6 +65,13 @@ const GROUPS: NavGroup[] = [
     ],
   },
   {
+    label: "Trust & Safety",
+    items: [
+      { href: "/platform/users", label: "Users",        icon: "Customers" },
+      { href: "/platform/abuse", label: "Abuse & bans", icon: "Shield" },
+    ],
+  },
+  {
     label: "Reliability",
     items: [
       { href: "/platform/health",        label: "Health",        icon: "Heartbeat" },

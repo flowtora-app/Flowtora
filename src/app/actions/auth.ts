@@ -187,6 +187,7 @@ async function decodeAuthError(err: unknown): Promise<string> {
   if (msg.includes(LOGIN_ERRORS.LOCKED)) return LOGIN_ERRORS.LOCKED;
   if (msg.includes(LOGIN_ERRORS.TWO_FACTOR_REQUIRED)) return LOGIN_ERRORS.TWO_FACTOR_REQUIRED;
   if (msg.includes(LOGIN_ERRORS.TWO_FACTOR_BAD)) return LOGIN_ERRORS.TWO_FACTOR_BAD;
+  if (msg.includes(LOGIN_ERRORS.BANNED)) return LOGIN_ERRORS.BANNED;
   return LOGIN_ERRORS.CREDENTIALS;
 }
 
@@ -253,6 +254,9 @@ export async function loginAction(formData: FormData) {
     if (sentinel === LOGIN_ERRORS.TWO_FACTOR_REQUIRED) {
       await mintPending2faToken(parsed.data.email, parsed.data.next);
       redirect("/two-factor");
+    }
+    if (sentinel === LOGIN_ERRORS.BANNED) {
+      redirect("/login?error=banned");
     }
     redirect("/login?error=credentials");
   }

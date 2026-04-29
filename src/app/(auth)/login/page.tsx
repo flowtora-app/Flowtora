@@ -104,7 +104,9 @@ export default async function LoginPage({
             {sp.error === "credentials" && "Invalid email or password."}
             {sp.error === "locked" &&
               "Too many failed attempts. Your account is locked for 15 minutes. Try resetting your password instead."}
-            {sp.error !== "credentials" && sp.error !== "locked" && "We couldn't sign you in. Try again."}
+            {sp.error === "banned" &&
+              "This account is unavailable. Contact support if you believe this is an error."}
+            {sp.error !== "credentials" && sp.error !== "locked" && sp.error !== "banned" && "We couldn't sign you in. Try again."}
           </div>
         )}
 

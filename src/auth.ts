@@ -11,6 +11,7 @@ import {
   recordSecurityEvent,
   registerFailedLogin,
 } from "@/lib/security";
+import { checkBan } from "@/lib/trust-safety";
 import type { PlatformRole } from "@prisma/client";
 import { authConfig } from "@/auth.config";
 
@@ -47,6 +48,11 @@ export const LOGIN_ERRORS = {
   LOCKED:      "locked",
   TWO_FACTOR_REQUIRED: "two_factor_required",
   TWO_FACTOR_BAD:      "two_factor_bad",
+  // Phase 4 — banned (user / IP / email-domain) or merged-source. The
+  // login UI maps this to a generic "your account is unavailable"
+  // message; we deliberately don't differentiate which axis tripped
+  // the block in the user-facing message.
+  BANNED:      "banned",
 } as const;
 
 export const { handlers, signIn, signOut, auth } = NextAuth({
@@ -106,6 +112,35 @@ export const { handlers, signIn, signOut, auth } = NextAuth({
           include: { twoFactor: true },
         });
         if (!user?.passwordHash) return null;
+
+        // Phase 4 — refuse banned and merged accounts before we even
+        // bcrypt-compare. `bannedAt` and `mergedIntoId` live on the
+        // User row so this is the same DB hit; the IP/domain check
+        // adds one more query but only when the user actually exists.
+        if (user.bannedAt || user.mergedIntoId) {
+          await recordSecurityEvent({
+            userId: user.id,
+            kind: "LOGIN_FAILED",
+            metadata: { reason: user.mergedIntoId ? "merged_account" : "banned_user" },
+          });
+          throw new Error(LOGIN_ERRORS.BANNED);
+        }
+        const ban = await checkBan({
+          userId: user.id,
+          email: parsed.data.email,
+          // IP isn't available in the credentials authorize() context;
+          // domain bans still cover that axis. Middleware-level IP
+          // gating is a follow-up.
+          ipAddress: null,
+        });
+        if (ban.banned) {
+          await recordSecurityEvent({
+            userId: user.id,
+            kind: "LOGIN_FAILED",
+            metadata: { reason: "banned", banKind: ban.kind },
+          });
+          throw new Error(LOGIN_ERRORS.BANNED);
+        }
 
         // Lockout check — before we even touch bcrypt we refuse locked
         // accounts. This also means an attacker can't burn CPU hammering
