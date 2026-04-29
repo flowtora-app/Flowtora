@@ -323,3 +323,139 @@ export async function cancelAccountDeletionAsStaff(requestId: string) {
   revalidatePath(`/platform/compliance`);
   revalidatePath(`/platform/tenants/${req.tenantId}`);
 }
+
+// ────────────────────────────────────────────────────────────
+// Slice E2 — admin-only export & deletion management.
+// Three additions for the compliance redesign:
+//   • regenerateDataExport — re-run fulfillment on a COMPLETED row,
+//     useful when a tenant's data has changed since export
+//   • cancelDataExportAsStaff — back out a PENDING / FAILED request
+//   • extendDeletionGracePeriod — bump scheduledFor by N days
+// ────────────────────────────────────────────────────────────
+
+export async function regenerateDataExport(requestId: string) {
+  const ctx = await requirePlatformAdmin();
+  const req = await db.dataExportRequest.findUnique({
+    where:  { id: requestId },
+    select: { id: true, tenantId: true, status: true },
+  });
+  if (!req) return;
+  if (req.status !== "COMPLETED" && req.status !== "EXPIRED" && req.status !== "FAILED") return;
+
+  // Reset to PROCESSING and clear the old payload so concurrent
+  // download attempts during regeneration get a clean failure rather
+  // than the stale bundle.
+  await db.dataExportRequest.update({
+    where: { id: req.id },
+    data: {
+      status: "PROCESSING",
+      payload: null,
+      errorMessage: null,
+      expiresAt: null,
+      completedAt: null,
+    },
+  });
+
+  try {
+    const payload = await generateTenantExport(req.tenantId);
+    const expiresAt = new Date(Date.now() + EXPORT_RETENTION_DAYS * 24 * 60 * 60 * 1000);
+    await db.dataExportRequest.update({
+      where: { id: req.id },
+      data: {
+        status: "COMPLETED",
+        payload,
+        expiresAt,
+        completedAt: new Date(),
+      },
+    });
+    await logPlatformAudit({
+      userId:     ctx.userId,
+      tenantId:   req.tenantId,
+      action:     "platform.export_regenerated",
+      entityType: "DataExportRequest",
+      entityId:   req.id,
+      metadata:   { actor: ctx.email, payloadBytes: payload.length },
+    });
+  } catch (err) {
+    await db.dataExportRequest.update({
+      where: { id: req.id },
+      data: {
+        status: "FAILED",
+        errorMessage: err instanceof Error ? err.message : String(err),
+      },
+    });
+  }
+
+  revalidatePath(`/platform/compliance`);
+  revalidatePath(`/platform/tenants/${req.tenantId}`);
+}
+
+export async function cancelDataExportAsStaff(requestId: string, formData: FormData) {
+  const ctx = await requirePlatformAdmin();
+  const req = await db.dataExportRequest.findUnique({
+    where:  { id: requestId },
+    select: { id: true, tenantId: true, status: true },
+  });
+  if (!req) return;
+  if (req.status === "COMPLETED" || req.status === "EXPIRED") {
+    redirect(`/platform/compliance?error=${encodeURIComponent("Cannot cancel a completed export.")}`);
+  }
+  const reason = (formData.get("reason") as string | null)?.trim() || "Canceled by platform admin";
+
+  // No CANCELED enum value — encode cancellation as FAILED with a
+  // recognizable errorMessage prefix. The UI keys off the prefix to
+  // render a "Canceled" pill instead of "Failed".
+  await db.dataExportRequest.update({
+    where: { id: req.id },
+    data: { status: "FAILED", errorMessage: `Canceled: ${reason}` },
+  });
+
+  await logPlatformAudit({
+    userId:     ctx.userId,
+    tenantId:   req.tenantId,
+    action:     "platform.export_canceled",
+    entityType: "DataExportRequest",
+    entityId:   req.id,
+    metadata:   { actor: ctx.email, reason },
+  });
+
+  revalidatePath(`/platform/compliance`);
+  revalidatePath(`/platform/tenants/${req.tenantId}`);
+}
+
+const extendSchema = z.object({
+  days: z.coerce.number().int().min(1).max(180),
+});
+
+export async function extendDeletionGracePeriod(requestId: string, formData: FormData) {
+  const ctx = await requirePlatformAdmin();
+  const parsed = extendSchema.safeParse(Object.fromEntries(formData.entries()));
+  if (!parsed.success) {
+    redirect(`/platform/compliance?error=${encodeURIComponent("Invalid extension days (1–180).")}`);
+  }
+  const req = await db.accountDeletionRequest.findUnique({
+    where:  { id: requestId },
+    select: { id: true, tenantId: true, status: true, scheduledFor: true },
+  });
+  if (!req) return;
+  if (req.status !== "SCHEDULED") {
+    redirect(`/platform/compliance?error=${encodeURIComponent("Only scheduled deletions can be extended.")}`);
+  }
+  const next = new Date(req.scheduledFor.getTime() + parsed.data.days * 86_400_000);
+  await db.accountDeletionRequest.update({
+    where: { id: req.id },
+    data:  { scheduledFor: next },
+  });
+
+  await logPlatformAudit({
+    userId:     ctx.userId,
+    tenantId:   req.tenantId,
+    action:     "platform.deletion_grace_extended",
+    entityType: "AccountDeletionRequest",
+    entityId:   req.id,
+    metadata:   { actor: ctx.email, days: parsed.data.days, newScheduledFor: next.toISOString() },
+  });
+
+  revalidatePath(`/platform/compliance`);
+  revalidatePath(`/platform/tenants/${req.tenantId}`);
+}
