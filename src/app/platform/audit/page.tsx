@@ -1,20 +1,27 @@
 import Link from "next/link";
 import { db } from "@/lib/db";
 import { requirePlatformStaff } from "@/lib/platform";
-import { Card, CardHeader } from "@/components/Card";
 import type { Prisma } from "@prisma/client";
 
-// Phase 17 Slice E — platform-wide audit log viewer.
+// /platform/audit — audit-log viewer (transformation rewrite).
 //
-// Read-only: platform staff can scroll / filter every audit row across
-// every tenant + every platform-level action. The filters are GET
-// params so staff can share a link ("all suspensions in the last 30d").
+// Layout:
+//   1. Header
+//   2. KPI band — Total · Today · 7d · Platform-only · Tenant-only
+//   3. Filter form (search + tenant/user/action/scope/date range)
+//   4. Scope quick-filter chips (URL-driven)
+//   5. Polished event table with severity dots, action prefix colour,
+//      tenant + actor lookups, pagination
 //
-// We deliberately keep this server-rendered with pagination rather than a
-// client grid — audit data is append-only and low-traffic; interactive
-// filtering adds complexity for little payoff.
+// All append-only — read-only viewer. Filters are GET params so an
+// admin can share a deep link to a specific slice ("every suspension
+// in the last 30d").
 
 const PAGE_SIZE = 100;
+const DAY_MS = 86_400_000;
+
+const SCOPE_KEYS = ["all", "platform", "tenant"] as const;
+type ScopeKey = (typeof SCOPE_KEYS)[number];
 
 export default async function PlatformAuditPage({
   searchParams,
@@ -23,33 +30,30 @@ export default async function PlatformAuditPage({
     tenantId?: string;
     userId?: string;
     action?: string;
-    scope?: string;  // "platform" | "tenant" | "all"
-    since?: string;  // ISO date, inclusive
-    until?: string;  // ISO date, exclusive
+    scope?: string;
+    since?: string;
+    until?: string;
     page?: string;
   }>;
 }) {
   await requirePlatformStaff();
   const sp = await searchParams;
 
-  // Build the Prisma where clause from the query string. Keep it forgiving:
-  // invalid filters (e.g. bad date strings) get silently ignored so a
-  // typo doesn't render a stack trace to the user.
+  const scope: ScopeKey = (SCOPE_KEYS as readonly string[]).includes(sp.scope ?? "")
+    ? (sp.scope as ScopeKey)
+    : "all";
+
+  // ── Build the where clause from the URL ─────────────────────
   const where: Prisma.AuditLogWhereInput = {};
   if (sp.tenantId) where.tenantId = sp.tenantId;
   if (sp.userId)   where.userId   = sp.userId;
 
   if (sp.action) {
-    // Prefix match, so "platform." shows every platform.* action and
-    // "team." shows every team.* mutation.
     where.action = { startsWith: sp.action };
   }
-
-  if (sp.scope === "platform") {
+  if (scope === "platform") {
     where.action = { startsWith: "platform." };
-  } else if (sp.scope === "tenant") {
-    // Everything that's not a platform-level action. Implemented via NOT
-    // to keep it composable with other filters.
+  } else if (scope === "tenant") {
     where.NOT = { action: { startsWith: "platform." } };
   }
 
@@ -67,7 +71,13 @@ export default async function PlatformAuditPage({
   const page = Math.max(1, Number(sp.page) || 1);
   const skip = (page - 1) * PAGE_SIZE;
 
-  const [rows, total] = await Promise.all([
+  // ── Time windows for KPIs ───────────────────────────────────
+  const now = new Date();
+  const startOfToday = new Date(now.getFullYear(), now.getMonth(), now.getDate());
+  const last7d = new Date(now.getTime() - 7 * DAY_MS);
+
+  // ── Parallel data fetch ─────────────────────────────────────
+  const [rows, total, totalAll, totalToday, total7d, totalPlatform, totalTenant] = await Promise.all([
     db.auditLog.findMany({
       where,
       orderBy: { createdAt: "desc" },
@@ -75,11 +85,16 @@ export default async function PlatformAuditPage({
       take: PAGE_SIZE,
     }),
     db.auditLog.count({ where }),
+    db.auditLog.count(),
+    db.auditLog.count({ where: { createdAt: { gte: startOfToday } } }),
+    db.auditLog.count({ where: { createdAt: { gte: last7d } } }),
+    db.auditLog.count({ where: { action: { startsWith: "platform." } } }),
+    db.auditLog.count({ where: { NOT: { action: { startsWith: "platform." } } } }),
   ]);
 
-  // Decorate with tenant and user info.
+  // ── Decorate ───────────────────────────────────────────────
   const tenantIds = Array.from(new Set(rows.map((r) => r.tenantId).filter((x): x is string => Boolean(x))));
-  const userIds   = Array.from(new Set(rows.map((r) => r.userId  ).filter((x): x is string => Boolean(x))));
+  const userIds   = Array.from(new Set(rows.map((r) => r.userId).filter((x): x is string => Boolean(x))));
   const [tenants, users] = await Promise.all([
     tenantIds.length
       ? db.tenant.findMany({ where: { id: { in: tenantIds } }, select: { id: true, name: true, slug: true } })
@@ -94,169 +109,189 @@ export default async function PlatformAuditPage({
   const hasNext = skip + rows.length < total;
   const hasPrev = page > 1;
 
-  // Build a querystring preserving filters for pagination links.
-  const qs = (overrides: Record<string, string | number | undefined>) => {
-    const out = new URLSearchParams();
-    for (const [k, v] of Object.entries({ ...sp, ...overrides })) {
+  // Build a same-search querystring with one param overridden.
+  const buildHref = (overrides: Record<string, string | number | undefined>): string => {
+    const u = new URLSearchParams();
+    for (const [k, v] of Object.entries(sp)) {
       if (v === undefined || v === "" || v === null) continue;
-      out.set(k, String(v));
+      u.set(k, String(v));
     }
-    const s = out.toString();
-    return s ? `?${s}` : "";
+    for (const [k, v] of Object.entries(overrides)) {
+      if (v === undefined || v === "" || v === null) u.delete(k);
+      else u.set(k, String(v));
+    }
+    const qs = u.toString();
+    return qs ? `/platform/audit?${qs}` : "/platform/audit";
   };
 
   return (
     <div className="space-y-6">
+      {/* ── Header ─────────────────────────────────────── */}
       <div>
-        <h1 className="text-2xl font-semibold">Audit log</h1>
-        <p className="mt-1 text-sm" style={{ color: "var(--muted)" }}>
-          Every append-only event across tenants and platform staff. Use the filters to narrow.
+        <h1 className="text-2xl font-semibold tracking-tight" style={{ color: "var(--text-default)" }}>
+          Audit log
+        </h1>
+        <p className="mt-1 text-sm" style={{ color: "var(--text-muted)" }}>
+          Append-only event stream across every tenant + every platform action.
+          Filters are URL-driven so views are link-shareable.
         </p>
       </div>
 
-      {/* ── Filter form ── */}
-      <Card>
-        <CardHeader title="Filters" />
-        <form className="grid grid-cols-2 gap-3 px-5 py-4 text-sm md:grid-cols-6" method="get">
-          <label className="flex flex-col gap-1">
-            <span className="text-xs" style={{ color: "var(--muted)" }}>Tenant ID</span>
-            <input
-              name="tenantId"
-              defaultValue={sp.tenantId ?? ""}
-              className="rounded-md px-2 py-1.5 font-mono text-xs outline-none"
-              style={{ background: "var(--panel)", border: "1px solid var(--border)", color: "var(--text)" }}
-              placeholder="cuid"
-            />
-          </label>
-          <label className="flex flex-col gap-1">
-            <span className="text-xs" style={{ color: "var(--muted)" }}>User ID</span>
-            <input
-              name="userId"
-              defaultValue={sp.userId ?? ""}
-              className="rounded-md px-2 py-1.5 font-mono text-xs outline-none"
-              style={{ background: "var(--panel)", border: "1px solid var(--border)", color: "var(--text)" }}
-              placeholder="cuid"
-            />
-          </label>
-          <label className="flex flex-col gap-1">
-            <span className="text-xs" style={{ color: "var(--muted)" }}>Action prefix</span>
-            <input
-              name="action"
-              defaultValue={sp.action ?? ""}
-              className="rounded-md px-2 py-1.5 font-mono text-xs outline-none"
-              style={{ background: "var(--panel)", border: "1px solid var(--border)", color: "var(--text)" }}
-              placeholder="team. or platform."
-            />
-          </label>
-          <label className="flex flex-col gap-1">
-            <span className="text-xs" style={{ color: "var(--muted)" }}>Scope</span>
-            <select
-              name="scope"
-              defaultValue={sp.scope ?? ""}
-              className="rounded-md px-2 py-1.5 text-xs outline-none"
-              style={{ background: "var(--panel)", border: "1px solid var(--border)", color: "var(--text)" }}
+      {/* ── KPI band ───────────────────────────────────── */}
+      <div className="grid grid-cols-2 gap-3 md:grid-cols-3 lg:grid-cols-5">
+        <Stat label="Total events"   value={totalAll.toLocaleString()}      hint="All-time" />
+        <Stat label="Today"          value={totalToday.toLocaleString()}    hint="Since midnight UTC" tone="accent" />
+        <Stat label="Last 7 days"    value={total7d.toLocaleString()}       hint="Rolling window" />
+        <Stat label="Platform staff" value={totalPlatform.toLocaleString()} hint="platform.* actions" tone="warning" />
+        <Stat label="Tenant scope"   value={totalTenant.toLocaleString()}   hint="Everything else" />
+      </div>
+
+      {/* ── Filter form ────────────────────────────────── */}
+      <Section title="Filters" description={`${total.toLocaleString()} ${total === 1 ? "event" : "events"} match the current filter`}>
+        <form className="grid grid-cols-1 gap-3 md:grid-cols-3 lg:grid-cols-6" method="get">
+          <FilterField label="Tenant ID"     name="tenantId" defaultValue={sp.tenantId ?? ""} placeholder="cuid"             mono />
+          <FilterField label="User ID"       name="userId"   defaultValue={sp.userId   ?? ""} placeholder="cuid"             mono />
+          <FilterField label="Action prefix" name="action"   defaultValue={sp.action   ?? ""} placeholder="team. or platform." mono />
+          <FilterSelect
+            label="Scope"
+            name="scope"
+            defaultValue={scope}
+            options={[
+              { value: "all",      label: "All" },
+              { value: "platform", label: "Platform staff only" },
+              { value: "tenant",   label: "Tenant only" },
+            ]}
+          />
+          <FilterField label="Since (UTC)" name="since" type="date" defaultValue={sp.since ?? ""} />
+          <FilterField label="Until (UTC)" name="until" type="date" defaultValue={sp.until ?? ""} />
+
+          <div className="col-span-full flex flex-wrap items-center gap-2">
+            <button
+              type="submit"
+              className="ts-focus rounded-md px-4 py-2 text-sm font-medium"
+              style={{ background: "var(--accent-primary)", color: "var(--accent-fg)" }}
             >
-              <option value="">All</option>
-              <option value="platform">Platform staff only</option>
-              <option value="tenant">Tenant only</option>
-            </select>
-          </label>
-          <label className="flex flex-col gap-1">
-            <span className="text-xs" style={{ color: "var(--muted)" }}>Since (UTC)</span>
-            <input
-              type="date"
-              name="since"
-              defaultValue={sp.since ?? ""}
-              className="rounded-md px-2 py-1.5 text-xs outline-none"
-              style={{ background: "var(--panel)", border: "1px solid var(--border)", color: "var(--text)" }}
-            />
-          </label>
-          <label className="flex flex-col gap-1">
-            <span className="text-xs" style={{ color: "var(--muted)" }}>Until (UTC)</span>
-            <input
-              type="date"
-              name="until"
-              defaultValue={sp.until ?? ""}
-              className="rounded-md px-2 py-1.5 text-xs outline-none"
-              style={{ background: "var(--panel)", border: "1px solid var(--border)", color: "var(--text)" }}
-            />
-          </label>
-          <div className="col-span-2 flex items-end gap-2 md:col-span-6">
-            <button type="submit" className="rounded-md px-3 py-1.5 text-sm" style={{ background: "var(--accent)", color: "white" }}>
               Apply
             </button>
-            <Link
-              href="/platform/audit"
-              className="rounded-md px-3 py-1.5 text-sm"
-              style={{ border: "1px solid var(--border)", color: "var(--muted)" }}
-            >
-              Clear
-            </Link>
-            <span className="ml-auto text-xs" style={{ color: "var(--muted)" }}>
-              {total.toLocaleString()} {total === 1 ? "event" : "events"} match
-            </span>
+            {(sp.tenantId || sp.userId || sp.action || sp.scope || sp.since || sp.until) && (
+              <Link
+                href="/platform/audit"
+                className="rounded-md px-3 py-2 text-xs"
+                style={{ color: "var(--text-muted)", border: "1px solid var(--border-default)" }}
+              >
+                Clear all
+              </Link>
+            )}
           </div>
         </form>
-      </Card>
+      </Section>
 
-      {/* ── Rows ── */}
-      <Card>
+      {/* ── Scope chips ────────────────────────────────── */}
+      <div className="flex flex-wrap items-center gap-2">
+        <span className="text-xs" style={{ color: "var(--text-muted)" }}>Quick scope:</span>
+        <ScopeChip label="All"               active={scope === "all"}      href={buildHref({ scope: undefined, page: undefined })} count={totalAll} />
+        <ScopeChip label="Platform staff"    active={scope === "platform"} href={buildHref({ scope: "platform", page: undefined })} count={totalPlatform} tone="warning" />
+        <ScopeChip label="Tenant"            active={scope === "tenant"}   href={buildHref({ scope: "tenant",   page: undefined })} count={totalTenant} />
+      </div>
+
+      {/* ── Events table ───────────────────────────────── */}
+      <div
+        className="overflow-hidden rounded-xl"
+        style={{
+          background: "var(--surface-1)",
+          border: "1px solid var(--border-subtle)",
+          boxShadow: "var(--shadow-sm)",
+        }}
+      >
         {rows.length === 0 ? (
-          <p className="px-5 py-4 text-sm" style={{ color: "var(--muted)" }}>
-            No events match these filters.
-          </p>
+          <div className="px-6 py-12 text-center text-sm" style={{ color: "var(--text-muted)" }}>
+            <div className="mb-1 text-2xl" aria-hidden>📜</div>
+            <div className="font-medium" style={{ color: "var(--text-default)" }}>
+              No events match the current filters.
+            </div>
+            <Link href="/platform/audit" className="mt-2 inline-block text-xs underline">
+              Clear filters
+            </Link>
+          </div>
         ) : (
           <div className="overflow-x-auto">
             <table className="w-full text-sm">
-              <thead style={{ color: "var(--muted)" }}>
+              <thead style={{ color: "var(--text-muted)", background: "var(--surface-2)" }}>
                 <tr className="text-left">
-                  <th className="px-4 py-3 font-normal">When (UTC)</th>
-                  <th className="px-4 py-3 font-normal">Action</th>
-                  <th className="px-4 py-3 font-normal">Tenant</th>
-                  <th className="px-4 py-3 font-normal">Actor</th>
-                  <th className="px-4 py-3 font-normal">Entity</th>
+                  <Th>When (UTC)</Th>
+                  <Th>Action</Th>
+                  <Th>Tenant</Th>
+                  <Th>Actor</Th>
+                  <Th>Entity</Th>
                 </tr>
               </thead>
               <tbody>
-                {rows.map((r) => {
+                {rows.map((r, idx) => {
                   const tenant = r.tenantId ? tenantById.get(r.tenantId) : null;
                   const user = r.userId ? userById.get(r.userId) : null;
                   const isPlatform = r.action.startsWith("platform.");
+                  const sev = severity(r.action);
                   return (
-                    <tr key={r.id} style={{ borderTop: "1px solid var(--border)" }}>
-                      <td className="px-4 py-2 font-mono text-xs" style={{ color: "var(--muted)" }}>
+                    <tr key={r.id} style={{ borderTop: idx === 0 ? "none" : "1px solid var(--border-subtle)" }}>
+                      <Td className="font-mono text-xs whitespace-nowrap" style={{ color: "var(--text-muted)" }}>
                         {r.createdAt.toISOString().replace("T", " ").slice(0, 19)}
-                      </td>
-                      <td className="px-4 py-2">
-                        <span style={{ color: isPlatform ? "var(--accent)" : "var(--text)" }}>
-                          {r.action}
-                        </span>
-                      </td>
-                      <td className="px-4 py-2 text-xs">
+                      </Td>
+                      <Td>
+                        <div className="flex items-center gap-2">
+                          <span
+                            aria-hidden
+                            className="inline-block h-1.5 w-1.5 shrink-0 rounded-full"
+                            style={{ background: SEV_COLOR[sev] }}
+                          />
+                          <span
+                            className="font-mono text-xs"
+                            style={{ color: isPlatform ? "var(--accent-primary)" : "var(--text-default)" }}
+                          >
+                            {r.action}
+                          </span>
+                          {isPlatform && (
+                            <span
+                              className="rounded-full px-1.5 py-0.5 text-[10px] font-semibold uppercase tracking-wide"
+                              style={{ background: "var(--accent-surface)", color: "var(--accent-primary)" }}
+                            >
+                              platform
+                            </span>
+                          )}
+                        </div>
+                      </Td>
+                      <Td>
                         {tenant ? (
-                          <Link href={`/platform/tenants/${tenant.id}`} className="underline">
+                          <Link
+                            href={`/platform/tenants/${tenant.id}`}
+                            className="text-xs underline"
+                            style={{ color: "var(--text-default)" }}
+                          >
                             {tenant.name}
                           </Link>
                         ) : (
-                          <span style={{ color: "var(--muted)" }}>— platform —</span>
+                          <span className="text-xs" style={{ color: "var(--text-faint)" }}>— platform —</span>
                         )}
-                      </td>
-                      <td className="px-4 py-2 text-xs">
+                      </Td>
+                      <Td>
                         {user ? (
-                          <>
-                            {user.name ?? user.email}
+                          <div className="text-xs">
+                            <span style={{ color: "var(--text-default)" }}>{user.name ?? user.email}</span>
                             {user.platformRole && (
-                              <span style={{ color: "var(--muted)" }}> · {user.platformRole}</span>
+                              <span className="ml-1.5 rounded-full px-1.5 py-0.5 text-[9px] font-semibold uppercase tracking-wide"
+                                style={{ background: "var(--accent-surface)", color: "var(--accent-primary)" }}
+                              >
+                                {user.platformRole.toLowerCase().replace("_", " ")}
+                              </span>
                             )}
-                          </>
+                          </div>
                         ) : (
-                          <span style={{ color: "var(--muted)" }}>system</span>
+                          <span className="text-xs" style={{ color: "var(--text-faint)" }}>system</span>
                         )}
-                      </td>
-                      <td className="px-4 py-2 text-xs font-mono" style={{ color: "var(--muted)" }}>
-                        {r.entityType ?? ""}
-                        {r.entityId ? ` · ${r.entityId.slice(0, 8)}` : ""}
-                      </td>
+                      </Td>
+                      <Td className="font-mono text-xs" style={{ color: "var(--text-muted)" }}>
+                        {r.entityType ?? <span style={{ color: "var(--text-faint)" }}>—</span>}
+                        {r.entityId ? <span style={{ color: "var(--text-faint)" }}> · {r.entityId.slice(0, 8)}</span> : null}
+                      </Td>
                     </tr>
                   );
                 })}
@@ -265,14 +300,265 @@ export default async function PlatformAuditPage({
           </div>
         )}
 
-        <div className="flex items-center justify-between px-5 py-3 text-xs" style={{ borderTop: "1px solid var(--border)", color: "var(--muted)" }}>
-          <span>Page {page}</span>
-          <div className="flex gap-3">
-            {hasPrev && <Link href={qs({ page: page - 1 })} className="underline">← Previous</Link>}
-            {hasNext && <Link href={qs({ page: page + 1 })} className="underline">Next →</Link>}
+        {/* Pagination */}
+        <div
+          className="flex items-center justify-between px-5 py-3 text-xs"
+          style={{ borderTop: "1px solid var(--border-subtle)", color: "var(--text-muted)" }}
+        >
+          <span>
+            Page <b style={{ color: "var(--text-default)" }}>{page}</b> · showing{" "}
+            {rows.length === 0 ? 0 : skip + 1}–{skip + rows.length} of {total.toLocaleString()}
+          </span>
+          <div className="flex items-center gap-1">
+            <PageLink href={hasPrev ? buildHref({ page: page - 1 }) : null}>‹ Previous</PageLink>
+            <PageLink href={hasNext ? buildHref({ page: page + 1 }) : null}>Next ›</PageLink>
           </div>
         </div>
-      </Card>
+      </div>
+
+      <p className="text-xs" style={{ color: "var(--text-faint)" }}>
+        Audit log is append-only — events can never be edited or deleted from this UI. Drop into{" "}
+        <Link href="/platform/health" className="underline">/platform/health</Link>{" "}
+        for a unified live feed of recent audit + security + email events.
+      </p>
     </div>
+  );
+}
+
+/* ────────────────────────────────────────────────────────────── */
+
+// Severity is a heuristic — we don't store it on AuditLog, but most
+// actions can be classified by their name alone. Lets the table show
+// a colored dot per row so an eye can scan for risk quickly.
+function severity(action: string): "info" | "warning" | "danger" {
+  if (/(deleted|suspended|archive|drop|destroy)/i.test(action)) return "danger";
+  if (/(impersonat|status|password|2fa|feature_flag|email|role)/i.test(action)) return "warning";
+  return "info";
+}
+
+const SEV_COLOR: Record<"info" | "warning" | "danger", string> = {
+  info:    "var(--accent-primary)",
+  warning: "var(--warning-fg)",
+  danger:  "var(--danger-fg)",
+};
+
+function Stat({
+  label,
+  value,
+  hint,
+  tone = "default",
+}: {
+  label: string;
+  value: string;
+  hint?: string;
+  tone?: "default" | "accent" | "warning";
+}) {
+  const palette =
+    tone === "accent"  ? { bg: "var(--accent-surface)",  border: "var(--accent-primary)", label: "var(--accent-primary)" } :
+    tone === "warning" ? { bg: "var(--warning-surface)", border: "var(--warning-fg)",     label: "var(--warning-fg)"     } :
+                          { bg: "var(--surface-1)",       border: "var(--border-subtle)",  label: "var(--text-muted)"     };
+  return (
+    <div
+      className="rounded-xl p-4"
+      style={{ background: palette.bg, border: `1px solid ${palette.border}`, boxShadow: "var(--shadow-sm)" }}
+    >
+      <div className="text-xs font-medium uppercase tracking-wide" style={{ color: palette.label }}>
+        {label}
+      </div>
+      <div className="mt-2 text-2xl font-semibold tabular-nums tracking-tight" style={{ color: "var(--text-default)" }}>
+        {value}
+      </div>
+      {hint && <div className="mt-1 text-xs" style={{ color: "var(--text-muted)" }}>{hint}</div>}
+    </div>
+  );
+}
+
+function Section({
+  title,
+  description,
+  children,
+}: {
+  title: string;
+  description?: string;
+  children: React.ReactNode;
+}) {
+  return (
+    <section
+      className="overflow-hidden rounded-xl"
+      style={{
+        background: "var(--surface-1)",
+        border: "1px solid var(--border-subtle)",
+        boxShadow: "var(--shadow-sm)",
+      }}
+    >
+      <header
+        className="flex items-baseline justify-between gap-3 px-5 py-3"
+        style={{ borderBottom: "1px solid var(--border-subtle)" }}
+      >
+        <h2 className="text-sm font-semibold" style={{ color: "var(--text-default)" }}>
+          {title}
+        </h2>
+        {description && (
+          <span className="text-xs" style={{ color: "var(--text-muted)" }}>{description}</span>
+        )}
+      </header>
+      <div className="p-5">{children}</div>
+    </section>
+  );
+}
+
+function FilterField({
+  label,
+  name,
+  defaultValue,
+  placeholder,
+  type = "text",
+  mono,
+}: {
+  label: string;
+  name: string;
+  defaultValue?: string;
+  placeholder?: string;
+  type?: string;
+  mono?: boolean;
+}) {
+  return (
+    <label className="flex flex-col gap-1">
+      <span className="text-xs font-medium" style={{ color: "var(--text-muted)" }}>{label}</span>
+      <input
+        type={type}
+        name={name}
+        defaultValue={defaultValue}
+        placeholder={placeholder}
+        className={`ts-focus rounded-md px-3 py-2 text-sm outline-none ${mono ? "font-mono text-xs" : ""}`}
+        style={{
+          background: "var(--surface-1)",
+          border: "1px solid var(--border-default)",
+          color: "var(--text-default)",
+        }}
+      />
+    </label>
+  );
+}
+
+function FilterSelect({
+  label,
+  name,
+  defaultValue,
+  options,
+}: {
+  label: string;
+  name: string;
+  defaultValue: string;
+  options: { value: string; label: string }[];
+}) {
+  return (
+    <label className="flex flex-col gap-1">
+      <span className="text-xs font-medium" style={{ color: "var(--text-muted)" }}>{label}</span>
+      <select
+        name={name}
+        defaultValue={defaultValue}
+        className="ts-focus rounded-md px-3 py-2 text-sm outline-none"
+        style={{
+          background: "var(--surface-1)",
+          border: "1px solid var(--border-default)",
+          color: "var(--text-default)",
+        }}
+      >
+        {options.map((o) => (
+          <option key={o.value} value={o.value}>
+            {o.label}
+          </option>
+        ))}
+      </select>
+    </label>
+  );
+}
+
+function ScopeChip({
+  label,
+  count,
+  active,
+  href,
+  tone = "default",
+}: {
+  label: string;
+  count: number;
+  active: boolean;
+  href: string;
+  tone?: "default" | "warning";
+}) {
+  const idleFg = tone === "warning" ? "var(--warning-fg)" : "var(--text-default)";
+  return (
+    <Link
+      href={href}
+      className="ts-focus inline-flex items-center gap-1.5 rounded-full px-3 py-1 text-xs font-medium transition-colors"
+      style={{
+        background: active ? "var(--accent-primary)" : "var(--surface-1)",
+        color:      active ? "var(--accent-fg)"      : idleFg,
+        border: `1px solid ${active ? "var(--accent-primary)" : "var(--border-default)"}`,
+      }}
+    >
+      {label}
+      <span
+        className="rounded-full px-1.5 py-0.5 text-[10px] tabular-nums"
+        style={{
+          background: active ? "rgba(0,0,0,0.18)" : "var(--surface-2)",
+          color:      active ? "var(--accent-fg)" : "var(--text-muted)",
+        }}
+      >
+        {count.toLocaleString()}
+      </span>
+    </Link>
+  );
+}
+
+function PageLink({ href, children }: { href: string | null; children: React.ReactNode }) {
+  if (!href) {
+    return (
+      <span
+        className="rounded-md px-3 py-1.5"
+        style={{
+          color: "var(--text-faint)",
+          border: "1px solid var(--border-subtle)",
+          opacity: 0.5,
+        }}
+      >
+        {children}
+      </span>
+    );
+  }
+  return (
+    <Link
+      href={href}
+      className="ts-focus rounded-md px-3 py-1.5 transition-colors"
+      style={{ color: "var(--text-default)", border: "1px solid var(--border-default)" }}
+    >
+      {children}
+    </Link>
+  );
+}
+
+function Th({ children }: { children: React.ReactNode }) {
+  return (
+    <th className="px-5 py-2.5 text-[10px] font-semibold uppercase tracking-wide">
+      {children}
+    </th>
+  );
+}
+
+function Td({
+  children,
+  className,
+  style,
+}: {
+  children: React.ReactNode;
+  className?: string;
+  style?: React.CSSProperties;
+}) {
+  return (
+    <td className={`px-5 py-3 align-top ${className ?? ""}`} style={style}>
+      {children}
+    </td>
   );
 }
