@@ -1,5 +1,6 @@
 import NextAuth from "next-auth";
 import Credentials from "next-auth/providers/credentials";
+import Resend from "next-auth/providers/resend";
 import { PrismaAdapter } from "@auth/prisma-adapter";
 import bcrypt from "bcryptjs";
 import { z } from "zod";
@@ -11,7 +12,8 @@ import {
   recordSecurityEvent,
   registerFailedLogin,
 } from "@/lib/security";
-import { checkBan } from "@/lib/trust-safety";
+import { checkBan, normalizeEmailDomain } from "@/lib/trust-safety";
+import { sendEmail, magicLinkEmail } from "@/lib/email";
 import type { PlatformRole } from "@prisma/client";
 import { authConfig } from "@/auth.config";
 
@@ -55,10 +57,32 @@ export const LOGIN_ERRORS = {
   BANNED:      "banned",
 } as const;
 
+// Magic-link TTL — 15 minutes. Default is 24h but a shorter window is
+// the right call for sign-in links: most users click within minutes,
+// and a shorter TTL limits the blast radius of an inbox compromise.
+const MAGIC_LINK_TTL_MIN = 15;
+
 export const { handlers, signIn, signOut, auth } = NextAuth({
   ...authConfig,
   adapter: PrismaAdapter(db),
   providers: [
+    // Phase 1 follow-up — magic-link sign-in via Resend. Uses our
+    // branded email template instead of the Auth.js default. The
+    // PrismaAdapter handles VerificationToken storage automatically.
+    Resend({
+      apiKey: process.env.RESEND_API_KEY,
+      from: process.env.RESEND_FROM_EMAIL ?? "Flowtora <noreply@flowtora.app>",
+      maxAge: MAGIC_LINK_TTL_MIN * 60,
+      async sendVerificationRequest({ identifier: to, url }) {
+        const host = new URL(url).host;
+        const { subject, html, text } = magicLinkEmail({
+          signInUrl: url,
+          host,
+          expiresInMinutes: MAGIC_LINK_TTL_MIN,
+        });
+        await sendEmail({ to, subject, html, text });
+      },
+    }),
     Credentials({
       credentials: {
         email:    { label: "Email",    type: "email" },
@@ -227,6 +251,91 @@ export const { handlers, signIn, signOut, auth } = NextAuth({
     // Session callback is shared — edge and node agree on the public
     // session shape, so we inherit the pass-through from authConfig.
     ...authConfig.callbacks,
+    // signIn runs for every provider. The credentials authorize()
+    // already rejects banned/merged users + ban records, but the Resend
+    // magic-link path skips authorize() entirely. We re-check here so
+    // ban + merge enforcement stays uniform across provider types.
+    async signIn({ user, account, profile, email: emailContext }) {
+      // Magic-link verification triggers signIn with verificationRequest
+      // = true; we let it through (Resend send), the actual user creation
+      // happens later when they click the link.
+      if (emailContext?.verificationRequest) {
+        const targetEmail =
+          (typeof user?.email === "string" && user.email) ||
+          (typeof profile?.email === "string" && profile.email) ||
+          null;
+        const dom = normalizeEmailDomain(targetEmail);
+        // Check user-row + domain bans before bothering Resend. We
+        // can't catch IP at this layer (no Request available), but
+        // the domain ban + user-row ban cover the common abuse vectors.
+        const ban = await checkBan({
+          userId: null,
+          email: targetEmail,
+          ipAddress: null,
+        });
+        if (ban.banned) {
+          // No userId yet — write to auditLog directly. The user
+          // row may not even exist (banned domain catches signup).
+          await db.auditLog.create({
+            data: {
+              userId: null,
+              action: "platform.magic_link_blocked",
+              metadata: { reason: "banned", banKind: ban.kind, email: targetEmail, domain: dom ?? null },
+            },
+          }).catch(() => undefined);
+          return false;
+        }
+        // If the email matches an existing User row, gate that too.
+        if (targetEmail) {
+          const existing = await db.user.findUnique({
+            where: { email: targetEmail },
+            select: { id: true, bannedAt: true, mergedIntoId: true },
+          });
+          if (existing && (existing.bannedAt || existing.mergedIntoId)) {
+            await recordSecurityEvent({
+              userId: existing.id,
+              kind: "LOGIN_FAILED",
+              metadata: { reason: existing.mergedIntoId ? "magic_link_merged" : "magic_link_banned" },
+            });
+            return false;
+          }
+        }
+        return true;
+      }
+
+      // Non-credentials sign-in completing (magic-link click landed and
+      // PrismaAdapter just resolved or created the User row). Re-check
+      // ban state — covers the case where someone got banned between
+      // requesting the link and clicking it.
+      if (account?.provider !== "credentials" && user?.id) {
+        const fresh = await db.user.findUnique({
+          where: { id: user.id },
+          select: { id: true, email: true, bannedAt: true, mergedIntoId: true },
+        });
+        if (!fresh || fresh.bannedAt || fresh.mergedIntoId) {
+          await recordSecurityEvent({
+            userId: user.id,
+            kind: "LOGIN_FAILED",
+            metadata: { reason: "post_link_banned" },
+          });
+          return false;
+        }
+        const ban = await checkBan({
+          userId: fresh.id,
+          email: fresh.email,
+          ipAddress: null,
+        });
+        if (ban.banned) {
+          await recordSecurityEvent({
+            userId: fresh.id,
+            kind: "LOGIN_FAILED",
+            metadata: { reason: "post_link_ban_record", banKind: ban.kind },
+          });
+          return false;
+        }
+      }
+      return true;
+    },
     // jwt is overridden here: the edge version is a pass-through; this
     // Node version handles the user→token merge on sign-in and the
     // DB-backed sessionVersion revocation check on every subsequent

@@ -262,6 +262,45 @@ export async function loginAction(formData: FormData) {
   }
 }
 
+// Phase 1 follow-up — magic-link sign-in.
+//
+// Posts to NextAuth's Resend provider, which writes a VerificationToken
+// row and emails the link. We intentionally do NOT differentiate between
+// "email exists" and "email doesn't exist" in the redirect — a uniform
+// "check your email" response avoids leaking which addresses are real
+// users (account-enumeration mitigation). The signIn callback in
+// auth.ts still gates banned/merged emails so the email never sends.
+const magicLinkSchema = z.object({
+  email: z.string().trim().toLowerCase().email(),
+  next: z.string().optional(),
+});
+
+export async function requestMagicLinkAction(formData: FormData) {
+  const parsed = magicLinkSchema.safeParse(Object.fromEntries(formData.entries()));
+  if (!parsed.success) {
+    redirect(`/login?error=credentials`);
+  }
+
+  try {
+    await signIn("resend", {
+      email: parsed.data.email,
+      redirectTo: parsed.data.next || "/select-tenant",
+    });
+  } catch (err) {
+    // NextAuth's signIn for the email provider normally redirects to
+    // /api/auth/verify-request on success (which we override below).
+    // The redirect throws — re-throw so Next handles it.
+    if ((err as { digest?: string }).digest?.startsWith("NEXT_REDIRECT")) throw err;
+    // Anything else: still claim "we sent it" so we don't leak account
+    // existence. Real failures (Resend down, signIn callback returned
+    // false) still get caught in the audit log.
+  }
+  // Belt-and-suspenders redirect — if signIn didn't throw a redirect
+  // (e.g. signIn callback returned false to block a banned email),
+  // we still take the user to the same "check your email" page.
+  redirect(`/login?magic_link_sent=1&email=${encodeURIComponent(parsed.data.email)}`);
+}
+
 // ── 2FA challenge completion ──
 //
 // Reads the pending-login cookie, validates the TOTP (or recovery) code

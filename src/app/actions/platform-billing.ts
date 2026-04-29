@@ -24,6 +24,10 @@ import {
   isSupportedCurrency,
   applyCouponDiscount,
 } from "@/lib/billing-currency";
+import {
+  pushCouponToStripe,
+  deleteCouponFromStripe,
+} from "@/lib/stripe-coupons";
 import type { DunningStage, Prisma } from "@prisma/client";
 
 const CODE_RX = /^[A-Z0-9][A-Z0-9_-]{2,31}$/;
@@ -98,6 +102,38 @@ export async function createCoupon(formData: FormData) {
     select: { id: true, code: true },
   });
 
+  // Mirror to Stripe — best-effort, doesn't block the create. ACTIVE
+  // coupons sync immediately so the recurring subscription cycle picks
+  // them up; DRAFT coupons stay local until promoted.
+  let stripeStatus: "synced" | "skipped" | "failed" = "skipped";
+  if (d.status === "ACTIVE") {
+    const sync = await pushCouponToStripe({
+      code: d.code,
+      description: d.description?.trim() || null,
+      discountType: d.discountType,
+      amount: d.amount,
+      currency: d.discountType === "PERCENT" ? null : (d.currency ?? null),
+      validUntil,
+      maxRedemptions: d.maxRedemptions ?? null,
+    });
+    if (sync.ok) {
+      stripeStatus = "synced";
+      await db.coupon.update({
+        where: { id: created.id },
+        data: { stripeCouponId: sync.stripeCouponId, stripeSyncedAt: new Date() },
+      });
+    } else {
+      stripeStatus = "failed";
+      await logPlatformAudit({
+        userId: ctx.userId,
+        action: "platform.coupon_stripe_sync_failed",
+        entityType: "Coupon",
+        entityId: created.id,
+        metadata: { code: created.code, reason: sync.reason },
+      });
+    }
+  }
+
   await logPlatformAudit({
     userId: ctx.userId,
     action: "platform.coupon_created",
@@ -108,6 +144,7 @@ export async function createCoupon(formData: FormData) {
       discountType: d.discountType,
       amount: d.amount,
       currency: d.currency || null,
+      stripeStatus,
     },
   });
 
@@ -120,13 +157,16 @@ export async function archiveCoupon(couponId: string) {
 
   const row = await db.coupon.findUnique({
     where: { id: couponId },
-    select: { id: true, status: true, code: true },
+    select: { id: true, status: true, code: true, stripeCouponId: true },
   });
   if (!row) redirect(`/platform/billing/coupons?error=${encodeURIComponent("Coupon not found")}`);
   if (row.status === "ARCHIVED") redirect(`/platform/billing/coupons?ok=already_archived`);
 
   await db.$transaction([
-    db.coupon.update({ where: { id: row.id }, data: { status: "ARCHIVED" } }),
+    db.coupon.update({
+      where: { id: row.id },
+      data: { status: "ARCHIVED", stripeCouponId: null, stripeSyncedAt: null },
+    }),
     // Detach from any tenants currently sitting on this coupon — they
     // shouldn't keep a discount on a coupon we just killed.
     db.tenant.updateMany({
@@ -135,12 +175,29 @@ export async function archiveCoupon(couponId: string) {
     }),
   ]);
 
+  // Best-effort Stripe deletion. If the coupon is gone from Stripe
+  // already (404) we treat it as success.
+  let stripeStatus: "removed" | "skipped" | "failed" = "skipped";
+  if (row.stripeCouponId) {
+    const del = await deleteCouponFromStripe(row.stripeCouponId);
+    stripeStatus = del.ok ? "removed" : "failed";
+    if (!del.ok) {
+      await logPlatformAudit({
+        userId: ctx.userId,
+        action: "platform.coupon_stripe_delete_failed",
+        entityType: "Coupon",
+        entityId: row.id,
+        metadata: { code: row.code, reason: del.reason },
+      });
+    }
+  }
+
   await logPlatformAudit({
     userId: ctx.userId,
     action: "platform.coupon_archived",
     entityType: "Coupon",
     entityId: row.id,
-    metadata: { code: row.code },
+    metadata: { code: row.code, stripeStatus },
   });
 
   revalidatePath("/platform/billing/coupons");
@@ -152,7 +209,11 @@ export async function reactivateCoupon(couponId: string) {
 
   const row = await db.coupon.findUnique({
     where: { id: couponId },
-    select: { id: true, status: true, code: true, validUntil: true },
+    select: {
+      id: true, status: true, code: true, description: true,
+      discountType: true, amount: true, currency: true,
+      validUntil: true, maxRedemptions: true,
+    },
   });
   if (!row) redirect(`/platform/billing/coupons?error=${encodeURIComponent("Coupon not found")}`);
   if (row.validUntil && row.validUntil < new Date()) {
@@ -161,12 +222,40 @@ export async function reactivateCoupon(couponId: string) {
 
   await db.coupon.update({ where: { id: row.id }, data: { status: "ACTIVE" } });
 
+  // Re-push to Stripe — archive cleared the stripeCouponId; we need a
+  // fresh row in Stripe to discount the next subscription cycle.
+  const sync = await pushCouponToStripe({
+    code: row.code,
+    description: row.description,
+    discountType: row.discountType,
+    amount: row.amount,
+    currency: row.currency,
+    validUntil: row.validUntil,
+    maxRedemptions: row.maxRedemptions,
+  });
+  let stripeStatus: "synced" | "failed" = "failed";
+  if (sync.ok) {
+    stripeStatus = "synced";
+    await db.coupon.update({
+      where: { id: row.id },
+      data: { stripeCouponId: sync.stripeCouponId, stripeSyncedAt: new Date() },
+    });
+  } else {
+    await logPlatformAudit({
+      userId: ctx.userId,
+      action: "platform.coupon_stripe_sync_failed",
+      entityType: "Coupon",
+      entityId: row.id,
+      metadata: { code: row.code, reason: sync.reason },
+    });
+  }
+
   await logPlatformAudit({
     userId: ctx.userId,
     action: "platform.coupon_reactivated",
     entityType: "Coupon",
     entityId: row.id,
-    metadata: { code: row.code },
+    metadata: { code: row.code, stripeStatus },
   });
 
   revalidatePath("/platform/billing/coupons");

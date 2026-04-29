@@ -397,6 +397,23 @@ function CouponRow({
             {coupon.code}
           </code>
           <StatusChip status={coupon.status} expired={expired} />
+          {coupon.stripeCouponId ? (
+            <span
+              className="rounded px-1.5 py-0.5 text-[10px] font-bold uppercase tracking-wide"
+              style={{ background: "var(--accent-surface)", color: "var(--accent-primary)", border: "1px solid var(--accent-primary)" }}
+              title={`Mirrored to Stripe as ${coupon.stripeCouponId} on ${coupon.stripeSyncedAt?.toLocaleString() ?? ""}`}
+            >
+              ↗ Stripe
+            </span>
+          ) : coupon.status === "ACTIVE" ? (
+            <span
+              className="rounded px-1.5 py-0.5 text-[10px] font-bold uppercase tracking-wide"
+              style={{ background: "var(--surface-2)", color: "var(--text-muted)", border: "1px solid var(--border-subtle)" }}
+              title="Local only — Stripe sync not configured or last attempt failed. Subscription cycle won't apply this coupon."
+            >
+              local only
+            </span>
+          ) : null}
         </div>
         {coupon.description && (
           <div className="mt-1 truncate text-[12px]" style={{ color: "var(--text-muted)" }}>

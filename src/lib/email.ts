@@ -516,6 +516,70 @@ export function emailVerificationEmail(opts: {
   return { subject, html, text };
 }
 
+// Phase 1 follow-up — magic-link sign-in email. NextAuth's Resend
+// provider calls this from `sendVerificationRequest`; we generate the
+// branded HTML + text shell and the Resend send happens via our usual
+// `sendEmail` path so message-IDs land in the same observability hole
+// as everything else.
+export function magicLinkEmail(opts: {
+  signInUrl: string;
+  /** ISO host of the request, e.g. "flowtora.com". Shown so the user
+   *  can sanity-check they're signing in to the right environment. */
+  host: string;
+  /** Token TTL in minutes (NextAuth default is 24h). Used in the
+   *  "expires in X" copy. */
+  expiresInMinutes: number;
+}) {
+  const subject = `Sign in to ${opts.host}`;
+  const heading = "Your sign-in link";
+  const subheading =
+    "Tap the button below to sign in to Flowtora. No password needed — this link is good once and expires shortly.";
+  const preview = `One-click sign-in to ${opts.host}. Link expires in ${opts.expiresInMinutes} minutes.`;
+
+  const html = brandedEmailLayout({
+    previewText: preview,
+    heading,
+    subheading,
+    sections: [
+      {
+        kind: "text",
+        html: `<p style="margin:0">Hi there, you (or someone using your email) asked to sign in to <strong>${escape(opts.host)}</strong>. Tap the button to finish signing in.</p>`,
+      },
+      { kind: "button", label: "Sign me in", href: opts.signInUrl },
+      {
+        kind: "fallbackLink",
+        label: "Button not working? Copy and paste this link into your browser:",
+        href: opts.signInUrl,
+      },
+      { kind: "divider" },
+      {
+        kind: "note",
+        html:
+          `<strong style="color:inherit">Didn't try to sign in?</strong> Ignore this email — without clicking the link nothing happens. ` +
+          `If you keep getting these and didn't request them, contact support.`,
+      },
+      {
+        kind: "text",
+        html: `<p style="margin:0;color:#6b7280;font-size:13px">For your security, this link expires in <strong>${opts.expiresInMinutes} minutes</strong> and can only be used once.</p>`,
+      },
+    ],
+    footerNote: "If you need help, just reply to this email — a human will get back to you.",
+  });
+
+  const text = brandedTextLayout({
+    heading,
+    body:
+      `You asked to sign in to ${opts.host}. Use this link (good once):\n\n` +
+      `${opts.signInUrl}\n\n` +
+      `If you didn't request this, ignore the email — without clicking the link nothing happens.`,
+    ctaLabel: "Sign me in",
+    ctaUrl: opts.signInUrl,
+    footerNote: `This link expires in ${opts.expiresInMinutes} minutes and can only be used once.`,
+  });
+
+  return { subject, html, text };
+}
+
 export function securityAlertEmail(opts: {
   eventLabel: string;
   ip: string | null;

@@ -1,6 +1,6 @@
 import Link from "next/link";
 import type { Metadata } from "next";
-import { loginAction } from "@/app/actions/auth";
+import { loginAction, requestMagicLinkAction } from "@/app/actions/auth";
 
 export const metadata: Metadata = {
   title: "Sign in — Flowtora",
@@ -29,6 +29,7 @@ export default async function LoginPage({
     email_changed?: string;
     signed_out_everywhere?: string;
     verified?: string;
+    magic_link_sent?: string;
   }>;
 }) {
   const sp = await searchParams;
@@ -39,6 +40,12 @@ export default async function LoginPage({
     if (sp.email_changed === "1") return { tone: "success" as const, text: "Email updated. Sign in with your new address." };
     if (sp.signed_out_everywhere === "1") return { tone: "info" as const, text: "All sessions signed out. Sign in again to continue." };
     if (sp.verified === "1") return { tone: "success" as const, text: "Email confirmed. You're all set." };
+    if (sp.magic_link_sent === "1") return {
+      tone: "success" as const,
+      text: sp.email
+        ? `If an account exists for ${sp.email}, we've sent a sign-in link. Check your inbox — link is good for 15 minutes.`
+        : "If an account exists for that email, we've sent a sign-in link. Check your inbox — link is good for 15 minutes.",
+    };
     return null;
   })();
 
@@ -139,6 +146,48 @@ export default async function LoginPage({
             Create an account →
           </Link>
         </div>
+      </form>
+
+      {/* Phase 1 follow-up — passwordless magic-link path. Posts to a
+          separate action so the password form's required attributes
+          don't block submission, and so the credentials/magic-link
+          intents stay distinct in the audit trail. */}
+      <div className="relative">
+        <div className="absolute inset-0 flex items-center" aria-hidden>
+          <div className="w-full" style={{ borderTop: "1px solid var(--border-subtle)" }} />
+        </div>
+        <div className="relative flex justify-center text-xs">
+          <span className="px-2" style={{ background: "var(--surface-0)", color: "var(--text-muted)" }}>
+            or
+          </span>
+        </div>
+      </div>
+
+      <form action={requestMagicLinkAction} className="space-y-3">
+        <input type="hidden" name="next" value={sp.next ?? ""} />
+        <Field
+          label="Sign in with a one-time link"
+          name="email"
+          type="email"
+          autoComplete="email"
+          required
+          placeholder="you@flowtora.com"
+          defaultValue={sp.email ?? ""}
+        />
+        <button
+          type="submit"
+          className="ts-focus inline-flex h-11 w-full items-center justify-center rounded-md text-sm font-medium transition-colors"
+          style={{
+            background: "var(--surface-1)",
+            color: "var(--text-default)",
+            border: "1px solid var(--border-default)",
+          }}
+        >
+          Email me a sign-in link
+        </button>
+        <p className="text-center text-xs" style={{ color: "var(--text-muted)" }}>
+          We'll email a one-time link. No password needed. Link expires in 15 minutes.
+        </p>
       </form>
     </div>
   );

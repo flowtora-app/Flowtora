@@ -4665,6 +4665,13 @@ model Coupon {
   // across the platform — we don't scope to currency or plan because
   // the admin surface is small and a clash would be confusing.
   code           String             @unique
+  // Phase 3 follow-up — Stripe coupon mirror. Set to the Stripe coupon
+  // ID once we've pushed it; null when the local row hasn't (yet) been
+  // synced or when STRIPE_SECRET_KEY isn't configured. We use our
+  // `code` as the Stripe ID so the two systems stay grep-able from
+  // the same string.
+  stripeCouponId String?            @unique
+  stripeSyncedAt DateTime?
   description    String?            // internal note — never shown to tenant
   discountType   CouponDiscountType
   // Percent (1-100) when type=PERCENT, minor units (cents) when type=FIXED.
