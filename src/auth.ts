@@ -125,13 +125,18 @@ export const { handlers, signIn, signOut, auth } = NextAuth({
           });
           throw new Error(LOGIN_ERRORS.BANNED);
         }
+        // Pull request IP via next/headers — same pattern as
+        // recordSecurityEvent + mintPending2faToken use. Available in
+        // the Node runtime that runs the credentials authorize().
+        const { headers } = await import("next/headers");
+        const h = await headers();
+        const ipHeader = h.get("x-forwarded-for");
+        const reqIp = ipHeader ? ipHeader.split(",")[0]!.trim() : h.get("x-real-ip");
+
         const ban = await checkBan({
           userId: user.id,
           email: parsed.data.email,
-          // IP isn't available in the credentials authorize() context;
-          // domain bans still cover that axis. Middleware-level IP
-          // gating is a follow-up.
-          ipAddress: null,
+          ipAddress: reqIp,
         });
         if (ban.banned) {
           await recordSecurityEvent({

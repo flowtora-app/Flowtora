@@ -31,7 +31,15 @@ type SP = {
   q?: string;
   filter?: string;
   tenant?: string;
+  ok?: string;
+  error?: string;
 };
+
+const MESSAGES: Record<string, string> = {
+  purged: "Merged user hard-deleted.",
+};
+
+const PURGE_GRACE_DAYS = 90;
 
 export default async function UsersPage({
   searchParams,
@@ -60,7 +68,12 @@ export default async function UsersPage({
     ...(tenantFilter              ? { memberships: { some: { tenantId: tenantFilter } } } : {}),
   };
 
-  const [usersRaw, kpiBanned, kpiMerged, kpiTotal, tenantsForFilter] = await Promise.all([
+  // Pending purges — merged users approaching or past the grace window.
+  // Surfaced even when the filter isn't on `merged` so admins always
+  // see the queue at a glance.
+  const purgeCutoff = new Date(Date.now() - PURGE_GRACE_DAYS * 24 * 60 * 60 * 1000);
+
+  const [usersRaw, kpiBanned, kpiMerged, kpiTotal, tenantsForFilter, pendingPurges] = await Promise.all([
     db.user.findMany({
       where,
       select: {
@@ -96,6 +109,12 @@ export default async function UsersPage({
       orderBy: { name: "asc" },
       take: 200,
     }),
+    db.user.findMany({
+      where: { mergedIntoId: { not: null } },
+      orderBy: { mergedAt: "asc" },
+      select: { id: true, email: true, name: true, mergedAt: true, mergedIntoId: true },
+      take: 30,
+    }),
   ]);
 
   // Multi-tenant filter is computed in JS because Prisma doesn't have
@@ -109,6 +128,8 @@ export default async function UsersPage({
   return (
     <div className="space-y-6">
       <Header />
+      {sp.ok    ? <Toast tone="ok"    msg={MESSAGES[sp.ok] ?? "Done"} /> : null}
+      {sp.error ? <Toast tone="error" msg={sp.error} /> : null}
 
       <div className="grid grid-cols-2 gap-3 md:grid-cols-4">
         <Kpi label="End users (total)" value={String(kpiTotal)} hint="Excludes platform staff" />
@@ -117,10 +138,70 @@ export default async function UsersPage({
         <Kpi label="Showing" value={String(users.length)} hint="Capped at 200 rows" />
       </div>
 
+      {pendingPurges.length > 0 && (
+        <PendingPurgesStrip rows={pendingPurges} cutoff={purgeCutoff} />
+      )}
+
       <FilterBar q={q} filter={filter} tenantFilter={tenantFilter} tenants={tenantsForFilter} />
 
       <UsersList rows={users} />
     </div>
+  );
+}
+
+function Toast({ tone, msg }: { tone: "ok" | "error"; msg: string }) {
+  const palette = tone === "ok"
+    ? { bg: "var(--accent-surface)", fg: "var(--accent-primary)", icon: "✓" }
+    : { bg: "var(--danger-surface)", fg: "var(--danger-fg)",      icon: "!" };
+  return (
+    <div className="flex items-center gap-2 rounded-md border px-3 py-2 text-[13px]" style={{ background: palette.bg, color: palette.fg, borderColor: palette.fg }}>
+      <span aria-hidden className="font-bold">{palette.icon}</span>
+      <span>{msg}</span>
+    </div>
+  );
+}
+
+function PendingPurgesStrip({
+  rows,
+  cutoff,
+}: {
+  rows: { id: string; email: string; name: string | null; mergedAt: Date | null; mergedIntoId: string | null }[];
+  cutoff: Date;
+}) {
+  const overdue = rows.filter((r) => r.mergedAt && r.mergedAt < cutoff).length;
+  return (
+    <section className="rounded-lg border" style={{ background: "var(--surface-1)", borderColor: overdue > 0 ? "var(--warning-fg)" : "var(--border-subtle)" }}>
+      <div className="border-b px-4 py-3" style={{ borderColor: "var(--border-subtle)" }}>
+        <h2 className="text-[14px] font-semibold" style={{ color: "var(--text-default)" }}>
+          Merged users — purge queue ({rows.length})
+        </h2>
+        <p className="text-[12px]" style={{ color: "var(--text-muted)" }}>
+          Auto-deleted by the daily cron after a {PURGE_GRACE_DAYS}-day grace window.
+          {overdue > 0 && ` ${overdue} are past the cutoff and will be purged on the next cron tick.`}
+        </p>
+      </div>
+      <ul className="divide-y" style={{ borderColor: "var(--border-subtle)" }}>
+        {rows.slice(0, 8).map((r) => {
+          const past = r.mergedAt ? r.mergedAt < cutoff : false;
+          const auto = r.mergedAt ? new Date(r.mergedAt.getTime() + PURGE_GRACE_DAYS * 24 * 60 * 60 * 1000) : null;
+          return (
+            <li key={r.id} className="flex flex-wrap items-center gap-3 px-4 py-2 text-[12px]">
+              <Link
+                href={`/platform/users/${r.id}`}
+                className="ts-focus min-w-0 flex-1 truncate font-medium hover:underline"
+                style={{ color: "var(--text-default)" }}
+              >
+                {r.name || r.email}
+              </Link>
+              <span style={{ color: "var(--text-muted)" }}>{r.email}</span>
+              <span style={{ color: past ? "var(--warning-fg)" : "var(--text-muted)" }}>
+                {past ? "ready to purge" : `auto ${auto?.toLocaleDateString() ?? ""}`}
+              </span>
+            </li>
+          );
+        })}
+      </ul>
+    </section>
   );
 }
 

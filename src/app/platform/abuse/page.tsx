@@ -253,15 +253,17 @@ function BannedIpsCard({
           Banned IPs ({rows.length})
         </h2>
         <p className="text-[12px]" style={{ color: "var(--text-muted)" }}>
-          Single-host bans only — CIDR ranges aren't supported in this slice.
-          Sign-in middleware refuses these IPs at the auth-token decode step.
+          Single host (e.g. <code>203.0.113.4</code>) or CIDR range
+          (e.g. <code>203.0.113.0/24</code>). Sign-in refuses any
+          address that exact-matches or falls inside one of these
+          ranges, evaluated server-side on the credentials authorize().
         </p>
       </div>
       <form action={banIp} className="grid grid-cols-1 gap-3 border-b p-4 md:grid-cols-[1.5fr_2fr_1fr_auto]" style={{ borderColor: "var(--border-subtle)" }}>
-        <Field label="IP" required>
+        <Field label="IP or CIDR" required>
           <input
             type="text" name="ipAddress" required disabled={!canBan}
-            placeholder="203.0.113.4 or 2001:db8::1"
+            placeholder="203.0.113.4 or 203.0.113.0/24"
             className="ts-focus w-full rounded-md border px-3 py-2 text-[13px]"
             style={{ background: "var(--surface-1)", borderColor: "var(--border-subtle)", color: "var(--text-default)" }}
           />

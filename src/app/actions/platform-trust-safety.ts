@@ -490,3 +490,56 @@ export async function mergeUsers(targetUserId: string, formData: FormData) {
   revalidatePath(`/platform/users/${target.id}`);
   redirect(`/platform/users/${target.id}?ok=merged`);
 }
+
+// ─────────────────────────────────────────────────────────────────────
+// Manual purge of a merged user (admin override).
+//
+// The cron at /api/cron/purge-merged hard-deletes merged users after a
+// 90-day grace. This action lets an admin skip the wait when there's a
+// real reason (GDPR erasure request, accidental merge of test rows
+// they want gone immediately). Refuses to purge a user that wasn't
+// merged — that's what banUser is for.
+// ─────────────────────────────────────────────────────────────────────
+
+const purgeSchema = z.object({
+  confirm: z.string().min(1),
+});
+
+export async function purgeMergedUser(userId: string, formData: FormData) {
+  const ctx = await requirePlatformPermission("users.merge");
+  const parsed = purgeSchema.safeParse(Object.fromEntries(formData.entries()));
+  if (!parsed.success || parsed.data.confirm.toLowerCase() !== "purge") {
+    redirect(`/platform/users/${userId}?error=${encodeURIComponent("Type 'purge' to confirm")}`);
+  }
+
+  const u = await db.user.findUnique({
+    where: { id: userId },
+    select: { id: true, email: true, mergedIntoId: true, mergedAt: true },
+  });
+  if (!u) redirect(`/platform/users?error=${encodeURIComponent("User not found")}`);
+  if (!u.mergedIntoId) {
+    redirect(`/platform/users/${userId}?error=${encodeURIComponent("Only merged users can be purged here. Use ban for active users.")}`);
+  }
+
+  await logPlatformAudit({
+    userId: ctx.userId,
+    action: "platform.merged_user_purged",
+    entityType: "User",
+    entityId: u.id,
+    metadata: {
+      purgedEmail: u.email,
+      mergedIntoId: u.mergedIntoId,
+      mergedAt: u.mergedAt?.toISOString(),
+      source: "manual",
+    },
+  });
+
+  try {
+    await db.user.delete({ where: { id: u.id } });
+  } catch (err) {
+    redirect(`/platform/users/${userId}?error=${encodeURIComponent("Purge blocked: " + ((err as Error).message ?? "constraint"))}`);
+  }
+
+  revalidatePath("/platform/users");
+  redirect(`/platform/users?ok=purged`);
+}

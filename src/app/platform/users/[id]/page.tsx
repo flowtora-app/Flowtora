@@ -7,6 +7,7 @@ import {
   banUser,
   unbanUser,
   mergeUsers,
+  purgeMergedUser,
 } from "@/app/actions/platform-trust-safety";
 import type { TenantRole, MembershipStatus } from "@prisma/client";
 
@@ -28,6 +29,9 @@ const MESSAGES: Record<string, string> = {
   merged:        "Users merged. Source soft-deleted with mergedIntoId pointer.",
 };
 
+// Phase 4 follow-up — auto-purge after 90 days of being merged.
+const PURGE_GRACE_DAYS = 90;
+
 export default async function UserDetailPage({
   params,
   searchParams,
@@ -40,6 +44,7 @@ export default async function UserDetailPage({
   const ctx = await requirePlatformStaff();
   const canBan   = ctx.can("users.ban");
   const canMerge = ctx.can("users.merge");
+  const canPurge = canMerge;  // same permission
 
   const user = await db.user.findUnique({
     where: { id },
@@ -126,6 +131,10 @@ export default async function UserDetailPage({
 
       {mergedFrom.length > 0 && (
         <MergedFrom rows={mergedFrom} />
+      )}
+
+      {user.mergedIntoId && (
+        <PurgeCard userId={user.id} mergedAt={user.mergedAt} canPurge={canPurge} />
       )}
     </div>
   );
@@ -540,6 +549,60 @@ function MergeCard({
           on /platform/users to find the right source.
         </div>
       )}
+    </section>
+  );
+}
+
+function PurgeCard({
+  userId,
+  mergedAt,
+  canPurge,
+}: {
+  userId: string;
+  mergedAt: Date | null;
+  canPurge: boolean;
+}) {
+  const auto = mergedAt
+    ? new Date(mergedAt.getTime() + PURGE_GRACE_DAYS * 24 * 60 * 60 * 1000)
+    : null;
+  const daysLeft = auto
+    ? Math.max(0, Math.ceil((auto.getTime() - Date.now()) / (24 * 60 * 60 * 1000)))
+    : null;
+  return (
+    <section className="rounded-lg border" style={{ background: "var(--surface-1)", borderColor: "var(--danger-fg)" }}>
+      <div className="border-b px-4 py-3" style={{ borderColor: "var(--border-subtle)" }}>
+        <h2 className="text-[14px] font-semibold" style={{ color: "var(--danger-fg)" }}>
+          Hard delete (admin override)
+        </h2>
+        <p className="text-[12px]" style={{ color: "var(--text-muted)" }}>
+          This account was merged{mergedAt ? ` ${mergedAt.toLocaleDateString()}` : ""}. The
+          daily cron auto-purges merged users after a {PURGE_GRACE_DAYS}-day grace
+          window{daysLeft != null ? ` — ${daysLeft} days left` : ""}. Use this only for
+          GDPR erasure requests or to clean up accidental test merges.
+          Audit history (logs, comments authored by this user) is
+          preserved with the orphaned userId.
+        </p>
+      </div>
+      <form action={purgeMergedUser.bind(null, userId)} className="grid grid-cols-1 gap-3 p-4 md:grid-cols-[2fr_auto]">
+        <Field label="Type 'purge' to confirm" required>
+          <input
+            type="text" name="confirm" required disabled={!canPurge}
+            autoComplete="off"
+            placeholder="purge"
+            className="ts-focus w-full rounded-md border px-3 py-2 text-[13px]"
+            style={{ background: "var(--surface-1)", borderColor: "var(--border-subtle)", color: "var(--text-default)" }}
+          />
+        </Field>
+        <div className="flex items-end">
+          <button
+            type="submit" disabled={!canPurge}
+            className="ts-focus h-[38px] rounded-md px-4 text-[13px] font-medium disabled:cursor-not-allowed disabled:opacity-50"
+            style={{ background: "var(--danger-fg)", color: "var(--surface-1)" }}
+          >
+            Purge now
+          </button>
+        </div>
+      </form>
     </section>
   );
 }
