@@ -75,6 +75,7 @@ const GROUPS: NavGroup[] = [
   {
     label: "Admin",
     items: [
+      { href: "/platform/staff",         label: "Staff & roles", icon: "Shield" },
       { href: "/platform/notifications", label: "Notifications", icon: "Bell" },
       { href: "/platform/settings",      label: "Settings",      icon: "Settings" },
       { href: "/platform/design",        label: "Design system", icon: "Palette" },

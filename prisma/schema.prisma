@@ -537,12 +537,59 @@ model User {
   palettePins            PalettePin[]
   savedViews             SavedView[]
   portalMessageReplies   PortalMessage[]          @relation("PortalMessageSender")
+
+  // Phase 1 — temporary platform-role elevation. A staff member can hold
+  // a higher role for a bounded window (incident, on-call, vacation cover)
+  // without changing their durable `platformRole`. Resolved on session
+  // bump or by the auto-expire sweep.
+  platformElevations        PlatformRoleElevation[] @relation("ElevationTarget")
+  platformElevationsGranted PlatformRoleElevation[] @relation("ElevationGranter")
 }
 
+// Platform-side roles. The first three (SUPER_ADMIN, SITE_MANAGER,
+// SUPPORT_AGENT) are the legacy values — preserved for backward compat.
+// The rest split staff responsibilities so we can grant least-privilege
+// access without minting a new SUPER_ADMIN every time someone needs to
+// run a refund or look at a chart.
 enum PlatformRole {
-  SUPER_ADMIN
-  SITE_MANAGER
-  SUPPORT_AGENT
+  SUPER_ADMIN        // legacy — root of trust
+  SITE_MANAGER       // legacy — operational lead
+  SUPPORT_AGENT      // legacy — front-line support
+  // Phase 1 additions — finer-grained baseline roles.
+  ADMIN              // full access except destructive infra actions
+  MANAGER            // ops manager — tenants, billing read, support oversight
+  SUPPORT_LEAD       // support lead — escalations, macro management
+  BILLING_MANAGER    // billing team — invoices, refunds, plan changes
+  DEVELOPER          // engineering — feature flags, jobs, logs
+  MARKETING_MANAGER  // marketing — announcements, leads, content
+  CONTENT_MANAGER    // content/CMS — announcements, templates
+  ANALYST            // BI — read analytics, run exports
+  READ_ONLY_VIEWER   // exec / auditor — read everything, write nothing
+}
+
+// Phase 1 — temporary role elevation. Lets a SUPER_ADMIN/ADMIN grant a
+// higher role to a teammate for a bounded window (incident, on-call,
+// vacation cover) without changing the durable `User.platformRole`.
+// `elevatedTo` is consulted by the permission resolver while
+// `expiresAt > now()` and `revokedAt IS NULL`. Auto-expiry runs on
+// session-version bumps and on a cron sweep.
+model PlatformRoleElevation {
+  id           String       @id @default(cuid())
+  userId       String
+  originalRole PlatformRole
+  elevatedTo   PlatformRole
+  reason       String       // free text — why the bump was granted
+  grantedById  String
+  expiresAt    DateTime
+  revokedAt    DateTime?
+  revokedById  String?
+  createdAt    DateTime     @default(now())
+
+  user      User @relation("ElevationTarget",  fields: [userId],      references: [id], onDelete: Cascade)
+  grantedBy User @relation("ElevationGranter", fields: [grantedById], references: [id], onDelete: Restrict)
+
+  @@index([userId, expiresAt])
+  @@index([expiresAt])
 }
 
 model Membership {

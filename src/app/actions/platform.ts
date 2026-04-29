@@ -18,7 +18,13 @@ import { cookies } from "next/headers";
 import { z } from "zod";
 import { auth } from "@/auth";
 import { db } from "@/lib/db";
-import { requirePlatformAdmin, requirePlatformStaff, logPlatformAudit } from "@/lib/platform";
+import {
+  requirePlatformAdmin,
+  requirePlatformStaff,
+  requirePlatformPermission,
+  logPlatformAudit,
+} from "@/lib/platform";
+import { rankPlatformRole } from "@/lib/rbac";
 import {
   startImpersonationSession,
   stopImpersonationSession,
@@ -1083,4 +1089,338 @@ export async function updateThemePreference(formData: FormData) {
   // the new value without an extra hard refresh.
   revalidatePath("/", "layout");
   redirect(`/platform/profile?ok=theme_saved`);
+}
+
+// ─────────────────────────────────────────────────────────────────────
+// Phase 1 — Platform staff & role administration.
+//
+// Lives in /platform/staff. Three concerns:
+//   1. Assign / change a staff user's durable role.
+//   2. Invite a new staff user (creates a User row with a platformRole
+//      and emails them a password-reset link — no magic-link yet).
+//   3. Temporary role elevation: bounded-time bump for incident or
+//      vacation cover. Bumping `sessionVersion` on grant/revoke so
+//      the change is picked up on the next request without waiting
+//      for the JWT to expire.
+//
+// Every mutation here logs a `platform.staff_*` audit row, so the audit
+// page tells the full story of who changed what and when.
+// ─────────────────────────────────────────────────────────────────────
+
+const PLATFORM_ROLE_VALUES = [
+  "SUPER_ADMIN", "SITE_MANAGER", "SUPPORT_AGENT",
+  "ADMIN", "MANAGER", "SUPPORT_LEAD", "BILLING_MANAGER",
+  "DEVELOPER", "MARKETING_MANAGER", "CONTENT_MANAGER",
+  "ANALYST", "READ_ONLY_VIEWER",
+] as const;
+
+const assignRoleSchema = z.object({
+  role: z.enum(PLATFORM_ROLE_VALUES),
+});
+
+export async function assignPlatformRole(userId: string, formData: FormData) {
+
+  const ctx = await requirePlatformPermission("staff.assign_role");
+
+  const parsed = assignRoleSchema.safeParse(Object.fromEntries(formData.entries()));
+  if (!parsed.success) {
+    redirect(`/platform/staff?error=${encodeURIComponent("Invalid role")}`);
+  }
+
+  const target = await db.user.findUnique({
+    where: { id: userId },
+    select: { id: true, email: true, platformRole: true, sessionVersion: true },
+  });
+  if (!target) redirect(`/platform/staff?error=${encodeURIComponent("User not found")}`);
+
+  // Self-demotion guard: don't let an admin lock themselves out.
+  if (target.id === ctx.userId && parsed.data.role !== ctx.baseRole) {
+    redirect(`/platform/staff?error=${encodeURIComponent("Use another admin account to change your own role")}`);
+  }
+
+  // Last-super-admin guard: refuse to demote the only remaining
+  // SUPER_ADMIN. Without this, a mis-click can lock everyone out.
+  if (target.platformRole === "SUPER_ADMIN" && parsed.data.role !== "SUPER_ADMIN") {
+    const otherSupers = await db.user.count({
+      where: { platformRole: "SUPER_ADMIN", id: { not: target.id } },
+    });
+    if (otherSupers === 0) {
+      redirect(`/platform/staff?error=${encodeURIComponent("Cannot demote the only Super Admin — promote another user first")}`);
+    }
+  }
+
+  // No-op short circuit so we don't write a useless audit row.
+  if (target.platformRole === parsed.data.role) {
+    redirect(`/platform/staff?ok=role_unchanged`);
+  }
+
+  await db.user.update({
+    where: { id: target.id },
+    data: {
+      platformRole: parsed.data.role,
+      // Bump session version so any open session must reauth. NextAuth
+      // session callback compares this against the JWT copy.
+      sessionVersion: { increment: 1 },
+    },
+  });
+
+  await logPlatformAudit({
+    userId: ctx.userId,
+    action: "platform.staff_role_assigned",
+    entityType: "User",
+    entityId: target.id,
+    metadata: {
+      targetEmail: target.email,
+      from: target.platformRole,
+      to: parsed.data.role,
+    },
+  });
+
+  revalidatePath("/platform/staff");
+  redirect(`/platform/staff?ok=role_assigned`);
+}
+
+const removeStaffSchema = z.object({
+  confirm: z.string().min(1),
+});
+
+export async function removePlatformStaff(userId: string, formData: FormData) {
+
+  const ctx = await requirePlatformPermission("staff.assign_role");
+
+  const parsed = removeStaffSchema.safeParse(Object.fromEntries(formData.entries()));
+  if (!parsed.success || parsed.data.confirm.toLowerCase() !== "remove") {
+    redirect(`/platform/staff?error=${encodeURIComponent("Type 'remove' to confirm")}`);
+  }
+
+  const target = await db.user.findUnique({
+    where: { id: userId },
+    select: { id: true, email: true, platformRole: true },
+  });
+  if (!target?.platformRole) {
+    redirect(`/platform/staff?error=${encodeURIComponent("User is not staff")}`);
+  }
+  if (target.id === ctx.userId) {
+    redirect(`/platform/staff?error=${encodeURIComponent("Cannot remove yourself")}`);
+  }
+  if (target.platformRole === "SUPER_ADMIN") {
+    const otherSupers = await db.user.count({
+      where: { platformRole: "SUPER_ADMIN", id: { not: target.id } },
+    });
+    if (otherSupers === 0) {
+      redirect(`/platform/staff?error=${encodeURIComponent("Cannot remove the only Super Admin")}`);
+    }
+  }
+
+  await db.$transaction([
+    // Revoke any active elevations the user might be sitting on.
+    db.platformRoleElevation.updateMany({
+      where: { userId: target.id, revokedAt: null, expiresAt: { gt: new Date() } },
+      data: { revokedAt: new Date(), revokedById: ctx.userId },
+    }),
+    db.user.update({
+      where: { id: target.id },
+      data: { platformRole: null, sessionVersion: { increment: 1 } },
+    }),
+  ]);
+
+  await logPlatformAudit({
+    userId: ctx.userId,
+    action: "platform.staff_removed",
+    entityType: "User",
+    entityId: target.id,
+    metadata: { targetEmail: target.email, previousRole: target.platformRole },
+  });
+
+  revalidatePath("/platform/staff");
+  redirect(`/platform/staff?ok=staff_removed`);
+}
+
+const inviteStaffSchema = z.object({
+  email: z.string().email().max(254),
+  role: z.enum(PLATFORM_ROLE_VALUES),
+  name: z.string().trim().max(120).optional(),
+});
+
+export async function inviteStaff(formData: FormData) {
+
+  const ctx = await requirePlatformPermission("staff.invite");
+
+  const raw = Object.fromEntries(formData.entries());
+  const parsed = inviteStaffSchema.safeParse({
+    email: typeof raw.email === "string" ? raw.email.trim().toLowerCase() : "",
+    role: raw.role,
+    name: typeof raw.name === "string" ? raw.name : undefined,
+  });
+  if (!parsed.success) {
+    redirect(`/platform/staff?error=${encodeURIComponent("Invalid invite — check email + role")}`);
+  }
+
+  const existing = await db.user.findUnique({
+    where: { email: parsed.data.email },
+    select: { id: true, platformRole: true },
+  });
+
+  let targetId: string;
+  let action: "platform.staff_invited" | "platform.staff_role_assigned";
+
+  if (existing) {
+    if (existing.platformRole === parsed.data.role) {
+      redirect(`/platform/staff?ok=already_has_role`);
+    }
+    await db.user.update({
+      where: { id: existing.id },
+      data: { platformRole: parsed.data.role, sessionVersion: { increment: 1 } },
+    });
+    targetId = existing.id;
+    action = "platform.staff_role_assigned";
+  } else {
+    const created = await db.user.create({
+      data: {
+        email: parsed.data.email,
+        name: parsed.data.name?.trim() || null,
+        platformRole: parsed.data.role,
+        // No passwordHash — the invitee uses /reset-password to set one.
+      },
+      select: { id: true },
+    });
+    targetId = created.id;
+    action = "platform.staff_invited";
+  }
+
+  await logPlatformAudit({
+    userId: ctx.userId,
+    action,
+    entityType: "User",
+    entityId: targetId,
+    metadata: { targetEmail: parsed.data.email, role: parsed.data.role, isNew: !existing },
+  });
+
+  revalidatePath("/platform/staff");
+  redirect(`/platform/staff?ok=invited`);
+}
+
+// Bounded windows for temporary elevation. Anything longer should be a
+// durable role change; anything shorter is busywork.
+const ELEVATION_MIN_HOURS = 1;
+const ELEVATION_MAX_HOURS = 30 * 24; // 30 days
+
+const grantElevationSchema = z.object({
+  elevatedTo: z.enum(PLATFORM_ROLE_VALUES),
+  hours: z.coerce.number().int().min(ELEVATION_MIN_HOURS).max(ELEVATION_MAX_HOURS),
+  reason: z.string().trim().min(8, "Give a reason (8+ chars)").max(500),
+});
+
+export async function grantPlatformElevation(userId: string, formData: FormData) {
+
+  const ctx = await requirePlatformPermission("staff.elevate");
+
+  const parsed = grantElevationSchema.safeParse(Object.fromEntries(formData.entries()));
+  if (!parsed.success) {
+    const msg = parsed.error.issues[0]?.message ?? "Invalid elevation request";
+    redirect(`/platform/staff?error=${encodeURIComponent(msg)}`);
+  }
+
+  const target = await db.user.findUnique({
+    where: { id: userId },
+    select: { id: true, email: true, platformRole: true },
+  });
+  if (!target?.platformRole) {
+    redirect(`/platform/staff?error=${encodeURIComponent("User is not staff")}`);
+  }
+  if (target.id === ctx.userId) {
+    redirect(`/platform/staff?error=${encodeURIComponent("Cannot elevate yourself")}`);
+  }
+
+  // Elevation must actually be more powerful than the baseline.
+
+  if (rankPlatformRole(parsed.data.elevatedTo) >= rankPlatformRole(target.platformRole)) {
+    redirect(`/platform/staff?error=${encodeURIComponent("Elevation must be a higher role than baseline")}`);
+  }
+
+  // SUPER_ADMIN elevation is reserved for SUPER_ADMINs themselves —
+  // a SITE_MANAGER cannot mint root-of-trust access.
+  if (parsed.data.elevatedTo === "SUPER_ADMIN" && ctx.role !== "SUPER_ADMIN") {
+    redirect(`/platform/staff?error=${encodeURIComponent("Only Super Admins can elevate to Super Admin")}`);
+  }
+
+  const expiresAt = new Date(Date.now() + parsed.data.hours * 60 * 60 * 1000);
+
+  await db.$transaction([
+    db.platformRoleElevation.create({
+      data: {
+        userId: target.id,
+        originalRole: target.platformRole,
+        elevatedTo: parsed.data.elevatedTo,
+        reason: parsed.data.reason,
+        grantedById: ctx.userId,
+        expiresAt,
+      },
+    }),
+    // Bump session version so the elevation takes effect on the next
+    // request, not after the JWT TTL.
+    db.user.update({
+      where: { id: target.id },
+      data: { sessionVersion: { increment: 1 } },
+    }),
+  ]);
+
+  await logPlatformAudit({
+    userId: ctx.userId,
+    action: "platform.staff_elevation_granted",
+    entityType: "User",
+    entityId: target.id,
+    metadata: {
+      targetEmail: target.email,
+      from: target.platformRole,
+      to: parsed.data.elevatedTo,
+      hours: parsed.data.hours,
+      reason: parsed.data.reason,
+      expiresAt: expiresAt.toISOString(),
+    },
+  });
+
+  revalidatePath("/platform/staff");
+  redirect(`/platform/staff?ok=elevation_granted`);
+}
+
+export async function revokePlatformElevation(elevationId: string) {
+
+  const ctx = await requirePlatformPermission("staff.revoke_elevation");
+
+  const row = await db.platformRoleElevation.findUnique({
+    where: { id: elevationId },
+    select: {
+      id: true, userId: true, elevatedTo: true, revokedAt: true, expiresAt: true,
+      user: { select: { email: true } },
+    },
+  });
+  if (!row) redirect(`/platform/staff?error=${encodeURIComponent("Elevation not found")}`);
+  if (row.revokedAt) redirect(`/platform/staff?ok=already_revoked`);
+
+  await db.$transaction([
+    db.platformRoleElevation.update({
+      where: { id: row.id },
+      data: { revokedAt: new Date(), revokedById: ctx.userId },
+    }),
+    db.user.update({
+      where: { id: row.userId },
+      data: { sessionVersion: { increment: 1 } },
+    }),
+  ]);
+
+  await logPlatformAudit({
+    userId: ctx.userId,
+    action: "platform.staff_elevation_revoked",
+    entityType: "User",
+    entityId: row.userId,
+    metadata: {
+      elevationId: row.id,
+      targetEmail: row.user.email,
+      elevatedTo: row.elevatedTo,
+    },
+  });
+
+  revalidatePath("/platform/staff");
+  redirect(`/platform/staff?ok=elevation_revoked`);
 }
