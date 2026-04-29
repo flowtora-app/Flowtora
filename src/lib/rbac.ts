@@ -418,6 +418,49 @@ export function platformCan(
   return PLATFORM_ROLE_PERMISSIONS[role]?.includes(perm) ?? false;
 }
 
+/**
+ * Phase 1 follow-up — custom-role permission check. Custom roles store
+ * permissions as a flat string array (schema can't enum-array). We
+ * type-narrow at this boundary; unknown strings are silently ignored,
+ * which is intentional — old custom roles holding now-deleted perms
+ * don't crash; they just don't grant the missing perm.
+ */
+export function customRoleCan(
+  perms: readonly string[] | null | undefined,
+  perm: PlatformPermission,
+): boolean {
+  if (!perms || perms.length === 0) return false;
+  return perms.includes(perm);
+}
+
+/**
+ * Validate an array of strings against the PlatformPermission union,
+ * returning only the recognized values. Used by the action layer when
+ * an admin saves a custom role so we never persist garbage.
+ */
+export function sanitizePlatformPermissions(input: string[]): PlatformPermission[] {
+  const valid = new Set<string>(PLATFORM_ALL);
+  const out: PlatformPermission[] = [];
+  for (const s of input) {
+    if (valid.has(s)) out.push(s as PlatformPermission);
+  }
+  return out;
+}
+
+/** Domain-grouped catalog of all PlatformPermission values, used by
+ *  the admin UI to render the permission picker grid. */
+export function permissionCatalog(): { domain: string; perms: PlatformPermission[] }[] {
+  const groups = new Map<string, PlatformPermission[]>();
+  for (const p of PLATFORM_ALL) {
+    const dot = p.indexOf(".");
+    const domain = dot >= 0 ? p.slice(0, dot) : "other";
+    const arr = groups.get(domain) ?? [];
+    arr.push(p);
+    groups.set(domain, arr);
+  }
+  return [...groups.entries()].map(([domain, perms]) => ({ domain, perms }));
+}
+
 export function isPlatformStaff(role: PlatformRole | null | undefined): boolean {
   if (!role) return false;
   // Anyone with a non-null platformRole is staff. The role enum itself

@@ -14,6 +14,7 @@ import {
   grantPlatformElevation,
   revokePlatformElevation,
 } from "@/app/actions/platform";
+import { assignCustomPlatformRole } from "@/app/actions/platform-custom-roles";
 import { Icon } from "@/components/shell/icons";
 import type { PlatformRole } from "@prisma/client";
 
@@ -61,7 +62,7 @@ export default async function PlatformStaffPage({
   const canRevoke  = ctx.can("staff.revoke_elevation");
 
   // ── Pull staff + active elevations ─────────────────────────────────
-  const [staff, activeElevations, sessionCounts, recentEvents] = await Promise.all([
+  const [staff, activeElevations, sessionCounts, recentEvents, activeCustomRoles] = await Promise.all([
     db.user.findMany({
       where: { platformRole: { not: null } },
       select: {
@@ -69,6 +70,8 @@ export default async function PlatformStaffPage({
         email: true,
         name: true,
         platformRole: true,
+        customPlatformRoleId: true,
+        customPlatformRole: { select: { id: true, name: true, key: true, status: true } },
         lastLoginAt: true,
         twoFactorEnabled: true,
         createdAt: true,
@@ -102,6 +105,11 @@ export default async function PlatformStaffPage({
         user:      { select: { email: true } },
         grantedBy: { select: { email: true } },
       },
+    }),
+    db.customPlatformRole.findMany({
+      where: { status: "ACTIVE" },
+      orderBy: { name: "asc" },
+      select: { id: true, name: true, key: true },
     }),
   ]);
 
@@ -160,6 +168,7 @@ export default async function PlatformStaffPage({
         canElevate={canElevate}
         currentUserId={ctx.userId}
         currentUserBaseRole={ctx.baseRole}
+        activeCustomRoles={activeCustomRoles}
       />
 
       {/* Recent elevation history */}
@@ -180,6 +189,9 @@ const MESSAGES: Record<string, string> = {
   elevation_granted:  "Elevation granted. Session bumped — takes effect on next request.",
   elevation_revoked:  "Elevation revoked.",
   already_revoked:    "Elevation was already revoked.",
+  custom_role_assigned: "Custom role attached. Session bumped — takes effect on next request.",
+  custom_role_detached: "Custom role detached. User falls back to baseline.",
+  custom_role_unchanged: "User already had that custom role.",
 };
 
 /* ────────────────────────────────────────────────────────────── */
@@ -451,10 +463,14 @@ type StaffRow = {
   email: string;
   name: string | null;
   platformRole: PlatformRole | null;
+  customPlatformRoleId: string | null;
+  customPlatformRole: { id: string; name: string; key: string; status: string } | null;
   lastLoginAt: Date | null;
   twoFactorEnabled: boolean;
   createdAt: Date;
 };
+
+type ActiveCustomRole = { id: string; name: string; key: string };
 
 function StaffList({
   staff,
@@ -464,6 +480,7 @@ function StaffList({
   canElevate,
   currentUserId,
   currentUserBaseRole,
+  activeCustomRoles,
 }: {
   staff: StaffRow[];
   sessionByUser: Map<string, number>;
@@ -472,17 +489,27 @@ function StaffList({
   canElevate: boolean;
   currentUserId: string;
   currentUserBaseRole: PlatformRole;
+  activeCustomRoles: ActiveCustomRole[];
 }) {
   return (
     <section className="rounded-lg border" style={{ background: "var(--surface-1)", borderColor: "var(--border-subtle)" }}>
-      <div className="border-b px-4 py-3" style={{ borderColor: "var(--border-subtle)" }}>
-        <h2 className="text-[14px] font-semibold" style={{ color: "var(--text-default)" }}>
-          Staff ({staff.length})
-        </h2>
-        <p className="text-[12px]" style={{ color: "var(--text-muted)" }}>
-          Sorted by last login. Role changes bump the user's session — they'll
-          reauth on their next request.
-        </p>
+      <div className="flex items-center justify-between border-b px-4 py-3" style={{ borderColor: "var(--border-subtle)" }}>
+        <div>
+          <h2 className="text-[14px] font-semibold" style={{ color: "var(--text-default)" }}>
+            Staff ({staff.length})
+          </h2>
+          <p className="text-[12px]" style={{ color: "var(--text-muted)" }}>
+            Sorted by last login. Role changes bump the user's session — they'll
+            reauth on their next request.
+          </p>
+        </div>
+        <Link
+          href="/platform/staff/roles"
+          className="ts-focus inline-flex items-center gap-1.5 rounded-md border px-3 py-1.5 text-[12px] font-medium"
+          style={{ borderColor: "var(--border-subtle)", color: "var(--text-default)", background: "var(--surface-1)" }}
+        >
+          Custom roles ({activeCustomRoles.length}) →
+        </Link>
       </div>
       <div>
         {staff.map((u) => (
@@ -495,6 +522,7 @@ function StaffList({
             canElevate={canElevate}
             isSelf={u.id === currentUserId}
             currentUserBaseRole={currentUserBaseRole}
+            activeCustomRoles={activeCustomRoles}
           />
         ))}
       </div>
@@ -510,6 +538,7 @@ function StaffRowItem({
   canElevate,
   isSelf,
   currentUserBaseRole,
+  activeCustomRoles,
 }: {
   row: StaffRow;
   sessions: number;
@@ -518,6 +547,7 @@ function StaffRowItem({
   canElevate: boolean;
   isSelf: boolean;
   currentUserBaseRole: PlatformRole;
+  activeCustomRoles: ActiveCustomRole[];
 }) {
   if (!row.platformRole) return null;
 
@@ -562,6 +592,19 @@ function StaffRowItem({
           </div>
           <div className="mt-1 flex flex-wrap items-center gap-1.5 text-[11px]">
             <RoleChip role={row.platformRole} />
+            {row.customPlatformRole && (
+              <span
+                className="inline-flex items-center gap-1 rounded px-1.5 py-0.5 font-medium"
+                style={{
+                  background: "var(--accent-surface)",
+                  color: "var(--accent-primary)",
+                  border: "1px solid var(--accent-primary)",
+                }}
+                title={`Custom role overrides baseline permissions (key: ${row.customPlatformRole.key})`}
+              >
+                ★ {row.customPlatformRole.name}
+              </span>
+            )}
             {elevations.map((e) => (
               <span
                 key={e.id}
@@ -603,22 +646,54 @@ function StaffRowItem({
       </div>
 
       {/* Role assignment */}
-      <div>
+      <div className="space-y-2">
         {canAssign ? (
-          <form action={assignPlatformRole.bind(null, row.id)} className="flex items-center gap-2">
-            <RoleSelect name="role" defaultValue={row.platformRole} />
-            <button
-              type="submit"
-              className="ts-focus rounded-md border px-2.5 py-1.5 text-[12px] font-medium"
-              style={{
-                borderColor: "var(--border-subtle)",
-                color: "var(--text-default)",
-                background: "var(--surface-1)",
-              }}
-            >
-              Save
-            </button>
-          </form>
+          <>
+            <form action={assignPlatformRole.bind(null, row.id)} className="flex items-center gap-2">
+              <RoleSelect name="role" defaultValue={row.platformRole} />
+              <button
+                type="submit"
+                className="ts-focus rounded-md border px-2.5 py-1.5 text-[12px] font-medium"
+                style={{
+                  borderColor: "var(--border-subtle)",
+                  color: "var(--text-default)",
+                  background: "var(--surface-1)",
+                }}
+              >
+                Save
+              </button>
+            </form>
+            {/* Custom role attachment — shows whichever ACTIVE roles
+                exist; the empty option detaches. Only renders the
+                form when there is at least one active custom role
+                (otherwise we'd be showing an empty dropdown). */}
+            {activeCustomRoles.length > 0 && (
+              <form action={assignCustomPlatformRole.bind(null, row.id)} className="flex items-center gap-2">
+                <select
+                  name="customRoleId"
+                  defaultValue={row.customPlatformRoleId ?? ""}
+                  className="ts-focus rounded-md border px-2 py-1.5 text-[12px]"
+                  style={{ background: "var(--surface-1)", borderColor: "var(--border-subtle)", color: "var(--text-default)" }}
+                >
+                  <option value="">— No custom role —</option>
+                  {activeCustomRoles.map((r) => (
+                    <option key={r.id} value={r.id}>★ {r.name}</option>
+                  ))}
+                </select>
+                <button
+                  type="submit"
+                  className="ts-focus rounded-md border px-2.5 py-1.5 text-[12px] font-medium"
+                  style={{
+                    borderColor: "var(--border-subtle)",
+                    color: "var(--text-default)",
+                    background: "var(--surface-1)",
+                  }}
+                >
+                  Save
+                </button>
+              </form>
+            )}
+          </>
         ) : (
           <div className="text-[12px]" style={{ color: "var(--text-muted)" }}>
             Read-only

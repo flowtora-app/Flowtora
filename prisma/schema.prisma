@@ -520,7 +520,13 @@ model User {
   image         String?
 
   // Non-null only for SaaS-platform staff (super admin / site mgr / support).
-  platformRole PlatformRole?
+  // Phase 1 follow-up — custom platform roles. When `customPlatformRoleId`
+  // is set, the custom role's permission list overrides the baseline
+  // `platformRole`. Either field alone is enough to mark the user as
+  // staff; if both are set, the custom role wins. Neither = end-user.
+  platformRole         PlatformRole?
+  customPlatformRoleId String?
+  customPlatformRole   CustomPlatformRole? @relation(fields: [customPlatformRoleId], references: [id], onDelete: SetNull)
 
   twoFactorEnabled Boolean   @default(false)
   lastLoginAt      DateTime?
@@ -594,6 +600,9 @@ model User {
   bansIssued     BanRecord[]       @relation("BanIssuer")
   bansLifted     BanRecord[]       @relation("BanLifter")
   mergesExecuted UserMergeRecord[] @relation("MergeExecutor")
+
+  // Phase 1 follow-up — custom platform roles authored by this admin.
+  customPlatformRolesCreated CustomPlatformRole[] @relation("CustomRoleCreator")
 }
 
 // Platform-side roles. The first three (SUPER_ADMIN, SITE_MANAGER,
@@ -4864,4 +4873,54 @@ model UserMergeRecord {
   @@index([targetUserId])
   @@index([sourceUserId])
   @@index([executedAt])
+}
+
+// ─────────────────────────────────────────────────────────────────────
+// Phase 1 follow-up — admin-defined custom platform roles.
+//
+// The 12 baseline PlatformRole values cover the common cases. A custom
+// role lets an admin mint a permission bundle for the rare cases the
+// baseline doesn't fit ("Tier 2 Support — like Support Lead but with
+// billing.read", "Auditor — read-only across audit + compliance only").
+//
+// Resolution: when User.customPlatformRoleId is set, the custom role's
+// permissions[] array overrides the baseline platformRole's permissions
+// at the rbac layer. The baseline value still lives on the User row so
+// the admin can fall back without re-picking the role.
+//
+// Permission strings are validated against the PlatformPermission
+// union at the action layer (see app/actions/platform.ts) — schema is
+// just a String[] because Prisma enums don't support array shapes.
+// ─────────────────────────────────────────────────────────────────────
+
+enum CustomPlatformRoleStatus {
+  DRAFT     // not yet enforceable; admin can stage permission changes
+  ACTIVE    // attached to users, takes effect on next request
+  ARCHIVED  // detached from all users on archive; kept for audit history
+}
+
+model CustomPlatformRole {
+  id          String                   @id @default(cuid())
+  // Display name — surfaced in nav + role chips. Unique so the staff
+  // list dropdown stays unambiguous.
+  name        String                   @unique
+  // Slug-style identifier used in audit metadata + URL params. Stored
+  // separately so renaming the display name doesn't break audit search.
+  key         String                   @unique
+  description String?
+  // Flat permission list. Validated against the PlatformPermission
+  // union in the action layer. Includes nothing on DRAFT creation; the
+  // admin populates via the permission grid.
+  permissions String[]                 @default([])
+  status      CustomPlatformRoleStatus @default(DRAFT)
+  createdById String
+  createdBy   User                     @relation("CustomRoleCreator", fields: [createdById], references: [id], onDelete: Restrict)
+  createdAt   DateTime                 @default(now())
+  updatedAt   DateTime                 @updatedAt
+
+  // Reverse side of User.customPlatformRole — lets us count members
+  // and detach them on archive without a second query.
+  members User[]
+
+  @@index([status])
 }

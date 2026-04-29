@@ -18,6 +18,7 @@ import type { PlatformRole } from "@prisma/client";
 import {
   effectivePlatformRole,
   platformCan,
+  customRoleCan,
   type PlatformPermission,
 } from "@/lib/rbac";
 
@@ -28,14 +29,17 @@ export type PlatformContext = {
   /** Durable role on the User row. Differs from `role` while elevated. */
   baseRole: PlatformRole;
   email: string;
-  /** True iff `role` has any mutation permission. Coarse-grained legacy flag. */
+  /** True iff the resolved permissions include any mutation permission. */
   canWrite: boolean;
-  /** True iff `role` has the `tenant.impersonate` permission. */
+  /** True iff the resolved permissions include `tenant.impersonate`. */
   canImpersonate: boolean;
   /** Fine-grained permission check. Prefer this over `canWrite`. */
   can: (perm: PlatformPermission) => boolean;
   /** Active (non-revoked, non-expired) elevations for this user. */
   activeElevations: { id: string; elevatedTo: PlatformRole; expiresAt: Date; reason: string }[];
+  /** Custom platform role attached to this staff member, if any. When
+   *  set, its permissions take precedence over the baseline role. */
+  customRole: { id: string; name: string; key: string; permissions: string[] } | null;
 };
 
 // Permissions whose presence implies "this role can mutate at least
@@ -66,9 +70,17 @@ function buildContext(
   userId: string,
   email: string,
   activeElevations: { id: string; elevatedTo: PlatformRole; expiresAt: Date; reason: string }[],
+  customRole: PlatformContext["customRole"],
 ): PlatformContext {
   const role = effectivePlatformRole(baseRole, activeElevations) ?? baseRole;
-  const can = (perm: PlatformPermission) => platformCan(role, perm);
+  // Custom role (when ACTIVE) wins over baseline. Elevations still
+  // apply on top of the baseline for super-promotion scenarios — but
+  // a custom role plus elevation collapses to "whichever grants the
+  // permission grants it". `can` short-circuits on first match.
+  const can = (perm: PlatformPermission) => {
+    if (customRole && customRoleCan(customRole.permissions, perm)) return true;
+    return platformCan(role, perm);
+  };
   const canWrite = MUTATION_PERMS.some(can);
   return {
     userId,
@@ -79,6 +91,7 @@ function buildContext(
     canImpersonate: can("tenant.impersonate"),
     can,
     activeElevations,
+    customRole,
   };
 }
 
@@ -92,12 +105,32 @@ export async function requirePlatformStaff(): Promise<PlatformContext> {
   if (!session?.user?.id || !session.user.platformRole) {
     redirect("/login");
   }
-  const elevations = await loadActiveElevations(session.user.id);
+  const [elevations, userRow] = await Promise.all([
+    loadActiveElevations(session.user.id),
+    db.user.findUnique({
+      where: { id: session.user.id },
+      select: {
+        customPlatformRole: {
+          select: { id: true, name: true, key: true, permissions: true, status: true },
+        },
+      },
+    }),
+  ]);
+  // Only ACTIVE custom roles take effect. DRAFT roles let admins
+  // stage permission changes without affecting users; ARCHIVED roles
+  // shouldn't matter (User.customPlatformRoleId is nulled on archive)
+  // but the status filter is a belt-and-suspenders check.
+  const cr = userRow?.customPlatformRole;
+  const customRole =
+    cr && cr.status === "ACTIVE"
+      ? { id: cr.id, name: cr.name, key: cr.key, permissions: cr.permissions }
+      : null;
   return buildContext(
     session.user.platformRole,
     session.user.id,
     session.user.email ?? "",
     elevations,
+    customRole,
   );
 }
 
