@@ -11,9 +11,8 @@ import {
   archiveAnnouncement,
   deleteAnnouncement,
   sendAnnouncementEmails,
-  liveStatus,
-  type LiveStatus,
 } from "@/app/actions/announcements";
+import { liveStatus, type LiveStatus } from "@/lib/announcement-status";
 import { MarkdownEditor } from "@/components/MarkdownEditor";
 
 // /platform/announcements/[id] — announcement composer + state machine.

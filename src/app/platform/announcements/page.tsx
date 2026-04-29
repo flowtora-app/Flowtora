@@ -2,7 +2,8 @@ import Link from "next/link";
 import { db } from "@/lib/db";
 import { requirePlatformStaff } from "@/lib/platform";
 import type { AnnouncementType, AnnouncementPriority, AnnouncementStatus, Prisma } from "@prisma/client";
-import { createAnnouncement, liveStatus, type LiveStatus } from "@/app/actions/announcements";
+import { createAnnouncement } from "@/app/actions/announcements";
+import { liveStatus, type LiveStatus } from "@/lib/announcement-status";
 import { AnnouncementsKPIBand, type AnnouncementsKpi } from "@/components/platform/AnnouncementsKPIBand";
 
 // /platform/announcements — communications feed.

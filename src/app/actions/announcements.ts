@@ -12,7 +12,6 @@ import { loadBrand } from "@/lib/notifications/brand";
 import type {
   AnnouncementType,
   AnnouncementPriority,
-  AnnouncementStatus,
   AnnouncementAudience,
   Prisma,
 } from "@prisma/client";
@@ -452,7 +451,9 @@ export async function sendAnnouncementEmails(id: string) {
 }
 
 // ────────────────────────────────────────────────────────────────
-// Helpers
+// Helpers (sync helpers live in src/lib/announcement-status.ts —
+// every export from this "use server" module must be async, so the
+// pure liveStatus() helper had to be moved out).
 // ────────────────────────────────────────────────────────────────
 
 // Split a comma- or newline-separated input into a clean string[].
@@ -462,22 +463,4 @@ function splitList(raw: string | undefined): string[] {
     .split(/[,\n]/)
     .map((s) => s.trim())
     .filter((s) => s.length > 0);
-}
-
-// Pure helper: given an announcement row and "now", return whether it's
-// currently active for tenant-side display. Exposed so the admin list
-// page can compute "is live" without re-running the targeting filter.
-export type LiveStatus = "draft" | "scheduled" | "live" | "expired" | "archived";
-export function liveStatus(a: {
-  status: AnnouncementStatus;
-  publishAt: Date | null;
-  expireAt: Date | null;
-}, now: Date = new Date()): LiveStatus {
-  if (a.status === "ARCHIVED") return "archived";
-  if (a.status === "DRAFT")    return "draft";
-  if (a.expireAt && a.expireAt.getTime() <= now.getTime()) return "expired";
-  if (a.status === "SCHEDULED") {
-    return a.publishAt && a.publishAt.getTime() <= now.getTime() ? "live" : "scheduled";
-  }
-  return "live"; // PUBLISHED + not expired
 }
