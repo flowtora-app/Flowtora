@@ -1,17 +1,24 @@
 import * as React from "react";
 import { cn } from "@/lib/cn";
 
-// Spinner — simple rotating ring. Inherits `currentColor` so callers
-// drive color via parent text color (e.g. inside a Button that flips
-// the text color when loading). Pass `tone="muted"` to soften.
+// Spinner — Spec Page 0 §0.5.35.
+//
+// Sizes (spec): xs 12, sm 16, md 20, lg 24, xl 32 — circular dashed,
+// brand-600 stroke, 600ms rotation.
+// Use: inline button loading; never as a full-page loader (use
+// skeletons instead — spec rule).
+//
+// Inherits `currentColor` so callers drive color via parent text color
+// (e.g. inside a Button that flips the text color when loading). Pass
+// `tone="muted"` to soften, `tone="accent"` for explicit brand color.
 
 type Size = "xs" | "sm" | "md" | "lg" | "xl";
 type Tone = "current" | "muted" | "accent";
 
 const SIZE_PX: Record<Size, number> = {
   xs: 12,
-  sm: 14,
-  md: 18,
+  sm: 16,
+  md: 20,
   lg: 24,
   xl: 32,
 };

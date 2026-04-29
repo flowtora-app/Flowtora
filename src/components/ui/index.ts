@@ -62,6 +62,33 @@ export type { AccordionProps, AccordionItemProps } from "./Accordion";
 export { Stepper } from "./Stepper";
 export type { StepperProps, StepperStep, StepState } from "./Stepper";
 
+export { Pagination } from "./Pagination";
+export type { PaginationProps } from "./Pagination";
+
+export { ProgressBar } from "./ProgressBar";
+export type { ProgressBarProps } from "./ProgressBar";
+
+export { ProgressRing } from "./ProgressRing";
+export type { ProgressRingProps } from "./ProgressRing";
+
+export { Spinner } from "./Spinner";
+export type { SpinnerProps } from "./Spinner";
+
+export { CodeBlock } from "./CodeBlock";
+export type { CodeBlockProps, CodeLine } from "./CodeBlock";
+
+export { PillFilterChips } from "./PillFilterChips";
+export type { PillFilterChipsProps, PillChipOption } from "./PillFilterChips";
+
+export { FilterChip } from "./FilterChip";
+export type { FilterChipProps } from "./FilterChip";
+
+export { FilterBar } from "./FilterBar";
+export type { FilterBarProps, ActiveFilter } from "./FilterBar";
+
+export { SearchWithSuggestions } from "./SearchWithSuggestions";
+export type { SearchWithSuggestionsProps, Suggestion } from "./SearchWithSuggestions";
+
 export { ToastProvider, useToast } from "./Toast";
 export type { ToastOptions } from "./Toast";
 

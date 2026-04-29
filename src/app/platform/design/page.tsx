@@ -12,15 +12,19 @@ import {
   CardBody,
   CardFooter,
   CardHeader,
+  CodeBlock,
   EmptyState,
   Input,
   Kbd,
   PageHeader,
+  ProgressBar,
+  ProgressRing,
   SectionHeader,
   Select,
   Skeleton,
   SkeletonCard,
   SkeletonText,
+  Spinner,
   StatusPill,
   Stepper,
   Tabs,
@@ -32,6 +36,10 @@ import {
   BannerDemos,
   ConfirmTriggers,
   DrawerTriggers,
+  FilterBarDemo,
+  PaginationDemos,
+  PillFilterChipsDemos,
+  SearchWithSuggestionsDemo,
   ToastTriggers,
 } from "./ShowcaseTriggers";
 
@@ -489,6 +497,121 @@ export default async function DesignSystemPage() {
               secondary={<Button variant="link" size="sm">Learn about orders</Button>}
             />
           </Card>
+        </Section>
+
+        <Section
+          title="Spinner"
+          description="Spec §0.5.35 — xs 12 / sm 16 / md 20 / lg 24 / xl 32. Inherits text color so it works inside any button."
+        >
+          <Row label="Sizes">
+            <Spinner size="xs" />
+            <Spinner size="sm" />
+            <Spinner size="md" />
+            <Spinner size="lg" />
+            <Spinner size="xl" />
+          </Row>
+          <Row label="Tones">
+            <Spinner size="md" tone="current" />
+            <Spinner size="md" tone="muted" />
+            <Spinner size="md" tone="accent" />
+          </Row>
+        </Section>
+
+        <Section
+          title="Progress bar"
+          description="Spec §0.5.34 — sm 4 / md 6 / lg 8 height; striped variant for in-progress; indeterminate for unknown ETAs."
+        >
+          <div className="space-y-3">
+            <ProgressBar value={32} label="Activation" showValue size="sm" />
+            <ProgressBar value={68} label="Quotes used" showValue tone="warning" />
+            <ProgressBar value={91} label="Storage quota" showValue tone="danger" size="lg" />
+            <ProgressBar value={47} label="Importing tenants" showValue striped />
+            <ProgressBar indeterminate label="Working…" />
+          </div>
+        </Section>
+
+        <Section
+          title="Progress ring"
+          description="Spec §0.5.34 — sm 24 / md 40 / lg 64. Stroke 4px; with center number/percent label."
+        >
+          <Row label="Sizes">
+            <ProgressRing size="sm" value={42} />
+            <ProgressRing size="md" value={68} showValue />
+            <ProgressRing size="lg" value={91} showValue />
+          </Row>
+          <Row label="Tones">
+            <ProgressRing size="md" value={75} tone="accent" showValue />
+            <ProgressRing size="md" value={100} tone="success" label="Done" />
+            <ProgressRing size="md" value={20} tone="warning" showValue />
+            <ProgressRing size="md" value={5} tone="danger" showValue />
+            <ProgressRing size="md" indeterminate aria-label="Loading" />
+          </Row>
+        </Section>
+
+        <Section
+          title="Pagination"
+          description="Spec §0.5.21 — numbered (default) / prev-next / load-more. Per-page 10/25/50/100/250; jump-to-page when pages > 20."
+        >
+          <PaginationDemos />
+        </Section>
+
+        <Section
+          title="Pill filter chips"
+          description="Spec §0.5.45 — single-select toggles others off, multi-select toggles individually. Optional count badge."
+        >
+          <PillFilterChipsDemos />
+        </Section>
+
+        <Section
+          title="Filter bar"
+          description="Spec §0.5.43 — search + active chips + Add filter + Reset + Save view. Caller drives the Add-filter and edit popovers."
+        >
+          <FilterBarDemo />
+        </Section>
+
+        <Section
+          title="Search with suggestions"
+          description="Spec §0.5.44 — typeahead with categorized results. ↑↓ to navigate, Enter to pick, Esc closes. Match is bolded."
+        >
+          <SearchWithSuggestionsDemo />
+        </Section>
+
+        <Section
+          title="Code block"
+          description="Spec §0.5.36 — language tab + filename + copy + line numbers + diff highlighting. Shiki syntax highlighting deferred."
+        >
+          <div className="space-y-4">
+            <CodeBlock
+              language="ts"
+              filename="src/lib/billing.ts"
+              lineNumbers
+              wrapToggle
+              code={`async function applyCouponToTenant(tenantId: string, couponCode: string) {
+  const coupon = await db.coupon.findUnique({ where: { code: couponCode } });
+  if (!coupon || coupon.status !== "ACTIVE") return null;
+  await db.tenant.update({
+    where: { id: tenantId },
+    data: { activeCouponId: coupon.id },
+  });
+  return coupon;
+}`}
+            />
+            <CodeBlock
+              language="diff"
+              filename="auth.ts"
+              code={[
+                { text: "import NextAuth from \"next-auth\";", kind: "normal" },
+                { text: "import Credentials from \"next-auth/providers/credentials\";", kind: "normal" },
+                { text: "import GitHub from \"next-auth/providers/github\";", kind: "removed" },
+                { text: "import Resend from \"next-auth/providers/resend\";", kind: "added" },
+                { text: "", kind: "normal" },
+                { text: "export const { handlers, signIn, signOut, auth } = NextAuth({", kind: "normal" },
+                { text: "  providers: [Credentials({ ... }), Resend({ ... })],", kind: "added" },
+                { text: "  providers: [Credentials({ ... }), GitHub({ ... })],", kind: "removed" },
+                { text: "});", kind: "normal" },
+              ]}
+            />
+          </div>
         </Section>
 
         <Section

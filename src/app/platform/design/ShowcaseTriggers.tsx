@@ -6,6 +6,11 @@ import {
   Banner,
   ConfirmDialog,
   Drawer,
+  FilterBar,
+  Pagination,
+  PillFilterChips,
+  SearchWithSuggestions,
+  type Suggestion,
   useToast,
 } from "@/components/ui";
 
@@ -136,6 +141,131 @@ export function ToastTriggers() {
       >
         Promise
       </Button>
+    </div>
+  );
+}
+
+/* ── Pagination demo ───────────────────────────────────────── */
+
+export function PaginationDemos() {
+  const [page1, setPage1] = React.useState(3);
+  const [size1, setSize1] = React.useState(25);
+  const [page2, setPage2] = React.useState(7);
+  const [size2, setSize2] = React.useState(50);
+  const [page3, setPage3] = React.useState(1);
+  return (
+    <div className="space-y-4">
+      <Pagination
+        variant="numbered"
+        page={page1}
+        pageSize={size1}
+        total={1247}
+        onPageChange={setPage1}
+        onPageSizeChange={setSize1}
+      />
+      <Pagination
+        variant="prev-next"
+        page={page2}
+        pageSize={size2}
+        total={50_000}
+        onPageChange={setPage2}
+        onPageSizeChange={setSize2}
+      />
+      <Pagination
+        variant="load-more"
+        page={page3}
+        pageSize={20}
+        total={120}
+        onPageChange={setPage3}
+      />
+    </div>
+  );
+}
+
+/* ── PillFilterChips demo ──────────────────────────────────── */
+
+export function PillFilterChipsDemos() {
+  const [single, setSingle] = React.useState<string | null>("active");
+  const [multi, setMulti] = React.useState<string[]>(["growth", "pro"]);
+  return (
+    <div className="space-y-4">
+      <PillFilterChips
+        mode="single"
+        label="Status"
+        value={single}
+        onChange={setSingle}
+        options={[
+          { value: "all",      label: "All",      count: 1247 },
+          { value: "active",   label: "Active",   count: 1014 },
+          { value: "trialing", label: "Trialing", count: 189 },
+          { value: "past_due", label: "Past due", count: 27 },
+          { value: "suspended", label: "Suspended", count: 17 },
+        ]}
+      />
+      <PillFilterChips
+        mode="multi"
+        label="Plan"
+        value={multi}
+        onChange={setMulti}
+        options={[
+          { value: "starter",    label: "Starter" },
+          { value: "growth",     label: "Growth" },
+          { value: "pro",        label: "Pro" },
+          { value: "enterprise", label: "Enterprise" },
+        ]}
+      />
+    </div>
+  );
+}
+
+/* ── FilterBar demo ────────────────────────────────────────── */
+
+export function FilterBarDemo() {
+  const [query, setQuery] = React.useState("");
+  const [filters, setFilters] = React.useState([
+    { id: "1", field: "Plan",   operator: "is one of", value: "Pro, Enterprise" },
+    { id: "2", field: "Health", operator: "is",        value: "Unhealthy" },
+  ]);
+  return (
+    <FilterBar
+      query={query}
+      onQueryChange={setQuery}
+      searchPlaceholder="Search tenants by name or slug…"
+      filters={filters}
+      onRemoveFilter={(id) => setFilters((f) => f.filter((x) => x.id !== id))}
+      onEditFilter={() => alert("Open edit popover (caller implements)")}
+      onAddFilter={() => alert("Open Add-filter menu (caller implements)")}
+      onReset={() => { setQuery(""); setFilters([]); }}
+      onSaveView={() => alert("Save view (caller implements)")}
+    />
+  );
+}
+
+/* ── SearchWithSuggestions demo ────────────────────────────── */
+
+const DEMO_SUGGESTIONS: Suggestion[] = [
+  { id: "t1", category: "Tenants", label: "Acme Signs Ltd.",       description: "acme-signs · Pro · 47 orders" },
+  { id: "t2", category: "Tenants", label: "Apex Print Co.",        description: "apex-print · Growth · 12 orders" },
+  { id: "u1", category: "Users",   label: "Ada Lovelace",          description: "ada@flowtora.com · Admin" },
+  { id: "u2", category: "Users",   label: "Alan Turing",           description: "alan@flowtora.com · Member" },
+  { id: "i1", category: "Invoices", label: "INV-2026-0042",        description: "$2,499 · Acme Signs Ltd. · paid" },
+];
+
+export function SearchWithSuggestionsDemo() {
+  const [q, setQ] = React.useState("");
+  const filtered = q.trim() === ""
+    ? DEMO_SUGGESTIONS
+    : DEMO_SUGGESTIONS.filter((s) => s.label.toLowerCase().includes(q.toLowerCase()));
+  return (
+    <div className="max-w-md">
+      <SearchWithSuggestions
+        query={q}
+        onQueryChange={setQ}
+        suggestions={filtered}
+        onSelect={(s) => alert(`Selected: ${s.label}`)}
+        onSubmit={(query) => alert(`Search submitted: ${query}`)}
+        placeholder="Search tenants, users, invoices…"
+      />
     </div>
   );
 }
