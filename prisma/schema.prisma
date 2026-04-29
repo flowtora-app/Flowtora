@@ -224,6 +224,23 @@ model Tenant {
   trialEndingNoticeAt DateTime?
   pastDueNoticeAt     DateTime?
 
+  // ── Phase 3 (Billing) — dunning state machine ──
+  // Stage in the recover-payment funnel. NONE for happy customers; the
+  // pipeline runs PAYMENT_FAILED → REMINDER_1 → REMINDER_2 → FINAL_NOTICE
+  // → SUSPEND, advanced manually today (cron is a follow-up). Pausing
+  // sets `dunningPausedAt`; resolving wipes everything back to NONE and
+  // stamps `dunningLastEventAt` for the audit trail.
+  dunningStage        DunningStage @default(NONE)
+  dunningStartedAt    DateTime?
+  dunningPausedAt     DateTime?
+  dunningLastEventAt  DateTime?
+  // Active coupon applied to this tenant — discounts the next invoice.
+  // Single-coupon model (no stacking) keeps the math obvious; if we
+  // ever need stacking, switch to a join through CouponRedemption with
+  // an "active" filter.
+  activeCouponId      String?
+  activeCoupon        Coupon? @relation("TenantActiveCoupon", fields: [activeCouponId], references: [id], onDelete: SetNull)
+
   createdAt DateTime @default(now())
   updatedAt DateTime @updatedAt
 
@@ -293,6 +310,12 @@ model Tenant {
   // M1 — per-tenant price overrides (grandfathered legacy pricing,
   // custom-negotiated Enterprise deals, etc.).
   planPriceOverrides PlanPriceOverride[]
+
+  // Phase 3 — admin-issued (Flowtora → tenant) invoices and coupon
+  // redemptions. Distinct from the tenant-side `invoices` field above
+  // (which is the shop → end-customer invoicing surface).
+  platformInvoices    PlatformBillingInvoice[]
+  couponRedemptions   CouponRedemption[]
 }
 
 // ────────────────────────────────────────────────────────────
@@ -544,6 +567,10 @@ model User {
   // bump or by the auto-expire sweep.
   platformElevations        PlatformRoleElevation[] @relation("ElevationTarget")
   platformElevationsGranted PlatformRoleElevation[] @relation("ElevationGranter")
+
+  // Phase 3 — platform-side billing artifacts created by this admin.
+  couponsCreated          Coupon[]                 @relation("CouponCreator")
+  platformInvoicesCreated PlatformBillingInvoice[] @relation("PlatformInvoiceCreator")
 }
 
 // Platform-side roles. The first three (SUPER_ADMIN, SITE_MANAGER,
@@ -4568,4 +4595,164 @@ model ConsentLog {
   @@index([anonymousId, createdAt])
   @@index([userId, createdAt])
   @@index([createdAt])
+}
+
+// ─────────────────────────────────────────────────────────────────────
+// Phase 3 — Platform billing (Flowtora → tenants).
+//
+// Three concerns live here:
+//   1. Coupons / promo codes (mint, redeem, expire).
+//   2. Dunning state — see `DunningStage` enum + Tenant.dunningStage above.
+//   3. Manual invoicing — admin-issued invoices for one-off line items
+//      (custom enterprise terms, bespoke setup fees, etc.) that don't
+//      flow through the normal Stripe subscription cycle.
+//
+// Stripe-mirroring (push these coupons / invoices to Stripe so they
+// hit the customer's actual checkout) is a deliberate follow-up.
+// We persist locally first so the admin surface works without a live
+// Stripe connection — important for offline demo, dev environments,
+// and any tenant on a contract not yet wired to Stripe.
+// ─────────────────────────────────────────────────────────────────────
+
+enum DunningStage {
+  NONE
+  PAYMENT_FAILED  // first failed charge — initial alert, no email yet
+  REMINDER_1      // day 1: gentle email
+  REMINDER_2      // day 3: firmer reminder
+  FINAL_NOTICE    // day 7: "we'll suspend in 7 days" warning
+  SUSPEND         // day 14: account suspended, manual rescue path
+  RESOLVED        // payment came in — terminal until next failure
+}
+
+enum CouponDiscountType {
+  PERCENT  // e.g. 20 = 20% off
+  FIXED    // e.g. 1000 = 10.00 off (in minor units of `currency`)
+}
+
+enum CouponStatus {
+  DRAFT     // mint, but don't allow redemption yet
+  ACTIVE
+  EXPIRED   // past validUntil — set automatically on read
+  ARCHIVED  // hidden from active lists, kept for audit history
+}
+
+model Coupon {
+  id             String             @id @default(cuid())
+  // Customer-visible code, normalized to upper-case at creation. Unique
+  // across the platform — we don't scope to currency or plan because
+  // the admin surface is small and a clash would be confusing.
+  code           String             @unique
+  description    String?            // internal note — never shown to tenant
+  discountType   CouponDiscountType
+  // Percent (1-100) when type=PERCENT, minor units (cents) when type=FIXED.
+  amount         Int
+  // Three-letter ISO code. Required only for FIXED-amount coupons; null
+  // for PERCENT (it applies to whatever currency the tenant is billed in).
+  currency       String?
+  // Plan slugs this coupon applies to. Empty = applies to any plan.
+  // Stored as lowercase slugs to match PricingPlan.slug.
+  appliesToPlans String[]           @default([])
+  // null = unlimited.
+  maxRedemptions Int?
+  redeemedCount  Int                @default(0)
+  validFrom      DateTime           @default(now())
+  validUntil     DateTime?
+  status         CouponStatus       @default(ACTIVE)
+  createdById    String
+  createdBy      User               @relation("CouponCreator", fields: [createdById], references: [id], onDelete: Restrict)
+  createdAt      DateTime           @default(now())
+  updatedAt      DateTime           @updatedAt
+
+  redemptions      CouponRedemption[]
+  // Reverse side of Tenant.activeCoupon — lets us list "tenants
+  // currently sitting on this coupon" without a separate query.
+  activeForTenants Tenant[]            @relation("TenantActiveCoupon")
+
+  @@index([status, validUntil])
+  @@index([createdById])
+}
+
+model CouponRedemption {
+  id            String   @id @default(cuid())
+  couponId      String
+  tenantId      String
+  // The platform invoice this redemption was applied to, when the
+  // discount lands on a manual invoice. Null when applied to the
+  // recurring Stripe subscription (we don't track those line items).
+  invoiceId     String?
+  appliedAmount Int      // minor units of the invoice currency, post-discount line
+  createdAt     DateTime @default(now())
+
+  coupon  Coupon                  @relation(fields: [couponId],  references: [id], onDelete: Cascade)
+  tenant  Tenant                  @relation(fields: [tenantId],  references: [id], onDelete: Cascade)
+  invoice PlatformBillingInvoice? @relation(fields: [invoiceId], references: [id], onDelete: SetNull)
+
+  @@index([tenantId, createdAt])
+  @@index([couponId, createdAt])
+  @@index([invoiceId])
+}
+
+enum PlatformInvoiceStatus {
+  DRAFT
+  SENT
+  PAID
+  VOIDED
+  REFUNDED
+}
+
+model PlatformBillingInvoice {
+  id          String                @id @default(cuid())
+  tenantId    String
+  number      String                @unique // human-readable, e.g. "PI-1042"
+  status      PlatformInvoiceStatus @default(DRAFT)
+  // Three-letter ISO code. Persisted on the invoice (not derived from
+  // tenant) because tenants can change currency mid-life and old
+  // invoices must lock to the rate they were issued under.
+  currency    String                @default("USD")
+  // Cached aggregates — stored so list views stay snappy without
+  // joining the items table. Recalculated on every invoice mutation.
+  subtotal    Int                   @default(0) // minor units, pre-discount, pre-tax
+  discount    Int                   @default(0)
+  tax         Int                   @default(0)
+  total       Int                   @default(0)
+  amountPaid  Int                   @default(0)
+  notes       String?
+  // Free-form due note rendered on the customer view ("Net 30",
+  // "Wire instructions in PDF", etc.). Not parsed.
+  termsText   String?
+  // Coupon applied as part of issuance — captured here for redenor
+  // history even if the coupon is later archived.
+  couponId    String?
+  issuedAt    DateTime?
+  dueAt       DateTime?
+  paidAt      DateTime?
+  voidedAt    DateTime?
+  // Audit pointers.
+  createdById String
+  createdAt   DateTime              @default(now())
+  updatedAt   DateTime              @updatedAt
+
+  tenant      Tenant                       @relation(fields: [tenantId],    references: [id], onDelete: Cascade)
+  createdBy   User                         @relation("PlatformInvoiceCreator", fields: [createdById], references: [id], onDelete: Restrict)
+  items       PlatformBillingInvoiceItem[]
+  redemptions CouponRedemption[]
+
+  @@index([tenantId, status])
+  @@index([status, issuedAt])
+}
+
+model PlatformBillingInvoiceItem {
+  id          String  @id @default(cuid())
+  invoiceId   String
+  description String
+  quantity    Int     @default(1)
+  unitAmount  Int     // minor units of the invoice currency
+  // Cached line total = quantity * unitAmount. Stored to keep totals
+  // math centralized in one mutation path.
+  lineTotal   Int
+  position    Int     @default(0)
+
+  invoice PlatformBillingInvoice @relation(fields: [invoiceId], references: [id], onDelete: Cascade)
+
+  @@index([invoiceId, position])
 }
