@@ -110,6 +110,28 @@ export type { OtpInputProps } from "./OtpInput";
 export { ColorPicker } from "./ColorPicker";
 export type { ColorPickerProps } from "./ColorPicker";
 
+export { Table, TableBulkBar } from "./Table";
+export type { TableProps, ColumnDef, TableBulkBarProps, Density, SortDir } from "./Table";
+
+export { ScheduleCalendar } from "./ScheduleCalendar";
+export type { ScheduleCalendarProps, ScheduledEvent, CalendarView } from "./ScheduleCalendar";
+
+export {
+  LineChartCard,
+  AreaChartCard,
+  BarChartCard,
+  DonutChartCard,
+  GaugeChart,
+  CHART_PALETTE,
+} from "./Charts";
+export type {
+  LineChartProps,
+  AreaChartProps,
+  BarChartProps,
+  DonutChartProps,
+  GaugeChartProps,
+} from "./Charts";
+
 export { ToastProvider, useToast } from "./Toast";
 export type { ToastOptions } from "./Toast";
 
