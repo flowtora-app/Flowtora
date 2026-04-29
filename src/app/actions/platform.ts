@@ -278,6 +278,13 @@ const featureFlagSchema = z.object({
   note:     z.string().max(500).optional().or(z.literal("")),
   // When tenantId is empty string / missing, this is a GLOBAL row.
   tenantId: z.string().optional().or(z.literal("")),
+  // Partial-rollout percentage. Empty / undefined = full enabled-as-stated.
+  rolloutPct: z.preprocess(
+    (v) => (typeof v === "string" && v.trim() !== "" ? Number(v) : undefined),
+    z.number().int().min(0).max(100).optional(),
+  ),
+  // Auto-expire datetime; ISO string from <input type="datetime-local">.
+  expiresAt: z.string().optional().or(z.literal("")),
 });
 
 export async function upsertFeatureFlag(formData: FormData) {
@@ -288,6 +295,10 @@ export async function upsertFeatureFlag(formData: FormData) {
   }
   const { key, enabled, note } = parsed.data;
   const tenantId = parsed.data.tenantId?.length ? parsed.data.tenantId : null;
+  const rolloutPct = parsed.data.rolloutPct ?? null;
+  const expiresAt = parsed.data.expiresAt && parsed.data.expiresAt.length > 0
+    ? new Date(parsed.data.expiresAt)
+    : null;
 
   // Prisma's composite unique with a nullable column is awkward (the
   // generated `key_tenantId` where input doesn't accept null cleanly), so
@@ -300,11 +311,25 @@ export async function upsertFeatureFlag(formData: FormData) {
   if (existing) {
     await db.featureFlag.update({
       where: { id: existing.id },
-      data: { enabled, note: note?.length ? note : null, updatedBy: ctx.userId },
+      data: {
+        enabled,
+        note: note?.length ? note : null,
+        updatedBy: ctx.userId,
+        rolloutPct,
+        expiresAt,
+      },
     });
   } else {
     await db.featureFlag.create({
-      data: { key, tenantId, enabled, note: note?.length ? note : null, updatedBy: ctx.userId },
+      data: {
+        key,
+        tenantId,
+        enabled,
+        note: note?.length ? note : null,
+        updatedBy: ctx.userId,
+        rolloutPct,
+        expiresAt,
+      },
     });
   }
 
@@ -313,7 +338,10 @@ export async function upsertFeatureFlag(formData: FormData) {
     tenantId,
     action: "platform.feature_flag_set",
     entityType: "FeatureFlag",
-    metadata: { key, enabled, scope: tenantId ? "tenant" : "global", actor: ctx.email, note },
+    metadata: {
+      key, enabled, scope: tenantId ? "tenant" : "global",
+      actor: ctx.email, note, rolloutPct, expiresAt: expiresAt?.toISOString() ?? null,
+    },
   });
 
   revalidatePath("/platform/feature-flags");

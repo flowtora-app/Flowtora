@@ -2325,11 +2325,24 @@ model FeatureFlag {
   note      String? // free-form context for platform staff
   updatedBy String? // platform user id who last touched this row
 
+  // Partial-rollout percentage (0–100). When set, isEntitled() should
+  // hash the tenant id + key and bucket — but for now this is metadata
+  // only; the existing entitlements resolver still treats `enabled` as
+  // the final answer. Populated as we plumb it through.
+  rolloutPct Int?
+
+  // Optional auto-expire — when set, the override is treated as
+  // not-set after this timestamp. Useful for time-boxed beta access
+  // that should clean itself up without a cron.
+  expiresAt DateTime?
+
   createdAt DateTime @default(now())
   updatedAt DateTime @updatedAt
 
   @@unique([key, tenantId])
   @@index([tenantId])
+  @@index([key])
+  @@index([expiresAt])
 }
 
 // Phase 17 Slice B — auditable platform-staff impersonation.
