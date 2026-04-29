@@ -36,11 +36,11 @@ const STAGE_LABEL: Record<DunningStage, string> = {
 
 const STAGE_DESCRIPTION: Record<DunningStage, string> = {
   NONE:           "No outstanding payment issue.",
-  PAYMENT_FAILED: "Charge failed — alert sent to billing contact.",
-  REMINDER_1:     "Day 1 — gentle reminder email.",
-  REMINDER_2:     "Day 3 — firmer follow-up.",
-  FINAL_NOTICE:   "Day 7 — last warning before suspend.",
-  SUSPEND:        "Day 14 — account suspended.",
+  PAYMENT_FAILED: "Charge failed — entered the funnel. +24h until next stage.",
+  REMINDER_1:     "+48h until next stage.",
+  REMINDER_2:     "+96h until next stage.",
+  FINAL_NOTICE:   "+168h until auto-suspend.",
+  SUSPEND:        "Account suspended automatically. Resolve to lift.",
   RESOLVED:       "Payment came through. Auto-clears next cycle.",
 };
 
@@ -142,9 +142,12 @@ function Header() {
           Dunning
         </h1>
         <p className="mt-1 text-[13px]" style={{ color: "var(--text-muted)" }}>
-          Recover-payment funnel. Stage advance is manual today — operator
-          clicks the next button. Hitting <strong>SUSPEND</strong> auto-suspends
-          the tenant; resolving lifts the suspension.
+          Recover-payment funnel. Hourly cron auto-advances stages on a
+          24h / 48h / 96h / 168h SLA — operator overrides
+          (Advance / Pause / Resume / Resolve) land here. Hitting
+          <strong> SUSPEND</strong> auto-suspends the tenant; resolving
+          lifts the suspension. Email fan-out per stage is a follow-up —
+          today every transition writes to the audit log.
         </p>
       </div>
       <Link
