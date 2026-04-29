@@ -232,6 +232,43 @@ export async function startImpersonation(tenantId: string, formData: FormData) {
 }
 
 // ────────────────────────────────────────────────────────────
+// Health admin — bulk kill switch for impersonation. Used by the
+// /platform/health admin actions panel as the "if something looks
+// wrong, end every active impersonation right now" lever.
+// ────────────────────────────────────────────────────────────
+
+export async function endAllActiveImpersonations() {
+  const ctx = await requirePlatformAdmin();
+  const now = new Date();
+
+  // Pull the active rows first so we can audit-log each one. (No bulk
+  // updateMany audit since logs need per-row entityId.)
+  const active = await db.impersonationSession.findMany({
+    where:  { endedAt: null },
+    select: { id: true, tenantId: true, platformUserId: true },
+  });
+
+  await db.impersonationSession.updateMany({
+    where: { endedAt: null },
+    data:  { endedAt: now },
+  });
+
+  for (const s of active) {
+    await logPlatformAudit({
+      userId:     ctx.userId,
+      tenantId:   s.tenantId,
+      action:     "platform.impersonation_ended_bulk",
+      entityType: "ImpersonationSession",
+      entityId:   s.id,
+      metadata:   { actor: ctx.email, viaHealth: true },
+    });
+  }
+
+  revalidatePath("/platform/health");
+  redirect(`/platform/health?ok=imp_ended&count=${active.length}`);
+}
+
+// ────────────────────────────────────────────────────────────
 // Slice C — Feature flags / entitlement overrides
 // ────────────────────────────────────────────────────────────
 

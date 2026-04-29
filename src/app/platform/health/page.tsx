@@ -4,6 +4,9 @@ import { requirePlatformStaff } from "@/lib/platform";
 import { HealthKPIBand, type HealthKpi } from "@/components/platform/HealthKPIBand";
 import { ServiceStatusGrid, type ServiceCard, type ServiceStatus } from "@/components/platform/ServiceStatusGrid";
 import { HealthInsights, type HealthInsight } from "@/components/platform/HealthInsights";
+import { ServiceMetricsChart, type MetricsBucket } from "@/components/platform/ServiceMetricsChart";
+import { HealthAdminActions } from "@/components/platform/HealthAdminActions";
+import { HealthLogsPanel, type LogEntry } from "@/components/platform/HealthLogsPanel";
 
 export const dynamic = "force-dynamic";
 
@@ -155,6 +158,73 @@ export default async function PlatformHealthPage({
     }),
   ]);
 
+  // ── Time-series fetches for the charts (separate await — depends
+  // on `windowStart` already being computed). Pull just the
+  // timestamps so we can bucket them in JS. Cheap for windowed
+  // counts and avoids needing date_trunc in raw SQL.
+  const [errorTimestamps, loginFailTimestamps] = await Promise.all([
+    db.emailEvent.findMany({
+      where:    { failedAt: { gte: windowStart } },
+      select:   { failedAt: true },
+      take:     1000,
+    }),
+    db.securityEvent.findMany({
+      where:    { kind: "LOGIN_FAILED", createdAt: { gte: windowStart } },
+      select:   { createdAt: true },
+      take:     1000,
+    }),
+  ]);
+
+  // ── Pull raw rows for the unified log feed (latest 50).
+  // Three sources merged into one timeline; severity derived per-source.
+  const [auditFeed, securityFeed, emailFailFeed] = await Promise.all([
+    db.auditLog.findMany({
+      where: {
+        createdAt: { gte: last30d },
+        OR: [
+          { action: { startsWith: "platform." } },
+          { action: { contains: "suspended" } },
+          { action: { contains: "impersonat" } },
+          { action: { contains: "deleted" } },
+          { action: { contains: "feature_flag" } },
+          { action: { startsWith: "cron." } },
+        ],
+      },
+      orderBy: { createdAt: "desc" },
+      take: 25,
+      select: {
+        id: true,
+        action: true,
+        createdAt: true,
+        entityType: true,
+        entityId: true,
+        tenant: { select: { id: true, name: true } },
+      },
+    }),
+    db.securityEvent.findMany({
+      where: {
+        createdAt: { gte: windowStart },
+        kind: { in: ["LOGIN_FAILED", "LOGIN_LOCKED", "TWO_FACTOR_CHALLENGE_FAILED"] },
+      },
+      orderBy: { createdAt: "desc" },
+      take: 25,
+      select: { id: true, kind: true, createdAt: true, userId: true, ipAddress: true },
+    }),
+    db.emailEvent.findMany({
+      where:   { failedAt: { gte: windowStart } },
+      orderBy: { failedAt: "desc" },
+      take: 15,
+      select: { id: true, kind: true, failedAt: true, toAddress: true, failReason: true },
+    }),
+  ]);
+
+  // Resolve security-event user names in bulk for the log feed.
+  const secUserIds = Array.from(new Set(securityFeed.map((s) => s.userId).filter((x): x is string => Boolean(x))));
+  const secUsers = secUserIds.length
+    ? await db.user.findMany({ where: { id: { in: secUserIds } }, select: { id: true, email: true } })
+    : [];
+  const secUserById = new Map(secUsers.map((u) => [u.id, u]));
+
   // ── Resolve names ───────────────────────────────────────────
   const impUserIds   = Array.from(new Set(activeImpersonations.map((s) => s.platformUserId)));
   const impTenantIds = Array.from(new Set(activeImpersonations.map((s) => s.tenantId)));
@@ -167,6 +237,60 @@ export default async function PlatformHealthPage({
   const impUserById   = new Map(impUsers.map((u) => [u.id, u]));
   const impTenantById = new Map(impTenants.map((t) => [t.id, t]));
   const spikeUserById = new Map(spikeUsers.map((u) => [u.id, u]));
+
+  // ── Time-series buckets for the charts ───────────────────────
+  // Pick a bucket size that keeps the chart legible: hour buckets for
+  // <= 24h windows, day buckets for longer windows.
+  const bucketSizeMs = range === "1h" ? 5 * 60_000 // 5-minute buckets for "last hour"
+    : range === "24h" ? HOUR_MS                     // hourly for 24h
+    : DAY_MS;                                       // daily for 7d / 30d
+  const errorBuckets        = bucketize(errorTimestamps.map((e) => e.failedAt!),     windowStart, now, bucketSizeMs, range);
+  const loginFailBuckets    = bucketize(loginFailTimestamps.map((s) => s.createdAt), windowStart, now, bucketSizeMs, range);
+
+  // ── Unified log feed ─────────────────────────────────────────
+  // Merge audit / security / email-fail rows into a single LogEntry[],
+  // sorted by createdAt desc, capped at 50.
+  const logEntries: LogEntry[] = [
+    ...auditFeed.map<LogEntry>((a) => ({
+      id: `audit-${a.id}`,
+      source: "AUDIT",
+      action: a.action,
+      summary: a.tenant?.name
+        ? `${a.tenant.name} · ${a.action.split(".").pop()}`
+        : a.action,
+      detail: a.entityType ? `${a.entityType}${a.entityId ? ` · ${a.entityId.slice(0, 8)}` : ""}` : undefined,
+      severity:
+        a.action.includes("suspended") || a.action.includes("deleted") ? "danger" :
+        a.action.includes("impersonat") || a.action.includes("feature_flag") ? "warning" :
+        "info",
+      createdAt: a.createdAt.toISOString(),
+    })),
+    ...securityFeed.map<LogEntry>((s) => {
+      const u = s.userId ? secUserById.get(s.userId) : null;
+      return {
+        id: `sec-${s.id}`,
+        source: "SECURITY",
+        action: s.kind,
+        summary: u?.email ?? "unknown user",
+        detail: s.ipAddress ? `from ${s.ipAddress}` : undefined,
+        severity:
+          s.kind === "LOGIN_LOCKED" || s.kind === "TWO_FACTOR_CHALLENGE_FAILED" ? "danger" :
+          "warning",
+        createdAt: s.createdAt.toISOString(),
+      };
+    }),
+    ...emailFailFeed.map<LogEntry>((e) => ({
+      id: `email-${e.id}`,
+      source: "EMAIL",
+      action: `email.${e.kind}.failed`,
+      summary: `to ${e.toAddress}`,
+      detail: e.failReason ?? undefined,
+      severity: "danger",
+      createdAt: e.failedAt!.toISOString(),
+    })),
+  ]
+    .sort((a, b) => b.createdAt.localeCompare(a.createdAt))
+    .slice(0, 50);
 
   // ── Derived metrics ─────────────────────────────────────────
   const deliveryRateWindow = sentWindow === 0 ? 100 : ((sentWindow - failedWindow) / sentWindow) * 100;
@@ -383,6 +507,44 @@ export default async function PlatformHealthPage({
         <SectionHeader title="Service status" />
         <div className="mt-3">
           <ServiceStatusGrid services={services} />
+        </div>
+      </div>
+
+      {/* ── Service monitoring charts ──────────────────── */}
+      <div>
+        <SectionHeader title="Service monitoring" />
+        <div className="mt-3 grid gap-4 lg:grid-cols-2">
+          <Section
+            title="Email failures over time"
+            description={`Bucket size: ${bucketSizeLabel(range)}. ${errorTimestamps.length} event${errorTimestamps.length === 1 ? "" : "s"} in window.`}
+          >
+            <ServiceMetricsChart buckets={errorBuckets} tone="danger" yLabel="failures" />
+          </Section>
+          <Section
+            title="Failed logins over time"
+            description={`Bucket size: ${bucketSizeLabel(range)}. ${loginFailTimestamps.length} attempt${loginFailTimestamps.length === 1 ? "" : "s"} in window.`}
+          >
+            <ServiceMetricsChart buckets={loginFailBuckets} tone="warning" yLabel="failures" />
+          </Section>
+        </div>
+      </div>
+
+      {/* ── Admin actions ──────────────────────────────── */}
+      <div>
+        <SectionHeader title="Admin actions" />
+        <div className="mt-3">
+          <HealthAdminActions
+            activeImpersonationCount={activeImpersonations.length}
+            canMutate={true /* requirePlatformAdmin gates the action server-side */}
+          />
+        </div>
+      </div>
+
+      {/* ── Logs & diagnostics ─────────────────────────── */}
+      <div>
+        <SectionHeader title="Logs &amp; diagnostics" />
+        <div className="mt-3">
+          <HealthLogsPanel entries={logEntries} />
         </div>
       </div>
 
@@ -709,4 +871,56 @@ function ageLabel(d: Date): string {
   if (hrs < 24)  return `${hrs}h ago`;
   const days = Math.round(hrs / 24);
   return `${days}d ago`;
+}
+
+// Bucket a list of Date timestamps into fixed-size time buckets across
+// [start, end]. Empty buckets are filled with count=0 so the chart
+// shows continuous time. Labels are formatted per range so the x-axis
+// stays legible: "14:30" for sub-day windows, "Mon 28" for day buckets.
+function bucketize(
+  timestamps: Date[],
+  start: Date,
+  end: Date,
+  bucketMs: number,
+  range: Range,
+): MetricsBucket[] {
+  const startMs = Math.floor(start.getTime() / bucketMs) * bucketMs;
+  const endMs   = Math.ceil(end.getTime() / bucketMs) * bucketMs;
+  const counts = new Map<number, number>();
+  for (const t of timestamps) {
+    const bucket = Math.floor(t.getTime() / bucketMs) * bucketMs;
+    counts.set(bucket, (counts.get(bucket) ?? 0) + 1);
+  }
+  const out: MetricsBucket[] = [];
+  for (let t = startMs; t < endMs; t += bucketMs) {
+    out.push({
+      t,
+      label: formatBucketLabel(new Date(t), range),
+      count: counts.get(t) ?? 0,
+    });
+  }
+  return out;
+}
+
+function formatBucketLabel(d: Date, range: Range): string {
+  if (range === "1h") {
+    return `${pad2(d.getUTCHours())}:${pad2(d.getUTCMinutes())}`;
+  }
+  if (range === "24h") {
+    return `${pad2(d.getUTCHours())}:00`;
+  }
+  // Day buckets — short weekday + day-of-month for 7d / 30d.
+  const wd = ["Sun","Mon","Tue","Wed","Thu","Fri","Sat"][d.getUTCDay()];
+  return `${wd} ${d.getUTCDate()}`;
+}
+
+function pad2(n: number): string {
+  return String(n).padStart(2, "0");
+}
+
+function bucketSizeLabel(range: Range): string {
+  return range === "1h"  ? "5 minutes"
+    : range === "24h"   ? "1 hour"
+    : range === "7d"    ? "1 day"
+    : "1 day";
 }
