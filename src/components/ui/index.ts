@@ -132,6 +132,18 @@ export type {
   GaugeChartProps,
 } from "./Charts";
 
+export { NotificationCenter } from "./NotificationCenter";
+export type { NotificationCenterProps, NotificationItem } from "./NotificationCenter";
+
+export { UserMenu } from "./UserMenu";
+export type { UserMenuProps, UserMenuItem, UserMenuSection } from "./UserMenu";
+
+export { TenantSwitcher } from "./TenantSwitcher";
+export type { TenantSwitcherProps, TenantOption } from "./TenantSwitcher";
+
+export { CommandPalette } from "./CommandPalette";
+export type { CommandPaletteProps, CommandItem } from "./CommandPalette";
+
 export { ToastProvider, useToast } from "./Toast";
 export type { ToastOptions } from "./Toast";
 
