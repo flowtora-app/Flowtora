@@ -19,6 +19,16 @@ import {
   upsertPriceOverride,
   deletePriceOverride,
 } from "@/app/actions/plan-overrides";
+import {
+  startDunning,
+  advanceDunning,
+  pauseDunning,
+  resumeDunning,
+  resolveDunning,
+  detachCouponFromTenant,
+  updateTenantCurrency,
+} from "@/app/actions/platform-billing";
+import { SUPPORTED_CURRENCIES } from "@/lib/billing-currency";
 import { formatMoney } from "@/lib/format";
 import { resolveAllEntitlements } from "@/lib/entitlements";
 import type { FeatureKey } from "@/lib/entitlements";
@@ -198,6 +208,20 @@ export default async function PlatformTenantDetailPage({
       select: { id: true, slug: true, name: true, priceMonthly: true, priceAnnual: true },
     }),
   ]);
+
+  // Phase 3 — pull the active coupon details if attached. Separate
+  // query so the existing flat Promise.all stays type-stable; cheap
+  // because most tenants have no coupon attached.
+  const activeCoupon = tenant.activeCouponId
+    ? await db.coupon.findUnique({
+        where: { id: tenant.activeCouponId },
+        select: {
+          id: true, code: true, status: true,
+          discountType: true, amount: true, currency: true,
+          validUntil: true, redeemedCount: true, maxRedemptions: true,
+        },
+      })
+    : null;
 
   const tenantFlagByKey = new Map<string, TenantFlagRow>(
     tenantFlagRows.map((f) => [f.key, f]),
@@ -436,6 +460,7 @@ export default async function PlatformTenantDetailPage({
           savePlan={savePlan}
           priceOverrides={priceOverrides}
           pricingPlans={pricingPlans}
+          activeCoupon={activeCoupon}
         />
       )}
 
@@ -532,9 +557,33 @@ function BillingTab({
   savePlan,
   priceOverrides,
   pricingPlans,
+  activeCoupon,
 }: {
-  tenant: { id: string; plan: string; currency: string; stripeCustomerId: string | null; stripeSubscriptionId: string | null; trialEndsAt: Date | null; environment: string };
+  tenant: {
+    id: string;
+    plan: string;
+    currency: string;
+    stripeCustomerId: string | null;
+    stripeSubscriptionId: string | null;
+    trialEndsAt: Date | null;
+    environment: string;
+    dunningStage: string;
+    dunningStartedAt: Date | null;
+    dunningPausedAt: Date | null;
+    dunningLastEventAt: Date | null;
+  };
   canWrite: boolean;
+  activeCoupon: {
+    id: string;
+    code: string;
+    status: string;
+    discountType: "PERCENT" | "FIXED";
+    amount: number;
+    currency: string | null;
+    validUntil: Date | null;
+    redeemedCount: number;
+    maxRedemptions: number | null;
+  } | null;
   savePlan: (formData: FormData) => Promise<void>;
   priceOverrides: Array<{
     id: string;
@@ -550,6 +599,7 @@ function BillingTab({
   pricingPlans: Array<{ id: string; slug: string; name: string; priceMonthly: unknown; priceAnnual: unknown }>;
 }) {
   const stripeMissing = !tenant.stripeCustomerId && tenant.environment === "LIVE";
+  const inDunning = tenant.dunningStage !== "NONE" && tenant.dunningStage !== "RESOLVED";
   return (
     <div className="space-y-6">
       {stripeMissing && (
@@ -559,6 +609,24 @@ function BillingTab({
           body="Live tenants need a Stripe customer to bill. Comp'd or grandfathered accounts can ignore this."
         />
       )}
+
+      {/* Phase 3 — dunning state. Always shown when in funnel; hidden
+          when NONE / RESOLVED. Lets ops staff act without leaving the
+          tenant detail. */}
+      {inDunning && (
+        <DunningPanel tenant={tenant} canWrite={canWrite} />
+      )}
+
+      {/* Phase 3 — active coupon attached to this tenant. Shows the
+          discount that will apply to the next manual invoice. */}
+      {activeCoupon && (
+        <ActiveCouponPanel coupon={activeCoupon} tenantId={tenant.id} canWrite={canWrite} />
+      )}
+
+      {/* Phase 3 — currency picker. Locks every NEW invoice issued for
+          this tenant to the selected currency; existing invoices stay
+          on whatever currency they were issued under. */}
+      <CurrencyPanel tenant={tenant} canWrite={canWrite} />
 
       <div className="grid gap-4 md:grid-cols-2">
         <Section title="Subscription plan" description="Bypasses Stripe — use only for comp'd, legacy, or manual accounts.">
@@ -1250,4 +1318,230 @@ function DT({ label, value, mono }: { label: string; value: string | null | unde
 function pctDelta(current: number, prior: number): number | undefined {
   if (prior <= 0) return current > 0 ? 1 : undefined;
   return (current - prior) / prior;
+}
+
+// ────────────────────────────────────────────────────────────────
+// Phase 3 — Billing tab panels (dunning / coupon / currency)
+// ────────────────────────────────────────────────────────────────
+
+const DUNNING_LABELS: Record<string, string> = {
+  PAYMENT_FAILED: "Payment failed",
+  REMINDER_1:     "Reminder 1",
+  REMINDER_2:     "Reminder 2",
+  FINAL_NOTICE:   "Final notice",
+  SUSPEND:        "Suspended",
+  RESOLVED:       "Resolved",
+  NONE:           "Healthy",
+};
+
+function DunningPanel({
+  tenant,
+  canWrite,
+}: {
+  tenant: {
+    id: string;
+    dunningStage: string;
+    dunningStartedAt: Date | null;
+    dunningPausedAt: Date | null;
+    dunningLastEventAt: Date | null;
+  };
+  canWrite: boolean;
+}) {
+  const days = tenant.dunningStartedAt
+    ? Math.floor((Date.now() - tenant.dunningStartedAt.getTime()) / 86_400_000)
+    : null;
+  const tone = tenant.dunningPausedAt
+    ? { bg: "var(--surface-2)",       border: "var(--border-subtle)", fg: "var(--text-muted)" }
+    : tenant.dunningStage === "SUSPEND" || tenant.dunningStage === "FINAL_NOTICE"
+    ? { bg: "var(--danger-surface)",  border: "var(--danger-fg)",     fg: "var(--danger-fg)" }
+    : { bg: "var(--warning-surface)", border: "var(--warning-fg)",    fg: "var(--warning-fg)" };
+
+  return (
+    <div
+      className="rounded-xl"
+      style={{ background: "var(--surface-1)", border: `1px solid ${tone.border}`, boxShadow: "var(--shadow-sm)" }}
+    >
+      <div
+        className="flex flex-wrap items-center gap-2 px-5 py-3"
+        style={{ background: tone.bg, borderBottom: `1px solid ${tone.border}` }}
+      >
+        <span aria-hidden style={{ color: tone.fg }}>♥</span>
+        <h2 className="text-sm font-semibold uppercase tracking-wide" style={{ color: tone.fg }}>
+          Dunning · {DUNNING_LABELS[tenant.dunningStage] ?? tenant.dunningStage}
+        </h2>
+        {tenant.dunningPausedAt && (
+          <span
+            className="rounded-full px-1.5 py-0.5 text-[10px] font-bold uppercase tracking-wide"
+            style={{ background: "var(--surface-1)", color: tone.fg, border: `1px solid ${tone.fg}` }}
+          >
+            PAUSED
+          </span>
+        )}
+        <span className="ml-auto text-xs" style={{ color: tone.fg }}>
+          {days != null ? `${days} day${days === 1 ? "" : "s"} in funnel` : "just started"}
+        </span>
+      </div>
+      <div className="space-y-3 p-5">
+        <p className="text-sm" style={{ color: "var(--text-muted)" }}>
+          {tenant.dunningPausedAt
+            ? "Paused — automated cron won't advance the stage. Resume to let SLA-based progression resume, or resolve to clear the funnel."
+            : "Hourly cron auto-advances by SLA (24h → 48h → 96h → 168h). Operator overrides land here."}
+        </p>
+        <div className="flex flex-wrap gap-2">
+          {canWrite && tenant.dunningStage !== "SUSPEND" && (
+            <form action={advanceDunning.bind(null, tenant.id)}>
+              <button
+                type="submit"
+                className="ts-focus rounded-md px-3 py-1.5 text-xs font-medium"
+                style={{ background: "var(--warning-fg)", color: "var(--surface-1)" }}
+              >
+                Advance →
+              </button>
+            </form>
+          )}
+          {canWrite && (
+            tenant.dunningPausedAt ? (
+              <form action={resumeDunning.bind(null, tenant.id)}>
+                <button
+                  type="submit"
+                  className="ts-focus rounded-md border px-3 py-1.5 text-xs font-medium"
+                  style={{ borderColor: "var(--border-default)", color: "var(--text-default)", background: "var(--surface-1)" }}
+                >
+                  Resume
+                </button>
+              </form>
+            ) : (
+              <form action={pauseDunning.bind(null, tenant.id)}>
+                <button
+                  type="submit"
+                  className="ts-focus rounded-md border px-3 py-1.5 text-xs font-medium"
+                  style={{ borderColor: "var(--border-default)", color: "var(--text-muted)", background: "var(--surface-1)" }}
+                >
+                  Pause
+                </button>
+              </form>
+            )
+          )}
+          {canWrite && (
+            <form action={resolveDunning.bind(null, tenant.id)}>
+              <button
+                type="submit"
+                className="ts-focus rounded-md px-3 py-1.5 text-xs font-medium"
+                style={{ background: "var(--accent-primary)", color: "var(--accent-on-primary)" }}
+              >
+                Resolve ✓
+              </button>
+            </form>
+          )}
+          <Link
+            href="/platform/billing/dunning"
+            className="ts-focus inline-flex items-center rounded-md border px-3 py-1.5 text-xs font-medium"
+            style={{ borderColor: "var(--border-subtle)", color: "var(--text-muted)", background: "var(--surface-1)" }}
+          >
+            All dunning →
+          </Link>
+        </div>
+      </div>
+    </div>
+  );
+}
+
+function ActiveCouponPanel({
+  coupon,
+  tenantId,
+  canWrite,
+}: {
+  coupon: {
+    id: string;
+    code: string;
+    status: string;
+    discountType: "PERCENT" | "FIXED";
+    amount: number;
+    currency: string | null;
+    validUntil: Date | null;
+    redeemedCount: number;
+    maxRedemptions: number | null;
+  };
+  tenantId: string;
+  canWrite: boolean;
+}) {
+  const discountStr = coupon.discountType === "PERCENT"
+    ? `${coupon.amount}% off`
+    : `${formatMoney(coupon.amount, coupon.currency ?? "USD")} off`;
+  const expired = coupon.validUntil != null && coupon.validUntil.getTime() < Date.now();
+  const inactive = coupon.status !== "ACTIVE";
+  return (
+    <Section
+      title="Active coupon"
+      description="Applied automatically to the next manual invoice we issue this tenant. Subscription cycle picks it up too when Stripe-mirrored (★ chip on /platform/billing/coupons)."
+      right={
+        canWrite ? (
+          <form action={detachCouponFromTenant.bind(null, tenantId)}>
+            <button
+              type="submit"
+              className="ts-focus rounded-md border px-2 py-1 text-xs font-medium"
+              style={{ borderColor: "var(--border-default)", color: "var(--text-muted)", background: "var(--surface-1)" }}
+            >
+              Detach
+            </button>
+          </form>
+        ) : null
+      }
+    >
+      <div className="flex flex-wrap items-center gap-3 px-5 py-4">
+        <code
+          className="rounded px-2 py-1 text-sm font-semibold"
+          style={{ background: "var(--surface-2)", color: "var(--text-default)", border: "1px solid var(--border-subtle)" }}
+        >
+          {coupon.code}
+        </code>
+        <span className="text-sm font-semibold" style={{ color: "var(--text-default)" }}>
+          {discountStr}
+        </span>
+        {(expired || inactive) && (
+          <span
+            className="rounded-full px-1.5 py-0.5 text-[10px] font-bold uppercase tracking-wide"
+            style={{ background: "var(--danger-surface)", color: "var(--danger-fg)", border: "1px solid var(--danger-fg)" }}
+          >
+            {expired ? "Expired" : coupon.status}
+          </span>
+        )}
+        <span className="text-xs" style={{ color: "var(--text-muted)" }}>
+          {coupon.redeemedCount} redeemed{coupon.maxRedemptions ? ` / ${coupon.maxRedemptions} cap` : ""}
+        </span>
+        {coupon.validUntil && (
+          <span className="ml-auto text-xs" style={{ color: expired ? "var(--danger-fg)" : "var(--text-muted)" }}>
+            {expired ? "Expired" : "Valid until"} {coupon.validUntil.toISOString().slice(0, 10)}
+          </span>
+        )}
+      </div>
+    </Section>
+  );
+}
+
+function CurrencyPanel({
+  tenant,
+  canWrite,
+}: {
+  tenant: { id: string; currency: string };
+  canWrite: boolean;
+}) {
+  return (
+    <Section
+      title="Billing currency"
+      description="Locks NEW invoices issued from /platform/billing/invoices to this currency. Existing invoices stay on whatever currency they were issued under (locking historical math is a feature, not a bug)."
+    >
+      <form action={updateTenantCurrency.bind(null, tenant.id)} className="flex flex-wrap items-end gap-3 px-5 py-4">
+        <SelectField
+          label="Currency"
+          name="currency"
+          defaultValue={tenant.currency}
+          options={SUPPORTED_CURRENCIES.map((c) => ({ value: c, label: c }))}
+        />
+        <Button type="submit" disabled={!canWrite}>
+          {canWrite ? "Save currency" : "Requires admin role"}
+        </Button>
+      </form>
+    </Section>
+  );
 }

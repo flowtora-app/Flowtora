@@ -449,7 +449,26 @@ export default async function PlatformTenantsPage({
                       </div>
                     </td>
                     <td className="px-4 py-3">
-                      <StatusPill status={t.status} />
+                      <div className="flex flex-wrap items-center gap-1.5">
+                        <StatusPill status={t.status} />
+                        {t.dunningStage !== "NONE" && t.dunningStage !== "RESOLVED" && (
+                          <DunningChip stage={t.dunningStage} paused={!!t.dunningPausedAt} />
+                        )}
+                        {t.activeCouponId && (
+                          <Link
+                            href="/platform/billing/coupons"
+                            className="rounded-full px-1.5 py-0.5 text-[10px] font-semibold uppercase tracking-wide"
+                            style={{
+                              background: "var(--accent-surface)",
+                              color: "var(--accent-primary)",
+                              border: "1px solid var(--accent-primary)",
+                            }}
+                            title="Active coupon attached — applies to next manual invoice"
+                          >
+                            ★ Coupon
+                          </Link>
+                        )}
+                      </div>
                     </td>
                     <td className="px-4 py-3">
                       <span
@@ -530,6 +549,34 @@ function StatusPill({ status }: { status: string }) {
     >
       {status.toLowerCase().replace("_", " ")}
     </span>
+  );
+}
+
+function DunningChip({ stage, paused }: { stage: string; paused: boolean }) {
+  // Phase 3 — at-a-glance dunning indicator on the tenants list. Only
+  // renders when the stage is meaningful (not NONE / RESOLVED).
+  const palette =
+    paused                       ? { bg: "var(--surface-2)",       fg: "var(--text-muted)" } :
+    stage === "SUSPEND"          ? { bg: "var(--danger-surface)",  fg: "var(--danger-fg)"  } :
+    stage === "FINAL_NOTICE"     ? { bg: "var(--danger-surface)",  fg: "var(--danger-fg)"  } :
+    stage === "REMINDER_2"       ? { bg: "var(--warning-surface)", fg: "var(--warning-fg)" } :
+                                   { bg: "var(--warning-surface)", fg: "var(--warning-fg)" };
+  const labels: Record<string, string> = {
+    PAYMENT_FAILED: "DUNNING · 1",
+    REMINDER_1:     "DUNNING · 2",
+    REMINDER_2:     "DUNNING · 3",
+    FINAL_NOTICE:   "DUNNING · 4",
+    SUSPEND:        "DUNNING · 5",
+  };
+  return (
+    <Link
+      href="/platform/billing/dunning"
+      className="rounded-full px-1.5 py-0.5 text-[10px] font-semibold uppercase tracking-wide"
+      style={{ background: palette.bg, color: palette.fg }}
+      title={paused ? "Dunning paused — operator override" : `Dunning stage: ${stage.replace(/_/g, " ").toLowerCase()}`}
+    >
+      {paused ? "DUNNING · paused" : labels[stage] ?? stage}
+    </Link>
   );
 }
 
