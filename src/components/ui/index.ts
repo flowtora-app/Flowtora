@@ -89,6 +89,27 @@ export type { FilterBarProps, ActiveFilter } from "./FilterBar";
 export { SearchWithSuggestions } from "./SearchWithSuggestions";
 export type { SearchWithSuggestionsProps, Suggestion } from "./SearchWithSuggestions";
 
+export { Combobox, MultiCombobox } from "./Combobox";
+export type { ComboboxProps, ComboboxOption, MultiComboboxProps } from "./Combobox";
+
+export { DatePicker, DateRangePicker, CalendarMonth } from "./DatePicker";
+export type { DatePickerProps, DateRangePickerProps, DateRange } from "./DatePicker";
+
+export { TimePicker } from "./TimePicker";
+export type { TimePickerProps, TimeValue } from "./TimePicker";
+
+export { FileUpload } from "./FileUpload";
+export type { FileUploadProps, UploadedFile } from "./FileUpload";
+
+export { TagsInput } from "./TagsInput";
+export type { TagsInputProps } from "./TagsInput";
+
+export { OtpInput } from "./OtpInput";
+export type { OtpInputProps } from "./OtpInput";
+
+export { ColorPicker } from "./ColorPicker";
+export type { ColorPickerProps } from "./ColorPicker";
+
 export { ToastProvider, useToast } from "./Toast";
 export type { ToastOptions } from "./Toast";
 
