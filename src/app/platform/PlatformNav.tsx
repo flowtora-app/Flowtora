@@ -121,6 +121,22 @@ export function PlatformNav({
         className="shrink-0 space-y-1 px-2.5 py-2.5"
         style={{ borderTop: "1px solid var(--border-subtle)" }}
       >
+        {/* Internal: design-system showcase. Lives outside the 21-item
+            top-level nav since it's a developer/admin reference, not a
+            workspace surface. */}
+        <Link
+          href="/platform/design"
+          aria-current={pathname === "/platform/design" ? "page" : undefined}
+          className="ts-focus flex items-center gap-2 rounded-md px-2 py-1.5 text-[12px] transition-colors hover:bg-[var(--surface-3)]"
+          style={{
+            color: pathname === "/platform/design" ? "var(--text-default)" : "var(--text-muted)",
+          }}
+          title="Design system reference (internal)"
+        >
+          <Icon.Palette size={14} />
+          <span>Design system</span>
+        </Link>
+
         {/* User identity (links to /platform/profile) + sign-out icon.
             The avatar + name area is a profile link; sign-out is its
             own icon button so the two intents don't collide. */}
