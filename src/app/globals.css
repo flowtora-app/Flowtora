@@ -216,13 +216,32 @@
   --duration-base: 180ms;
   --duration-slow: 260ms;
 
-  /* Z-index scale */
-  --z-dropdown: 100;
+  /* Z-index scale — Spec Page 0 §0.4. */
+  --z-base: 0;
+  --z-elevated: 10;
   --z-sticky: 200;
-  --z-overlay: 800;
-  --z-modal: 900;
-  --z-toast: 1000;
-  --z-tooltip: 1100;
+  --z-dropdown: 1000;
+  --z-fixed: 1030;
+  --z-modal-backdrop: 1040;
+  --z-modal: 1050;
+  --z-slideover: 1060;
+  --z-popover: 1070;
+  --z-tooltip: 1080;
+  --z-toast: 1090;
+  --z-impersonation-banner: 1100;
+  --z-command-palette: 1200;
+
+  /* ── Motion — Spec Page 0 §0.7 ─────────────────────────────────
+   * Existing fast/base/slow tokens are preserved as legacy aliases
+   * below; new spec-named durations + easing curves added so future
+   * primitives can target the spec values directly. */
+  --ease-bounce: cubic-bezier(0.68, -0.55, 0.27, 1.55);
+  --duration-75:  75ms;
+  --duration-150: 150ms;
+  --duration-200: 200ms;
+  --duration-300: 300ms;
+  --duration-500: 500ms;
+  --duration-700: 700ms;
 
   /* ── Legacy aliases (do not remove) ── */
   --bg: var(--surface-0);

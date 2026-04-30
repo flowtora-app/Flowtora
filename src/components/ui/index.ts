@@ -180,6 +180,31 @@ export type { VerticalTimelineProps, HorizontalTimelineProps, TimelineEntry, Gan
 export { DiffIndicator, PullQuote } from "./DiffIndicator";
 export type { DiffIndicatorProps, PullQuoteProps, ChangeKind } from "./DiffIndicator";
 
+export { AppShell } from "./AppShell";
+export type { AppShellProps } from "./AppShell";
+
+export { TopNavBar } from "./TopNavBar";
+export type { TopNavBarProps } from "./TopNavBar";
+
+export {
+  ListPageTemplate,
+  DetailPageTemplate,
+  SettingsPageTemplate,
+  SettingsCard,
+  WizardTemplate,
+  EmptyStateTemplate,
+  ErrorPageTemplate,
+} from "./LayoutTemplates";
+export type {
+  ListPageTemplateProps,
+  DetailPageTemplateProps,
+  SettingsPageTemplateProps,
+  SettingsCardProps,
+  WizardTemplateProps,
+  EmptyStateTemplateProps,
+  ErrorPageTemplateProps,
+} from "./LayoutTemplates";
+
 export { ToastProvider, useToast } from "./Toast";
 export type { ToastOptions } from "./Toast";
 
