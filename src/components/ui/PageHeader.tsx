@@ -25,8 +25,8 @@ export function PageHeader({
   className,
 }: PageHeaderProps) {
   return (
-    <div className={cn("flex items-start justify-between gap-4", className)}>
-      <div className="min-w-0">
+    <div className={cn("flex flex-wrap items-start justify-between gap-3 md:gap-4", className)}>
+      <div className="min-w-0 flex-1">
         {eyebrow && (
           <div
             className="text-xs font-medium uppercase tracking-wider"
@@ -44,7 +44,11 @@ export function PageHeader({
           </p>
         )}
       </div>
-      {actions && <div className="flex shrink-0 items-center gap-2">{actions}</div>}
+      {/* Actions wrap onto a second line on narrow viewports rather
+          than staying anchored to a too-narrow flex item. flex-wrap
+          on the actions row itself keeps individual buttons from
+          overflowing when there are 4-5 of them. */}
+      {actions && <div className="flex flex-wrap items-center gap-2">{actions}</div>}
     </div>
   );
 }

@@ -79,7 +79,7 @@ export default async function PlatformDashboardPage({
   const range = resolveRange(sp);
 
   return (
-    <div className="space-y-6">
+    <div className="min-w-0 space-y-6">
       <Suspense fallback={<HeaderSkeleton />}>
         <Header rangeLabel={range.label} userEmail={ctx.email} />
       </Suspense>

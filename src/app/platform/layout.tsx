@@ -30,7 +30,13 @@ export default async function PlatformLayout({ children }: { children: React.Rea
           await signOut({ redirectTo: "/" });
         }}
       />
-      <main className="flex-1 px-8 py-8">
+      {/* `min-w-0` is the secret sauce here — without it, flex
+          children default to `min-width: auto` which prevents them
+          from shrinking below their content. That makes wide tables
+          push the whole layout horizontally instead of allowing
+          inner overflow-x scrolling. Tighter padding on narrow
+          viewports gives the table a few more px to breathe. */}
+      <main className="min-w-0 flex-1 px-4 py-4 md:px-8 md:py-8">
         {(settings.maintenanceMode || settings.featureFreezeMode) && (
           <div className="mb-6 space-y-2">
             {settings.maintenanceMode && (

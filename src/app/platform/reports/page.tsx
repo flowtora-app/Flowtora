@@ -209,7 +209,7 @@ export default async function ReportsLibraryPage({
   const ownerNames = Array.from(new Set(items.filter((r) => r.ownerName).map((r) => r.ownerName!)));
 
   return (
-    <div className="space-y-6">
+    <div className="min-w-0 space-y-6">
       <div>
         <Breadcrumb items={[{ label: "Platform", href: "/platform" }, { label: "Reports & Insights" }]} />
         <div className="mt-3">

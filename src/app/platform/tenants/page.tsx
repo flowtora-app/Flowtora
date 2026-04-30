@@ -33,12 +33,18 @@ const VALID_SORT: Record<string, true> = {
   mrr: true, users: true, jobs: true, health: true,
   created: true, activity: true, owner: true,
 };
+// Tighter default column set so the table fits narrower viewports
+// without forcing horizontal scroll. Country, tags, jobs, and CSM
+// are still toggle-able from the column-toggle button (when wired)
+// but stay hidden by default. The full column set lives in the
+// CSV/XLSX export so nothing is actually lost — this is purely a
+// list-view density tradeoff.
 const DEFAULT_VISIBLE: Record<string, boolean> = {
-  // Default columns from the spec table.
+  // High-priority defaults — visible everywhere.
   name: true, plan: true, status: true, mrr: true, users: true,
-  jobs: true, health: true, created: true, activity: true,
-  owner: true, country: true, tags: true, csm: true,
-  // Optional columns hidden by default — toggle reveals them.
+  health: true, activity: true, owner: true,
+  // Toggle-in (hidden by default).
+  jobs: false, created: false, country: false, tags: false, csm: false,
   trialEnds: false, domain: false, sso: false, mfa: false,
   storage: false, industry: false, source: false,
 };
@@ -155,7 +161,7 @@ export default async function PlatformTenantsPage({
   const activeHref = tabHrefFor(scope);
 
   return (
-    <div className="space-y-5">
+    <div className="min-w-0 space-y-5">
       {/* Header */}
       <div>
         <Breadcrumb items={[{ label: "Platform", href: "/platform" }, { label: "Tenants" }]} />

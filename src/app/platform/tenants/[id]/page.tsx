@@ -264,7 +264,7 @@ export default async function PlatformTenantDetailPage({
   const headerCtx = { tenant, planName, mrr, ltv, healthScore, ownerUser };
 
   return (
-    <div className="space-y-5">
+    <div className="min-w-0 space-y-5">
       {header}
 
       {/* Status banner — reflects the most-impactful state. */}

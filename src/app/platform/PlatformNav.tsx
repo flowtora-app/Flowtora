@@ -80,9 +80,74 @@ export function PlatformNav({
   const initials = deriveInitials(userName ?? userEmail);
   const displayName = userName?.trim() || userEmail;
 
+  // Mobile drawer state — sidebar collapses below `lg` (1024px) and
+  // re-opens via the hamburger in the top bar (rendered inside the
+  // platform layout). On desktop the drawer is always open.
+  const [open, setOpen] = React.useState(false);
+
+  // Close the drawer on every navigation. We listen to pathname
+  // changes so clicking a nav item dismisses the overlay.
+  const lastPathRef = React.useRef(pathname);
+  React.useEffect(() => {
+    if (lastPathRef.current !== pathname) {
+      setOpen(false);
+      lastPathRef.current = pathname;
+    }
+  }, [pathname]);
+
   return (
+    <>
+      {/* Mobile top bar — only visible below `lg`. The desktop sidebar
+          renders its own brand row inside the aside. */}
+      <header
+        className="ts-platform-mobile-bar lg:hidden"
+        style={{
+          position: "sticky",
+          top: 0,
+          zIndex: 40,
+          background: "var(--surface-1)",
+          borderBottom: "1px solid var(--border-subtle)",
+        }}
+      >
+        <div className="flex items-center gap-2 px-3 py-2">
+          <button
+            type="button"
+            onClick={() => setOpen(true)}
+            aria-label="Open navigation"
+            className="ts-focus inline-flex h-9 w-9 items-center justify-center rounded-md hover:bg-[var(--surface-2)]"
+            style={{ color: "var(--text-default)" }}
+          >
+            ☰
+          </button>
+          <Link
+            href="/select-tenant"
+            aria-label="Flowtora home"
+            className="ts-focus inline-flex items-center gap-2"
+          >
+            <Logomark size={24} />
+            <Wordmark style={{ fontSize: 14, letterSpacing: "-0.01em" }} />
+          </Link>
+        </div>
+      </header>
+
+      {/* Backdrop — clicking it closes the drawer on mobile. */}
+      {open && (
+        <button
+          type="button"
+          aria-label="Close navigation"
+          onClick={() => setOpen(false)}
+          className="lg:hidden"
+          style={{
+            position: "fixed",
+            inset: 0,
+            background: "rgba(0,0,0,0.4)",
+            zIndex: 50,
+          }}
+        />
+      )}
+
     <aside
-      className="flex flex-col"
+      className={`flex flex-col ${open ? "ts-platform-nav--open" : ""}`}
       style={{
         width: 248,
         background: "var(--surface-1)",
@@ -90,7 +155,9 @@ export function PlatformNav({
         position: "sticky",
         top: 0,
         height: "100vh",
+        zIndex: 60,
       }}
+      data-platform-nav-open={open ? "true" : "false"}
     >
       {/* ── Flowtora brand row ─────────────────────────────────────── */}
       <Link
@@ -195,6 +262,7 @@ export function PlatformNav({
         </div>
       </div>
     </aside>
+    </>
   );
 }
 

@@ -726,6 +726,28 @@ button.underline:not([class*="ts-btn"]):not(:disabled):hover {
   animation: ts-activity-live-pulse 2s ease-out infinite;
 }
 
+/* Platform sidebar responsiveness.
+   Below the `lg` breakpoint (1024px), the sidebar slides off-canvas
+   and reappears via the hamburger button on the mobile top bar.
+   Above 1024px the desktop sidebar is always visible.
+*/
+@media (max-width: 1023px) {
+  aside[data-platform-nav-open] {
+    position: fixed !important;
+    top: 0;
+    left: 0;
+    bottom: 0;
+    height: 100dvh;
+    transform: translateX(-100%);
+    transition: transform 200ms ease-out;
+    box-shadow: 0 0 0 0 transparent;
+  }
+  aside[data-platform-nav-open="true"] {
+    transform: translateX(0);
+    box-shadow: 0 12px 40px rgba(0, 0, 0, 0.35);
+  }
+}
+
 
 /* Brand logomark — swap variants based on theme. Default theme is
    dark, so the dark variant shows by default; [data-theme="light"]
