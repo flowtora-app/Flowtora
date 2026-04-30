@@ -610,6 +610,13 @@ model User {
   // private views and any digest schedules they own.
   platformSavedViews     PlatformSavedView[]
   activitySubscriptions  ActivitySubscription[]
+
+  // Page 3 — Reports & Insights: customised reports, per-user state
+  // (favourites + pinned + last viewed), and scheduled deliveries
+  // owned by this admin.
+  reports             Report[]
+  reportUserStates    ReportUserState[]
+  reportSchedules     ReportSchedule[]
 }
 
 // Platform-side roles. The first three (SUPER_ADMIN, SITE_MANAGER,
@@ -5101,4 +5108,141 @@ enum ActivitySubscriptionFrequency {
   LIVE
   HOURLY
   DAILY
+}
+
+// ────────────────────────────────────────────────────────────
+// Page 3 — Reports & Insights primitives.
+//
+// Two-tier model. Pre-built reports live in code as a registry
+// (src/server/platform/reports/registry.ts) — stable, code-shipped,
+// no DB row required. The DB tables here only store:
+//
+//   • Report           — user-saved customizations of a prebuilt
+//                        report (changed filters, renamed). The
+//                        `key` references the registry entry.
+//   • ReportUserState  — per-user favourites + pinned + last-viewed.
+//                        One row per (userId, reportKey).
+//   • ReportSchedule   — periodic deliveries (email digest of the
+//                        rendered report) on hourly/daily/weekly/
+//                        monthly cadence with optional CRON override.
+// ────────────────────────────────────────────────────────────
+
+model Report {
+  id     String @id @default(cuid())
+  // Registry key for prebuilt reports the user customised. NULL for
+  // fully-custom reports authored in the (future) builder.
+  key    String?
+  name   String
+  description String?
+  category    String?
+  // Saved filter querystring. Same round-trip format as the activity
+  // feed — paste into the URL and the report renders identically.
+  filters     String  @default("")
+  // JSON blob for any chart-config overrides the user makes in the
+  // detail-view header (e.g. chart type, dimension grouping). The
+  // shape is per-report so we don't constrain it here.
+  chartConfig Json?
+
+  ownerUserId String
+  isShared    Boolean @default(false)
+
+  createdAt DateTime @default(now())
+  updatedAt DateTime @updatedAt
+
+  owner      User                @relation(fields: [ownerUserId], references: [id], onDelete: Cascade)
+  userStates ReportUserState[]
+  schedules  ReportSchedule[]
+
+  @@index([ownerUserId, updatedAt])
+  @@index([key])
+  @@index([isShared])
+}
+
+model ReportUserState {
+  id          String @id @default(cuid())
+  userId      String
+  // Either references a Report row (custom / saved report) OR a
+  // prebuilt report by registry key. We store BOTH so the same
+  // table covers favouriting a built-in MRR Waterfall AND a custom
+  // saved report. Exactly one is set; enforced at write time.
+  reportId    String?
+  reportKey   String?
+
+  isFavorite   Boolean @default(false)
+  isPinned     Boolean @default(false)
+  lastViewedAt DateTime?
+
+  createdAt DateTime @default(now())
+  updatedAt DateTime @updatedAt
+
+  user   User    @relation(fields: [userId], references: [id], onDelete: Cascade)
+  report Report? @relation(fields: [reportId], references: [id], onDelete: Cascade)
+
+  @@unique([userId, reportId])
+  @@unique([userId, reportKey])
+  @@index([userId, isPinned])
+  @@index([userId, isFavorite])
+}
+
+model ReportSchedule {
+  id String @id @default(cuid())
+
+  // Either references a Report (custom) OR a prebuilt by key.
+  reportId  String?
+  reportKey String?
+
+  ownerUserId String
+  // Display name shown in the "Active schedules" panel + email subject.
+  name        String
+
+  // Comma-separated list of recipient emails. The schedule modal
+  // turns chips into a CSV before submit; the cron splits it back.
+  recipients  String
+
+  // PDF reserved for a future slice (needs headless-chromium or a
+  // PDF renderer dep). Today CSV / HTML inline are wired.
+  format      ReportScheduleFormat @default(HTML_EMAIL)
+
+  frequency       ReportScheduleFrequency @default(DAILY)
+  // For WEEKLY: 0=Sun..6=Sat. For MONTHLY: day of month (1..28).
+  dayOfWeek       Int?
+  dayOfMonth      Int?
+  // HH:MM in the timezone below. Defaults to 13:00 UTC (matches the
+  // existing reminders cron) so all scheduled-report emails land at
+  // a predictable time.
+  timeOfDay       String  @default("13:00")
+  timezone        String  @default("UTC")
+  // Override: a raw CRON expression that wins over the simple
+  // frequency fields. Validated by the create action.
+  cronExpression  String?
+
+  // Filter snapshot at create-time so the schedule keeps firing the
+  // same view even if the user later changes the report's defaults.
+  filters String @default("")
+
+  pausedAt        DateTime?
+  lastDeliveredAt DateTime?
+
+  createdAt DateTime @default(now())
+  updatedAt DateTime @updatedAt
+
+  owner  User    @relation(fields: [ownerUserId], references: [id], onDelete: Cascade)
+  report Report? @relation(fields: [reportId], references: [id], onDelete: Cascade)
+
+  @@index([ownerUserId])
+  @@index([pausedAt, lastDeliveredAt])
+}
+
+enum ReportScheduleFormat {
+  HTML_EMAIL
+  CSV
+  // Reserved — PDF needs headless-chromium or a PDF lib; not wired today.
+  PDF
+}
+
+enum ReportScheduleFrequency {
+  DAILY
+  WEEKLY
+  MONTHLY
+  CRON
 }

@@ -16,6 +16,10 @@
     {
       "path": "/api/cron/activity-subscriptions",
       "schedule": "*/5 * * * *"
+    },
+    {
+      "path": "/api/cron/report-deliveries",
+      "schedule": "0 * * * *"
     }
   ]
 }
