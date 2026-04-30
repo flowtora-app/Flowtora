@@ -17,6 +17,7 @@ import { findReportByKey, REPORT_CATEGORIES } from "@/server/platform/reports/re
 import { loadReport, type ReportFilters } from "@/server/platform/reports/loaders";
 import { ReportVizRenderer } from "../_components/ReportViz";
 import { ReportHeaderActions, type ScheduleRow } from "../_components/ReportHeaderActions";
+import { ReportDataTable } from "../_components/ReportDataTable";
 
 export const dynamic = "force-dynamic";
 
@@ -40,11 +41,11 @@ export default async function ReportDetailPage({
   const entry = findReportByKey(key);
   if (!entry) notFound();
 
-  // Touch lastViewedAt + load existing per-user state.
+  // Touch lastViewedAt + bump viewCount + load existing per-user state.
   await db.reportUserState.upsert({
     where: { userId_reportKey: { userId: ctx.userId, reportKey: key } },
-    update: { lastViewedAt: new Date() },
-    create: { userId: ctx.userId, reportKey: key, lastViewedAt: new Date() },
+    update: { lastViewedAt: new Date(), viewCount: { increment: 1 } },
+    create: { userId: ctx.userId, reportKey: key, lastViewedAt: new Date(), viewCount: 1 },
   });
   const userState = await db.reportUserState.findUnique({
     where: { userId_reportKey: { userId: ctx.userId, reportKey: key } },
@@ -133,7 +134,7 @@ export default async function ReportDetailPage({
         <form className="flex flex-wrap items-end gap-3" method="get">
           <FilterField label="Since" name="since" defaultValue={sp.since ?? ""} />
           <FilterField label="Until" name="until" defaultValue={sp.until ?? ""} />
-          <Button type="submit" size="sm">Apply</Button>
+          <Button type="submit" size="sm">Run now</Button>
           {(sp.since || sp.until) && (
             <Link href={`/platform/reports/${entry.key}`} className="text-[12px]" style={{ color: "var(--text-muted)" }}>
               Reset
@@ -187,10 +188,10 @@ export default async function ReportDetailPage({
               <div className="px-4 pt-4 pb-2">
                 <CardHeader
                   title="Data"
-                  description={`${payload.rows.length.toLocaleString()} rows`}
+                  description={`${payload.rows.length.toLocaleString()} rows · click a column header to sort`}
                 />
               </div>
-              <DataTable rows={payload.rows} />
+              <ReportDataTable rows={payload.rows} />
             </Card>
           </div>
 
@@ -256,51 +257,3 @@ function FilterField({ label, name, defaultValue }: { label: string; name: strin
   );
 }
 
-function DataTable({ rows }: { rows: { [k: string]: string | number | null }[] }) {
-  if (rows.length === 0) {
-    return (
-      <div className="p-6 text-center text-[12px]" style={{ color: "var(--text-muted)" }}>No rows — try widening the filter window.</div>
-    );
-  }
-  const columns = Array.from(new Set(rows.flatMap((r) => Object.keys(r))));
-  return (
-    <div className="overflow-x-auto">
-      <table className="w-full text-[12px]">
-        <thead>
-          <tr style={{ background: "var(--surface-2)" }}>
-            {columns.map((c) => (
-              <th key={c} className="px-3 py-2 text-left text-[10px] font-semibold uppercase tracking-wide"
-                  style={{ color: "var(--text-muted)", borderBottom: "1px solid var(--border-subtle)" }}>
-                {humanizeKey(c)}
-              </th>
-            ))}
-          </tr>
-        </thead>
-        <tbody>
-          {rows.slice(0, 250).map((r, i) => (
-            <tr key={i} style={{ borderBottom: "1px solid var(--border-subtle)" }}>
-              {columns.map((c) => {
-                const v = r[c];
-                const isNum = typeof v === "number";
-                return (
-                  <td key={c} className={`px-3 py-1.5 ${isNum ? "text-right font-mono tabular-nums" : ""}`} style={{ color: "var(--text-default)" }}>
-                    {v == null ? <span style={{ color: "var(--text-faint)" }}>—</span> : String(v)}
-                  </td>
-                );
-              })}
-            </tr>
-          ))}
-        </tbody>
-      </table>
-      {rows.length > 250 && (
-        <div className="px-3 py-2 text-[11px]" style={{ color: "var(--text-faint)" }}>
-          Showing 250 of {rows.length.toLocaleString()} rows. Use Export CSV for the full dataset.
-        </div>
-      )}
-    </div>
-  );
-}
-
-function humanizeKey(k: string): string {
-  return k.replace(/([A-Z])/g, " $1").replace(/^./, (c) => c.toUpperCase()).replace(/_/g, " ");
-}

@@ -6,21 +6,24 @@
 // future report builder; the actions below cover the surfaces the
 // library + detail pages exercise today.
 
+import { redirect } from "next/navigation";
 import { revalidatePath } from "next/cache";
 import { z } from "zod";
 import { db } from "@/lib/db";
 import { requirePlatformStaff, logPlatformAudit } from "@/lib/platform";
+import { findReportByKey } from "@/server/platform/reports/registry";
 
 const NAME_LIMIT = 80;
 const FILTERS_LIMIT = 4_000;
 
-/* ── Per-user state: favorite + pin + lastViewedAt ─────────── */
+/* ── Per-user state: favorite + pin + lastViewedAt + viewCount ───── */
 
 const stateSchema = z.object({
   reportKey: z.string().min(1).max(120),
   isFavorite: z.union([z.literal("on"), z.literal("off")]).optional(),
   isPinned:   z.union([z.literal("on"), z.literal("off")]).optional(),
   touchLastViewed: z.union([z.literal("1"), z.literal("0")]).optional(),
+  bumpViewCount:   z.union([z.literal("1"), z.literal("0")]).optional(),
 });
 
 export async function setReportUserState(formData: FormData) {
@@ -28,19 +31,232 @@ export async function setReportUserState(formData: FormData) {
   const parsed = stateSchema.safeParse(Object.fromEntries(formData.entries()));
   if (!parsed.success) return { ok: false, error: "Invalid input" } as const;
 
-  const data: { isFavorite?: boolean; isPinned?: boolean; lastViewedAt?: Date } = {};
+  const data: { isFavorite?: boolean; isPinned?: boolean; lastViewedAt?: Date; viewCount?: { increment: number } } = {};
   if (parsed.data.isFavorite != null) data.isFavorite = parsed.data.isFavorite === "on";
   if (parsed.data.isPinned   != null) data.isPinned   = parsed.data.isPinned === "on";
   if (parsed.data.touchLastViewed === "1") data.lastViewedAt = new Date();
+  if (parsed.data.bumpViewCount === "1") data.viewCount = { increment: 1 };
 
   await db.reportUserState.upsert({
     where: { userId_reportKey: { userId: ctx.userId, reportKey: parsed.data.reportKey } },
     update: data,
-    create: { userId: ctx.userId, reportKey: parsed.data.reportKey, ...data },
+    create: {
+      userId: ctx.userId,
+      reportKey: parsed.data.reportKey,
+      isFavorite: data.isFavorite ?? false,
+      isPinned:   data.isPinned ?? false,
+      lastViewedAt: data.lastViewedAt ?? null,
+      viewCount: parsed.data.bumpViewCount === "1" ? 1 : 0,
+    },
   });
 
   revalidatePath("/platform/reports");
   revalidatePath(`/platform/reports/${parsed.data.reportKey}`);
+  return { ok: true } as const;
+}
+
+/* ── Duplicate / share / delete / rename ─────────────────────── */
+
+const dupeSchema = z.object({
+  fromKey: z.string().min(1).max(120),
+  name:    z.string().max(NAME_LIMIT).optional(),
+  filters: z.string().max(FILTERS_LIMIT).optional(),
+});
+
+/** Fork a prebuilt registry entry into a new custom Report row.
+ *  Redirects to the new custom report's detail page. */
+export async function duplicateReport(formData: FormData) {
+  const ctx = await requirePlatformStaff();
+  const parsed = dupeSchema.safeParse(Object.fromEntries(formData.entries()));
+  if (!parsed.success) return { ok: false, error: "Invalid input" } as const;
+  const source = findReportByKey(parsed.data.fromKey);
+  if (!source) return { ok: false, error: "Unknown source report" } as const;
+
+  const created = await db.report.create({
+    data: {
+      key: source.key,
+      name: parsed.data.name?.trim() || `${source.name} (copy)`,
+      description: source.description,
+      category: source.category,
+      filters: parsed.data.filters ?? "",
+      ownerUserId: ctx.userId,
+      isShared: false,
+    },
+  });
+  await db.reportVersion.create({
+    data: {
+      reportId: created.id,
+      name: created.name,
+      description: created.description,
+      category: created.category,
+      filters: created.filters,
+      authorUserId: ctx.userId,
+      note: `Forked from prebuilt ${source.key}`,
+    },
+  });
+  await logPlatformAudit({
+    userId: ctx.userId,
+    action: "platform.report_duplicated",
+    entityType: "Report",
+    entityId: created.id,
+    metadata: { actor: ctx.email, fromKey: source.key, name: created.name },
+  });
+  revalidatePath("/platform/reports");
+  redirect(`/platform/reports/r/${created.id}`);
+}
+
+const renameSchema = z.object({
+  reportId:    z.string().min(1),
+  name:        z.string().min(1).max(NAME_LIMIT),
+  description: z.string().max(2_000).optional(),
+});
+
+export async function renameReport(formData: FormData) {
+  const ctx = await requirePlatformStaff();
+  const parsed = renameSchema.safeParse(Object.fromEntries(formData.entries()));
+  if (!parsed.success) return { ok: false, error: "Invalid input" } as const;
+  const r = await db.report.findUnique({
+    where: { id: parsed.data.reportId },
+    select: { id: true, ownerUserId: true, name: true, description: true, category: true, filters: true, chartConfig: true },
+  });
+  if (!r) return { ok: false, error: "Not found" } as const;
+  if (r.ownerUserId !== ctx.userId) return { ok: false, error: "Forbidden" } as const;
+
+  await db.$transaction(async (tx) => {
+    // Snapshot the prior state as a version BEFORE updating.
+    await tx.reportVersion.create({
+      data: {
+        reportId: r.id,
+        name: r.name,
+        description: r.description,
+        category: r.category,
+        filters: r.filters,
+        chartConfig: r.chartConfig === null ? undefined : r.chartConfig,
+        authorUserId: ctx.userId,
+        note: "Auto-snapshot before rename",
+      },
+    });
+    await tx.report.update({
+      where: { id: r.id },
+      data: {
+        name:        parsed.data.name.trim(),
+        description: parsed.data.description?.trim() ?? r.description,
+      },
+    });
+  });
+  await logPlatformAudit({
+    userId: ctx.userId,
+    action: "platform.report_renamed",
+    entityType: "Report",
+    entityId: r.id,
+    metadata: { actor: ctx.email, from: r.name, to: parsed.data.name },
+  });
+  revalidatePath(`/platform/reports/r/${r.id}`);
+  return { ok: true } as const;
+}
+
+const shareSchema = z.object({
+  reportId: z.string().min(1),
+  isShared: z.union([z.literal("on"), z.literal("off")]),
+});
+
+export async function setReportShared(formData: FormData) {
+  const ctx = await requirePlatformStaff();
+  const parsed = shareSchema.safeParse(Object.fromEntries(formData.entries()));
+  if (!parsed.success) return { ok: false, error: "Invalid input" } as const;
+  const r = await db.report.findUnique({ where: { id: parsed.data.reportId }, select: { id: true, ownerUserId: true, name: true } });
+  if (!r) return { ok: false, error: "Not found" } as const;
+  if (r.ownerUserId !== ctx.userId) return { ok: false, error: "Forbidden" } as const;
+  const isShared = parsed.data.isShared === "on";
+  await db.report.update({ where: { id: r.id }, data: { isShared } });
+  await logPlatformAudit({
+    userId: ctx.userId,
+    action: isShared ? "platform.report_shared" : "platform.report_unshared",
+    entityType: "Report",
+    entityId: r.id,
+    metadata: { actor: ctx.email, name: r.name },
+  });
+  revalidatePath(`/platform/reports/r/${r.id}`);
+  return { ok: true } as const;
+}
+
+export async function deleteReport(formData: FormData) {
+  const ctx = await requirePlatformStaff();
+  const id = String(formData.get("reportId") ?? formData.get("id") ?? "").trim();
+  if (!id) return { ok: false, error: "Missing id" } as const;
+  const r = await db.report.findUnique({ where: { id }, select: { id: true, ownerUserId: true, name: true } });
+  if (!r) return { ok: false, error: "Not found" } as const;
+  if (r.ownerUserId !== ctx.userId) return { ok: false, error: "Forbidden" } as const;
+  await db.report.delete({ where: { id } });
+  await logPlatformAudit({
+    userId: ctx.userId,
+    action: "platform.report_deleted",
+    entityType: "Report",
+    entityId: id,
+    metadata: { actor: ctx.email, name: r.name },
+  });
+  revalidatePath("/platform/reports");
+  redirect("/platform/reports");
+}
+
+/* ── Versioning ────────────────────────────────────────────── */
+
+export async function revertReportVersion(formData: FormData) {
+  const ctx = await requirePlatformStaff();
+  const versionId = String(formData.get("versionId") ?? "").trim();
+  if (!versionId) return { ok: false, error: "Missing versionId" } as const;
+
+  const v = await db.reportVersion.findUnique({
+    where: { id: versionId },
+    select: {
+      id: true, reportId: true, name: true, description: true, category: true,
+      filters: true, chartConfig: true,
+      report: { select: { id: true, ownerUserId: true } },
+    },
+  });
+  if (!v) return { ok: false, error: "Not found" } as const;
+  if (v.report.ownerUserId !== ctx.userId) return { ok: false, error: "Forbidden" } as const;
+
+  await db.$transaction(async (tx) => {
+    // Snapshot the current live state before reverting so the user
+    // can revert again if they change their mind.
+    const live = await tx.report.findUnique({
+      where: { id: v.reportId },
+      select: { name: true, description: true, category: true, filters: true, chartConfig: true },
+    });
+    if (live) {
+      await tx.reportVersion.create({
+        data: {
+          reportId: v.reportId,
+          name: live.name,
+          description: live.description,
+          category: live.category,
+          filters: live.filters,
+          chartConfig: live.chartConfig === null ? undefined : live.chartConfig,
+          authorUserId: ctx.userId,
+          note: "Auto-snapshot before revert",
+        },
+      });
+    }
+    await tx.report.update({
+      where: { id: v.reportId },
+      data: {
+        name:        v.name,
+        description: v.description,
+        category:    v.category,
+        filters:     v.filters,
+        chartConfig: v.chartConfig === null ? undefined : v.chartConfig,
+      },
+    });
+  });
+  await logPlatformAudit({
+    userId: ctx.userId,
+    action: "platform.report_version_reverted",
+    entityType: "Report",
+    entityId: v.reportId,
+    metadata: { actor: ctx.email, versionId },
+  });
+  revalidatePath(`/platform/reports/r/${v.reportId}`);
   return { ok: true } as const;
 }
 

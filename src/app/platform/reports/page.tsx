@@ -2,6 +2,7 @@ import Link from "next/link";
 import { db } from "@/lib/db";
 import { requirePlatformStaff } from "@/lib/platform";
 import {
+  Avatar,
   Badge,
   Breadcrumb,
   Button,
@@ -19,23 +20,55 @@ import {
   type ReportRegistryEntry,
   type ReportCategory,
 } from "@/server/platform/reports/registry";
+import { ReportThumbnail } from "./_components/ReportThumbnail";
+import { ReportCardMenu } from "./_components/ReportCardMenu";
 
 export const dynamic = "force-dynamic";
 
 // /platform/reports — Reports & Insights library (Page 3 §Library view).
 //
 // Two-column layout: left rail = categories with counts, main area =
-// search + sort + grid of report cards. Cards link to the detail
-// page at /platform/reports/[key].
+// search + sort + filter + grid of report cards. Cards include
+// prebuilt registry entries AND custom (saved/forked) reports.
+//
+// URL params:
+//   ?q=… — search
+//   ?category=<id> — filter to category
+//   ?scope=all|favorites|pinned|ready|pending|mine|team|templates
+//   ?sort=default|recent|az|za|created|viewed
+//   ?owner=<userId> — filter custom reports by owner
 
 type SearchParams = {
   q?: string;
   category?: string;
   sort?: string;
   scope?: string;
+  owner?: string;
 };
 
-const SCOPES = ["all", "favorites", "pinned", "ready", "pending"] as const;
+const SCOPES = ["all", "favorites", "pinned", "ready", "pending", "mine", "team", "templates"] as const;
+
+interface RowItem {
+  // Either prebuilt OR custom — `key` set means prebuilt, `id` set
+  // means custom DB row. Both can coexist if a user forked a prebuilt.
+  key?: string;
+  id?: string;
+  name: string;
+  description: string;
+  category: ReportRegistryEntry["category"];
+  viz: ReportRegistryEntry["viz"];
+  dataState: ReportRegistryEntry["dataState"];
+  icon: string;
+  href: string;
+  isFavorite: boolean;
+  isPinned: boolean;
+  isShared?: boolean;
+  ownedByMe?: boolean;
+  ownerName?: string | null;
+  lastViewedAt?: Date | null;
+  viewCount: number;
+  createdAt?: Date | null;
+}
 
 export default async function ReportsLibraryPage({
   searchParams,
@@ -48,70 +81,132 @@ export default async function ReportsLibraryPage({
   const category = (sp.category as ReportCategory | undefined) ?? undefined;
   const sort = sp.sort ?? "default";
   const scope = (SCOPES as readonly string[]).includes(sp.scope ?? "") ? sp.scope! : "all";
+  const ownerFilter = (sp.owner ?? "").trim() || null;
 
-  // Pull per-user state so the cards know what's pinned / favorited.
-  const userStates = await db.reportUserState.findMany({
-    where: { userId: ctx.userId, reportKey: { not: null } },
-    select: { reportKey: true, isFavorite: true, isPinned: true, lastViewedAt: true },
-  });
-  const stateByKey = new Map(
-    userStates.map((s) => [s.reportKey!, { isFavorite: s.isFavorite, isPinned: s.isPinned, lastViewedAt: s.lastViewedAt }]),
-  );
+  // Pull per-user state + custom reports + their authors in parallel.
+  const [userStates, customReports] = await Promise.all([
+    db.reportUserState.findMany({
+      where: { userId: ctx.userId },
+      select: { reportKey: true, reportId: true, isFavorite: true, isPinned: true, lastViewedAt: true, viewCount: true },
+    }),
+    db.report.findMany({
+      where: {
+        OR: [{ ownerUserId: ctx.userId }, { isShared: true }],
+      },
+      select: {
+        id: true, key: true, name: true, description: true, category: true, isShared: true,
+        ownerUserId: true, createdAt: true, updatedAt: true,
+        owner: { select: { name: true, email: true } },
+      },
+      orderBy: { updatedAt: "desc" },
+    }),
+  ]);
 
-  let visible: ReportRegistryEntry[] = REPORT_REGISTRY.slice();
+  // Index user states by both key + id for cheap lookup later.
+  const stateByKey = new Map<string, typeof userStates[number]>();
+  const stateById  = new Map<string, typeof userStates[number]>();
+  for (const s of userStates) {
+    if (s.reportKey) stateByKey.set(s.reportKey, s);
+    if (s.reportId)  stateById.set(s.reportId, s);
+  }
+
+  // Build the unified RowItem list.
+  const items: RowItem[] = [
+    ...REPORT_REGISTRY.map<RowItem>((r) => {
+      const s = stateByKey.get(r.key);
+      return {
+        key: r.key,
+        name: r.name,
+        description: r.description,
+        category: r.category,
+        viz: r.viz,
+        dataState: r.dataState,
+        icon: r.icon,
+        href: `/platform/reports/${r.key}`,
+        isFavorite: !!s?.isFavorite,
+        isPinned: !!s?.isPinned,
+        ownedByMe: false,
+        viewCount: s?.viewCount ?? 0,
+        lastViewedAt: s?.lastViewedAt ?? null,
+        createdAt: null,
+      };
+    }),
+    ...customReports.map<RowItem>((r) => {
+      const registry = r.key ? REPORT_REGISTRY.find((x) => x.key === r.key) : undefined;
+      const s = stateById.get(r.id);
+      return {
+        id: r.id,
+        name: r.name,
+        description: r.description ?? registry?.description ?? "",
+        category: (r.category as ReportCategory) ?? registry?.category ?? "operations",
+        viz: registry?.viz ?? "table-only",
+        dataState: registry?.dataState ?? "READY",
+        icon: registry?.icon ?? "🧾",
+        href: `/platform/reports/r/${r.id}`,
+        isFavorite: !!s?.isFavorite,
+        isPinned: !!s?.isPinned,
+        isShared: r.isShared,
+        ownedByMe: r.ownerUserId === ctx.userId,
+        ownerName: r.owner?.name ?? r.owner?.email ?? null,
+        viewCount: s?.viewCount ?? 0,
+        lastViewedAt: s?.lastViewedAt ?? null,
+        createdAt: r.createdAt,
+      };
+    }),
+  ];
+
+  // Apply search + category + scope filters.
+  let visible = items.slice();
   if (q) {
     visible = visible.filter(
-      (r) => r.name.toLowerCase().includes(q) || r.description.toLowerCase().includes(q) || r.category.includes(q),
+      (r) => r.name.toLowerCase().includes(q) ||
+             r.description.toLowerCase().includes(q) ||
+             r.category.includes(q),
     );
   }
-  if (category) {
-    visible = visible.filter((r) => r.category === category);
-  }
-  if (scope === "favorites") visible = visible.filter((r) => stateByKey.get(r.key)?.isFavorite);
-  if (scope === "pinned")    visible = visible.filter((r) => stateByKey.get(r.key)?.isPinned);
-  if (scope === "ready")     visible = visible.filter((r) => r.dataState === "READY");
-  if (scope === "pending")   visible = visible.filter((r) => r.dataState === "PENDING");
+  if (category) visible = visible.filter((r) => r.category === category);
+  if (scope === "favorites")  visible = visible.filter((r) => r.isFavorite);
+  if (scope === "pinned")     visible = visible.filter((r) => r.isPinned);
+  if (scope === "ready")      visible = visible.filter((r) => r.dataState === "READY");
+  if (scope === "pending")    visible = visible.filter((r) => r.dataState === "PENDING");
+  if (scope === "mine")       visible = visible.filter((r) => r.ownedByMe);
+  if (scope === "team")       visible = visible.filter((r) => r.isShared && !r.ownedByMe);
+  if (scope === "templates")  visible = visible.filter((r) => !!r.key); // prebuilts only
+  if (ownerFilter)            visible = visible.filter((r) => r.ownerName === ownerFilter);
 
-  if (sort === "az") {
-    visible.sort((a, b) => a.name.localeCompare(b.name));
-  } else if (sort === "za") {
-    visible.sort((a, b) => b.name.localeCompare(a.name));
-  } else if (sort === "recent") {
+  // Sort.
+  if (sort === "az")           visible.sort((a, b) => a.name.localeCompare(b.name));
+  else if (sort === "za")      visible.sort((a, b) => b.name.localeCompare(a.name));
+  else if (sort === "recent")  visible.sort((a, b) => (b.lastViewedAt?.getTime() ?? 0) - (a.lastViewedAt?.getTime() ?? 0));
+  else if (sort === "viewed")  visible.sort((a, b) => b.viewCount - a.viewCount);
+  else if (sort === "created") visible.sort((a, b) => (b.createdAt?.getTime() ?? 0) - (a.createdAt?.getTime() ?? 0));
+  else {
+    // Default: pinned → favorites → custom → prebuilt (stable)
     visible.sort((a, b) => {
-      const ax = stateByKey.get(a.key)?.lastViewedAt?.getTime() ?? 0;
-      const bx = stateByKey.get(b.key)?.lastViewedAt?.getTime() ?? 0;
-      return bx - ax;
-    });
-  } else {
-    // Default sort: pinned first, then favorites, then category order.
-    visible.sort((a, b) => {
-      const ap = stateByKey.get(a.key);
-      const bp = stateByKey.get(b.key);
-      if (!!bp?.isPinned !== !!ap?.isPinned) return bp?.isPinned ? 1 : -1;
-      if (!!bp?.isFavorite !== !!ap?.isFavorite) return bp?.isFavorite ? 1 : -1;
+      if (a.isPinned !== b.isPinned) return a.isPinned ? -1 : 1;
+      if (a.isFavorite !== b.isFavorite) return a.isFavorite ? -1 : 1;
+      if ((!!a.id) !== (!!b.id)) return a.id ? -1 : 1;
       return 0;
     });
   }
 
-  const counts = countByCategory();
-  const myCount = countByMe();
+  // Counts for the rail.
+  const counts = {
+    all:       items.length,
+    mine:      items.filter((r) => r.ownedByMe).length,
+    team:      items.filter((r) => r.isShared && !r.ownedByMe).length,
+    templates: REPORT_REGISTRY.length,
+    favorites: items.filter((r) => r.isFavorite).length,
+    pinned:    items.filter((r) => r.isPinned).length,
+    ready:     items.filter((r) => r.dataState === "READY").length,
+    pending:   items.filter((r) => r.dataState === "PENDING").length,
+  };
+  const categoryCounts: Record<string, number> = {};
+  for (const r of items) categoryCounts[r.category] = (categoryCounts[r.category] ?? 0) + 1;
 
-  function countByCategory(): Record<string, number> {
-    const out: Record<string, number> = {};
-    for (const r of REPORT_REGISTRY) {
-      out[r.category] = (out[r.category] ?? 0) + 1;
-    }
-    return out;
-  }
-
-  function countByMe(): { favorites: number; pinned: number; ready: number; pending: number } {
-    return {
-      favorites: REPORT_REGISTRY.filter((r) => stateByKey.get(r.key)?.isFavorite).length,
-      pinned:    REPORT_REGISTRY.filter((r) => stateByKey.get(r.key)?.isPinned).length,
-      ready:     REPORT_REGISTRY.filter((r) => r.dataState === "READY").length,
-      pending:   REPORT_REGISTRY.filter((r) => r.dataState === "PENDING").length,
-    };
-  }
+  // Distinct owners (for the owner filter dropdown). Only owners
+  // visible to this user (their own + shared report owners).
+  const ownerNames = Array.from(new Set(items.filter((r) => r.ownerName).map((r) => r.ownerName!)));
 
   return (
     <div className="space-y-6">
@@ -123,10 +218,15 @@ export default async function ReportsLibraryPage({
             description="Build, save, and schedule reports across financials, subscriptions, tenants, and operations."
             actions={
               <>
-                <Button size="sm" variant="ghost" disabled title="Custom builder lands in a future slice — pre-built reports cover the spec catalog today">
-                  + New report
-                </Button>
-                <Button size="sm" variant="secondary" disabled>Browse templates</Button>
+                <Link href="/platform/reports/new">
+                  <Button size="sm">+ New report</Button>
+                </Link>
+                <Link href="/platform/reports?scope=templates">
+                  <Button size="sm" variant="secondary">Browse templates</Button>
+                </Link>
+                <Link href="/platform/reports/schedules">
+                  <Button size="sm" variant="ghost">Scheduled reports</Button>
+                </Link>
               </>
             }
           />
@@ -139,11 +239,14 @@ export default async function ReportsLibraryPage({
           <div className="space-y-4">
             <Card padding="sm">
               <ul className="flex flex-col gap-1">
-                <RailItem label="All reports" count={REPORT_REGISTRY.length} active={!category && scope === "all"} href="/platform/reports" />
-                <RailItem label="Favorites"    count={myCount.favorites} active={scope === "favorites"}        href="/platform/reports?scope=favorites" />
-                <RailItem label="Pinned"       count={myCount.pinned}    active={scope === "pinned"}           href="/platform/reports?scope=pinned" />
-                <RailItem label="Ready"        count={myCount.ready}     active={scope === "ready"}            href="/platform/reports?scope=ready" />
-                <RailItem label="Awaiting source" count={myCount.pending} active={scope === "pending"}         href="/platform/reports?scope=pending" />
+                <RailItem label="All reports"   count={counts.all}        active={!category && scope === "all" && !ownerFilter} href="/platform/reports" />
+                <RailItem label="My reports"    count={counts.mine}       active={scope === "mine"}      href="/platform/reports?scope=mine" />
+                <RailItem label="Team reports"  count={counts.team}       active={scope === "team"}      href="/platform/reports?scope=team" />
+                <RailItem label="Templates"     count={counts.templates}  active={scope === "templates"} href="/platform/reports?scope=templates" />
+                <RailItem label="Favorites"     count={counts.favorites}  active={scope === "favorites"} href="/platform/reports?scope=favorites" />
+                <RailItem label="Pinned"        count={counts.pinned}     active={scope === "pinned"}    href="/platform/reports?scope=pinned" />
+                <RailItem label="Ready"         count={counts.ready}      active={scope === "ready"}     href="/platform/reports?scope=ready" />
+                <RailItem label="Awaiting source" count={counts.pending}  active={scope === "pending"}   href="/platform/reports?scope=pending" />
               </ul>
             </Card>
             <Card padding="sm">
@@ -155,7 +258,7 @@ export default async function ReportsLibraryPage({
                   <RailItem
                     key={c.id}
                     label={c.label}
-                    count={counts[c.id] ?? 0}
+                    count={categoryCounts[c.id] ?? 0}
                     active={category === c.id}
                     href={`/platform/reports?category=${c.id}`}
                   />
@@ -179,13 +282,28 @@ export default async function ReportsLibraryPage({
             >
               <option value="default">Default</option>
               <option value="recent">Recently viewed</option>
+              <option value="viewed">Most viewed</option>
+              <option value="created">Recently created</option>
               <option value="az">A → Z</option>
               <option value="za">Z → A</option>
             </select>
+            {ownerNames.length > 0 && (
+              <select
+                name="owner"
+                defaultValue={ownerFilter ?? ""}
+                className="ts-focus h-8 rounded-md border bg-transparent px-2 text-[13px]"
+                style={{ background: "var(--surface-1)", borderColor: "var(--border-default)", color: "var(--text-default)" }}
+              >
+                <option value="">All owners</option>
+                {ownerNames.map((n) => (
+                  <option key={n} value={n}>{n}</option>
+                ))}
+              </select>
+            )}
             {category && <input type="hidden" name="category" value={category} />}
             {scope !== "all" && <input type="hidden" name="scope" value={scope} />}
             <Button type="submit" size="sm" variant="secondary">Apply</Button>
-            {(q || category || sort !== "default" || scope !== "all") && (
+            {(q || category || sort !== "default" || scope !== "all" || ownerFilter) && (
               <Link href="/platform/reports" className="text-[12px]" style={{ color: "var(--text-muted)" }}>Clear</Link>
             )}
           </form>
@@ -193,18 +311,20 @@ export default async function ReportsLibraryPage({
           {visible.length === 0 ? (
             <Card padding="lg">
               <EmptyState
-                title="No reports match"
-                description="Try clearing filters or expanding the search."
+                title={scope === "templates" ? "No templates match" : scope === "mine" ? "You haven't authored any reports yet" : "No reports match"}
+                description={scope === "mine"
+                  ? <span>Click <strong>+ New report</strong> or <strong>Duplicate</strong> on a template to fork it into your library.</span>
+                  : "Try clearing filters or expanding the search."}
+                action={scope === "mine"
+                  ? <Link href="/platform/reports/new"><Button size="sm">+ New report</Button></Link>
+                  : undefined}
               />
             </Card>
           ) : (
             <div className="grid grid-cols-1 gap-3 md:grid-cols-2 xl:grid-cols-3">
-              {visible.map((r) => {
-                const state = stateByKey.get(r.key);
-                return (
-                  <ReportCard key={r.key} entry={r} isFavorite={!!state?.isFavorite} isPinned={!!state?.isPinned} />
-                );
-              })}
+              {visible.map((r) => (
+                <ReportCard key={r.id ?? r.key!} entry={r} />
+              ))}
             </div>
           )}
         </div>
@@ -232,7 +352,7 @@ function RailItem({ label, count, active, href }: { label: string; count: number
   );
 }
 
-function ReportCard({ entry, isFavorite, isPinned }: { entry: ReportRegistryEntry; isFavorite: boolean; isPinned: boolean }) {
+function ReportCard({ entry }: { entry: RowItem }) {
   const stateBadge = entry.dataState === "PENDING"
     ? <Badge size="xs" color="warning">Awaiting source</Badge>
     : entry.dataState === "PARTIAL"
@@ -240,42 +360,66 @@ function ReportCard({ entry, isFavorite, isPinned }: { entry: ReportRegistryEntr
     : <Badge size="xs" color="success">Live</Badge>;
 
   return (
-    <Link href={`/platform/reports/${entry.key}`} className="block h-full">
-      <Card elevation="interactive" padding="md" className="flex h-full flex-col">
-        <CardHeader
-          title={
-            <div className="flex items-start gap-2">
-              <span aria-hidden style={{ fontSize: 22 }}>{entry.icon}</span>
-              <div className="min-w-0">
-                <div className="truncate text-[14px] font-semibold" style={{ color: "var(--text-default)" }}>
-                  {entry.name}
-                </div>
-                <div className="text-[10px] uppercase tracking-wide" style={{ color: "var(--text-faint)" }}>
-                  {labelForCategory(entry.category)}
+    <div className="relative h-full">
+      <Link href={entry.href} className="block h-full">
+        <Card elevation="interactive" padding="md" className="flex h-full flex-col">
+          <CardHeader
+            title={
+              <div className="flex items-start gap-2">
+                <span aria-hidden style={{ fontSize: 22 }}>{entry.icon}</span>
+                <div className="min-w-0">
+                  <div className="truncate text-[14px] font-semibold" style={{ color: "var(--text-default)" }}>
+                    {entry.name}
+                  </div>
+                  <div className="text-[10px] uppercase tracking-wide" style={{ color: "var(--text-faint)" }}>
+                    {labelForCategory(entry.category)}
+                    {entry.id ? " · custom" : " · template"}
+                  </div>
                 </div>
               </div>
+            }
+            right={
+              <div className="flex shrink-0 items-center gap-1">
+                {entry.isPinned && <span title="Pinned" aria-label="Pinned">📌</span>}
+                {entry.isFavorite && <span title="Favorite" aria-label="Favorite">⭐</span>}
+              </div>
+            }
+          />
+          <CardBody>
+            <ReportThumbnail viz={entry.viz} className="mb-2" />
+            <p className="line-clamp-2 text-[12px]" style={{ color: "var(--text-muted)" }}>
+              {entry.description}
+            </p>
+          </CardBody>
+          <CardFooter>
+            <div className="flex w-full items-center justify-between gap-2 text-[11px]" style={{ color: "var(--text-muted)" }}>
+              <div className="flex items-center gap-1.5 truncate">
+                {entry.ownerName ? (
+                  <>
+                    <Avatar size="xs" name={entry.ownerName} />
+                    <span className="truncate">{entry.ownerName}</span>
+                    {entry.isShared && <Badge size="xs" color="info">Team</Badge>}
+                  </>
+                ) : (
+                  <span>{entry.viz.replace(/-/g, " ")}</span>
+                )}
+              </div>
+              {stateBadge}
             </div>
-          }
-          right={
-            <div className="flex shrink-0 items-center gap-1">
-              {isPinned && <span title="Pinned" aria-label="Pinned">📌</span>}
-              {isFavorite && <span title="Favorite" aria-label="Favorite">⭐</span>}
-            </div>
-          }
+          </CardFooter>
+        </Card>
+      </Link>
+      <div className="absolute right-2 top-2">
+        <ReportCardMenu
+          reportKey={entry.key}
+          reportId={entry.id}
+          reportName={entry.name}
+          isCustomOwnedByMe={entry.ownedByMe}
+          isShared={entry.isShared}
+          scheduleEnabled={entry.dataState !== "PENDING"}
         />
-        <CardBody>
-          <p className="line-clamp-3 text-[12px]" style={{ color: "var(--text-muted)" }}>
-            {entry.description}
-          </p>
-        </CardBody>
-        <CardFooter>
-          <div className="flex items-center justify-between gap-2 text-[11px]" style={{ color: "var(--text-muted)" }}>
-            <span>{entry.viz.replace(/-/g, " ")}</span>
-            {stateBadge}
-          </div>
-        </CardFooter>
-      </Card>
-    </Link>
+      </div>
+    </div>
   );
 }
 

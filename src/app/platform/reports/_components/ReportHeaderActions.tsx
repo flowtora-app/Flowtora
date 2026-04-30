@@ -9,6 +9,9 @@ import {
   createReportSchedule,
   deleteReportSchedule,
   toggleReportSchedulePause,
+  duplicateReport,
+  deleteReport,
+  setReportShared,
 } from "@/app/actions/reports";
 
 // Header-row controls for a single report — favorite, pin, schedule.
@@ -33,7 +36,15 @@ export interface ScheduleRow {
 }
 
 export interface ReportHeaderActionsProps {
+  /** Registry key for prebuilts; sentinel `r:<id>` for custom reports
+   *  (so per-user state still has a unique key). */
   reportKey: string;
+  /** Custom Report row id when this is a forked/saved report. */
+  reportId?: string;
+  /** Whether this is a custom report owned by the current user. */
+  ownedByMe?: boolean;
+  /** Whether this custom report is shared with the team. */
+  isShared?: boolean;
   reportName: string;
   isFavorite: boolean;
   isPinned: boolean;
@@ -44,6 +55,9 @@ export interface ReportHeaderActionsProps {
 
 export function ReportHeaderActions({
   reportKey,
+  reportId,
+  ownedByMe,
+  isShared,
   reportName,
   isFavorite,
   isPinned,
@@ -55,6 +69,17 @@ export function ReportHeaderActions({
   const toast = useToast();
   const [scheduleOpen, setScheduleOpen] = React.useState(false);
   const [schedulesPanelOpen, setSchedulesPanelOpen] = React.useState(false);
+  const [menuOpen, setMenuOpen] = React.useState(false);
+  const menuRef = React.useRef<HTMLDivElement | null>(null);
+
+  React.useEffect(() => {
+    if (!menuOpen) return;
+    const handler = (e: MouseEvent) => {
+      if (menuRef.current && !menuRef.current.contains(e.target as Node)) setMenuOpen(false);
+    };
+    document.addEventListener("mousedown", handler);
+    return () => document.removeEventListener("mousedown", handler);
+  }, [menuOpen]);
 
   const setBoolFlag = async (which: "isFavorite" | "isPinned", on: boolean) => {
     const fd = new FormData();
@@ -65,8 +90,43 @@ export function ReportHeaderActions({
     else router.refresh();
   };
 
-  const exportCsv = `/api/platform/reports/${reportKey}/export?format=csv${filterQs ? `&${filterQs}` : ""}`;
-  const exportJson = `/api/platform/reports/${reportKey}/export?format=json${filterQs ? `&${filterQs}` : ""}`;
+  // Use the actual prebuilt key for export — for custom reports we
+  // strip the `r:` prefix and use the underlying registry key.
+  const exportKey = reportKey.startsWith("r:") ? "" : reportKey;
+  const exportCsv = exportKey
+    ? `/api/platform/reports/${exportKey}/export?format=csv${filterQs ? `&${filterQs}` : ""}`
+    : null;
+  const exportJson = exportKey
+    ? `/api/platform/reports/${exportKey}/export?format=json${filterQs ? `&${filterQs}` : ""}`
+    : null;
+  const exportPdf = exportKey
+    ? `/api/platform/reports/${exportKey}/export?format=pdf${filterQs ? `&${filterQs}` : ""}`
+    : null;
+
+  const onDuplicate = async () => {
+    const fd = new FormData();
+    fd.set("fromKey", exportKey || reportKey);
+    fd.set("name", `${reportName} (copy)`);
+    try { await duplicateReport(fd); } catch { /* redirect throws */ }
+  };
+
+  const onToggleShare = async () => {
+    if (!reportId) return;
+    const fd = new FormData();
+    fd.set("reportId", reportId);
+    fd.set("isShared", isShared ? "off" : "on");
+    const res = await setReportShared(fd);
+    if (!res.ok) toast.error(res.error ?? "Couldn't update sharing");
+    else { toast.success(isShared ? "Made private" : "Shared with team"); router.refresh(); }
+  };
+
+  const onDelete = async () => {
+    if (!reportId) return;
+    if (!confirm("Delete this report? This can't be undone.")) return;
+    const fd = new FormData();
+    fd.set("reportId", reportId);
+    try { await deleteReport(fd); } catch { /* redirect */ }
+  };
 
   return (
     <div className="flex flex-wrap items-center gap-2">
@@ -104,12 +164,49 @@ export function ReportHeaderActions({
           {schedules.length} schedule{schedules.length === 1 ? "" : "s"}
         </Button>
       )}
-      <Link href={exportCsv}>
-        <Button size="sm" variant="ghost">Export CSV</Button>
-      </Link>
-      <Link href={exportJson}>
-        <Button size="sm" variant="ghost">Export JSON</Button>
-      </Link>
+      {exportCsv && (
+        <Link href={exportCsv}>
+          <Button size="sm" variant="ghost">Export CSV</Button>
+        </Link>
+      )}
+
+      <div ref={menuRef} className="relative">
+        <button
+          type="button"
+          onClick={() => setMenuOpen((o) => !o)}
+          className="ts-focus inline-flex h-8 w-8 items-center justify-center rounded-md border text-[14px] font-bold leading-none"
+          style={{ background: "var(--surface-1)", borderColor: "var(--border-default)", color: "var(--text-muted)" }}
+          aria-haspopup="menu"
+          aria-expanded={menuOpen}
+          aria-label="More actions"
+        >⋯</button>
+        {menuOpen && (
+          <div
+            role="menu"
+            className="absolute right-0 z-40 mt-1 w-52 overflow-hidden rounded-md border shadow-lg"
+            style={{ background: "var(--surface-1)", borderColor: "var(--border-default)" }}
+          >
+            <MenuItem onClick={() => { setMenuOpen(false); router.refresh(); }}>↻ Run now</MenuItem>
+            <MenuItem onClick={() => { setMenuOpen(false); onDuplicate(); }}>📄 Duplicate</MenuItem>
+            {exportJson && (
+              <MenuLink href={exportJson}>📥 Export JSON</MenuLink>
+            )}
+            {exportPdf && (
+              <MenuLink href={exportPdf}>📄 Export PDF</MenuLink>
+            )}
+            {ownedByMe && reportId && (
+              <>
+                <MenuDivider />
+                <MenuItem onClick={() => { setMenuOpen(false); onToggleShare(); }}>
+                  {isShared ? "🔒 Make private" : "🔓 Share with team"}
+                </MenuItem>
+                <MenuDivider />
+                <MenuItem onClick={() => { setMenuOpen(false); onDelete(); }} destructive>🗑 Delete</MenuItem>
+              </>
+            )}
+          </div>
+        )}
+      </div>
 
       {schedulesPanelOpen && (
         <SchedulePanel
@@ -159,6 +256,7 @@ function ScheduleModal({
   const [dayOfWeek, setDayOfWeek] = React.useState("1");   // Mon
   const [dayOfMonth, setDayOfMonth] = React.useState("1");
   const [timeOfDay, setTimeOfDay] = React.useState("09:00");
+  const [timezone, setTimezone]   = React.useState(detectTimezone());
   const [cron, setCron] = React.useState("");
   const [submitting, setSubmitting] = React.useState(false);
 
@@ -171,6 +269,7 @@ function ScheduleModal({
       setDayOfWeek("1");
       setDayOfMonth("1");
       setTimeOfDay("09:00");
+      setTimezone(detectTimezone());
       setCron("");
     }
   }, [open, reportName, defaultEmail]);
@@ -189,6 +288,7 @@ function ScheduleModal({
     if (frequency === "MONTHLY") fd.set("dayOfMonth", dayOfMonth);
     if (frequency === "CRON")    fd.set("cron", cron);
     fd.set("timeOfDay", timeOfDay);
+    fd.set("timezone", timezone);
     const res = await createReportSchedule(fd);
     setSubmitting(false);
     if (!res.ok) {
@@ -258,19 +358,27 @@ function ScheduleModal({
             )}
             {frequency === "CRON" ? (
               <Input
-                label="CRON expression (UTC)"
+                label="CRON expression"
                 value={cron}
                 onChange={(e) => setCron(e.currentTarget.value)}
                 placeholder="0 9 * * 1-5"
                 hint="5-field standard CRON. Runs are scheduled to the nearest hour by the cron job."
               />
             ) : (
-              <Input
-                label="Time of day (HH:MM, UTC)"
-                value={timeOfDay}
-                onChange={(e) => setTimeOfDay(e.currentTarget.value)}
-                placeholder="09:00"
-              />
+              <div className="grid grid-cols-2 gap-3">
+                <Input
+                  label="Time of day"
+                  value={timeOfDay}
+                  onChange={(e) => setTimeOfDay(e.currentTarget.value)}
+                  placeholder="09:00"
+                />
+                <Select
+                  label="Timezone"
+                  value={timezone}
+                  onChange={(e) => setTimezone(e.currentTarget.value)}
+                  options={COMMON_TIMEZONES.map((tz) => ({ value: tz, label: tz }))}
+                />
+              </div>
             )}
           </div>
         </DialogBody>
@@ -349,4 +457,64 @@ function SchedulePanel({
       )}
     </div>
   );
+}
+
+/* ── Menu helpers ────────────────────────────────────────── */
+
+function MenuItem({ children, onClick, destructive }: { children: React.ReactNode; onClick: () => void; destructive?: boolean }) {
+  return (
+    <button
+      type="button"
+      role="menuitem"
+      onClick={onClick}
+      className="ts-focus block w-full px-3 py-2 text-left text-[13px]"
+      style={{ color: destructive ? "var(--rose-700)" : "var(--text-default)", background: "transparent" }}
+    >
+      {children}
+    </button>
+  );
+}
+
+function MenuLink({ href, children }: { href: string; children: React.ReactNode }) {
+  return (
+    <Link
+      href={href}
+      className="ts-focus block w-full px-3 py-2 text-left text-[13px]"
+      style={{ color: "var(--text-default)" }}
+    >
+      {children}
+    </Link>
+  );
+}
+
+function MenuDivider() {
+  return <div style={{ height: 1, background: "var(--border-subtle)" }} />;
+}
+
+/** Common IANA timezones — covers ~95% of admin use cases without
+ *  shipping the full ~600-entry list. UTC always first. */
+const COMMON_TIMEZONES = [
+  "UTC",
+  "America/New_York", "America/Chicago", "America/Denver", "America/Los_Angeles",
+  "America/Toronto", "America/Vancouver", "America/Mexico_City", "America/Sao_Paulo",
+  "Europe/London", "Europe/Dublin", "Europe/Lisbon", "Europe/Madrid",
+  "Europe/Paris", "Europe/Berlin", "Europe/Amsterdam", "Europe/Brussels",
+  "Europe/Zurich", "Europe/Vienna", "Europe/Rome", "Europe/Stockholm",
+  "Europe/Oslo", "Europe/Helsinki", "Europe/Warsaw", "Europe/Athens",
+  "Africa/Johannesburg", "Africa/Cairo", "Africa/Lagos",
+  "Asia/Dubai", "Asia/Riyadh", "Asia/Tehran", "Asia/Karachi",
+  "Asia/Kolkata", "Asia/Bangkok", "Asia/Singapore", "Asia/Hong_Kong",
+  "Asia/Shanghai", "Asia/Tokyo", "Asia/Seoul",
+  "Australia/Perth", "Australia/Sydney", "Pacific/Auckland",
+];
+
+function detectTimezone(): string {
+  if (typeof Intl === "undefined") return "UTC";
+  try {
+    const tz = Intl.DateTimeFormat().resolvedOptions().timeZone;
+    if (COMMON_TIMEZONES.includes(tz)) return tz;
+    return "UTC";
+  } catch {
+    return "UTC";
+  }
 }
