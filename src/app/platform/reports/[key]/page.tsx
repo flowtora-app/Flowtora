@@ -13,15 +13,16 @@ import {
   EmptyState,
   PageHeader,
 } from "@/components/ui";
-import { findReportByKey, REPORT_CATEGORIES } from "@/server/platform/reports/registry";
+import { findReportByKey, REPORT_CATEGORIES, dimensionsForReport } from "@/server/platform/reports/registry";
 import { loadReport, type ReportFilters } from "@/server/platform/reports/loaders";
 import { ReportVizRenderer } from "../_components/ReportViz";
 import { ReportHeaderActions, type ScheduleRow } from "../_components/ReportHeaderActions";
 import { ReportDataTable } from "../_components/ReportDataTable";
+import { ReportFilterBar } from "../_components/ReportFilterBar";
 
 export const dynamic = "force-dynamic";
 
-type SearchParams = { since?: string; until?: string };
+type SearchParams = Record<string, string | undefined>;
 
 // /platform/reports/[key] — Page 3 §Selected report view.
 //
@@ -61,13 +62,26 @@ export default async function ReportDetailPage({
     const d = new Date(sp.until);
     if (!Number.isNaN(d.getTime())) filters.until = d;
   }
+  if (sp.compareTo === "previous" || sp.compareTo === "year") {
+    filters.compareTo = sp.compareTo;
+  }
+  // Dimension URL params are encoded as `dim_<key>=<value>`.
+  const dimensions: Record<string, string> = {};
+  for (const [k, v] of Object.entries(sp)) {
+    if (k.startsWith("dim_") && typeof v === "string") {
+      dimensions[k.slice(4)] = v;
+    }
+  }
+  if (Object.keys(dimensions).length > 0) filters.dimensions = dimensions;
 
   const filterQs = (() => {
     const u = new URLSearchParams();
-    if (sp.since) u.set("since", sp.since);
-    if (sp.until) u.set("until", sp.until);
+    for (const [k, v] of Object.entries(sp)) {
+      if (typeof v === "string" && v.length > 0) u.set(k, v);
+    }
     return u.toString();
   })();
+  const reportDimensions = dimensionsForReport(key);
 
   const [payload, schedules] = await Promise.all([
     loadReport(key, filters),
@@ -131,19 +145,16 @@ export default async function ReportDetailPage({
 
       {/* Filter bar */}
       <Card padding="md">
-        <form className="flex flex-wrap items-end gap-3" method="get">
-          <FilterField label="Since" name="since" defaultValue={sp.since ?? ""} />
-          <FilterField label="Until" name="until" defaultValue={sp.until ?? ""} />
-          <Button type="submit" size="sm">Run now</Button>
-          {(sp.since || sp.until) && (
-            <Link href={`/platform/reports/${entry.key}`} className="text-[12px]" style={{ color: "var(--text-muted)" }}>
-              Reset
-            </Link>
-          )}
-          <span className="ml-auto text-[11px]" style={{ color: "var(--text-faint)" }}>
-            Tip — most reports default to the last 30, 90, or 365 days. Set bounds to override.
-          </span>
-        </form>
+        <ReportFilterBar
+          basePath={`/platform/reports/${entry.key}`}
+          initial={{
+            since: sp.since ?? "",
+            until: sp.until ?? "",
+            compareTo: (sp.compareTo === "previous" || sp.compareTo === "year") ? sp.compareTo : "off",
+            dimensions,
+          }}
+          dimensions={reportDimensions}
+        />
       </Card>
 
       {/* Data state banner */}
@@ -242,18 +253,4 @@ export default async function ReportDetailPage({
   );
 }
 
-function FilterField({ label, name, defaultValue }: { label: string; name: string; defaultValue: string }) {
-  return (
-    <label className="flex flex-col gap-1">
-      <span className="text-[10px] font-semibold uppercase tracking-wide" style={{ color: "var(--text-faint)" }}>{label}</span>
-      <input
-        type="date"
-        name={name}
-        defaultValue={defaultValue}
-        className="ts-focus h-8 rounded-md border px-2 text-[13px]"
-        style={{ background: "var(--surface-1)", borderColor: "var(--border-default)", color: "var(--text-default)" }}
-      />
-    </label>
-  );
-}
 

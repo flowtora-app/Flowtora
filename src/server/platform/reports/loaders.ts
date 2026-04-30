@@ -25,6 +25,15 @@ export interface ReportFilters {
   since?: Date;
   /** Upper bound (defaults to now). */
   until?: Date;
+  /** Comparison window the loader should overlay alongside the
+   *  primary range. "previous" = same length immediately before
+   *  `since`. "year" = same window one year earlier. "off" or
+   *  undefined = no comparison. */
+  compareTo?: "previous" | "year" | "off";
+  /** Per-report dimension overrides — each loader documents which
+   *  keys it understands (see `REPORT_DIMENSIONS` in registry.ts).
+   *  Unknown keys are ignored. */
+  dimensions?: Record<string, string>;
 }
 
 export type ReportPayload =
@@ -93,6 +102,7 @@ function pending(note: string): ReportPayload {
 async function loadMrrWaterfall(f: ReportFilters): Promise<ReportPayload> {
   const since = f.since ?? new Date(Date.now() - 30 * DAY);
   const until = f.until ?? new Date();
+  const compareTo = f.compareTo ?? "off";
 
   // Starting MRR — all tenants whose latest event at-or-before
   // `since` left them on a positive plan.
@@ -124,6 +134,48 @@ async function loadMrrWaterfall(f: ReportFilters): Promise<ReportPayload> {
   }
   const ending = starting + expansion - contraction - churn + newMrr;
 
+  // Comparison — same length window immediately before `since` (or
+  // 1 year before `since` for "year").
+  let priorComparison = 0;
+  let endingComparison = 0;
+  if (compareTo === "previous" || compareTo === "year") {
+    const windowMs = until.getTime() - since.getTime();
+    const compareSince = compareTo === "previous"
+      ? new Date(since.getTime() - windowMs)
+      : new Date(since.getTime() - 365 * DAY);
+    const compareUntil = compareTo === "previous"
+      ? new Date(since.getTime() - 1)
+      : new Date(until.getTime() - 365 * DAY);
+
+    const compStartEvents = await db.subscriptionEvent.findMany({
+      where: { occurredAt: { lte: compareSince } },
+      orderBy: { occurredAt: "asc" },
+      select: { tenantId: true, toPriceMonthly: true, type: true },
+    });
+    const compStart = new Map<string, number>();
+    for (const e of compStartEvents) {
+      if (e.type === "CANCELED") compStart.set(e.tenantId, 0);
+      else compStart.set(e.tenantId, Number(e.toPriceMonthly ?? 0));
+    }
+    for (const v of compStart.values()) priorComparison += v;
+
+    const compWindowEvents = await db.subscriptionEvent.findMany({
+      where: { occurredAt: { gt: compareSince, lte: compareUntil } },
+      select: { type: true, mrrDelta: true },
+    });
+    let cExp = 0, cContr = 0, cChurn = 0, cNew = 0;
+    for (const e of compWindowEvents) {
+      const d = Number(e.mrrDelta);
+      if (e.type === "CREATED" || e.type === "REACTIVATED") cNew += Math.max(0, d);
+      else if (e.type === "CANCELED") cChurn += Math.max(0, -d);
+      else if (d > 0) cExp += d;
+      else if (d < 0) cContr += -d;
+    }
+    endingComparison = priorComparison + cExp - cContr - cChurn + cNew;
+  }
+
+  const compareLabel = compareTo === "year" ? "1y ago" : compareTo === "previous" ? "Prev" : null;
+
   return {
     state: "READY",
     viz: {
@@ -138,12 +190,12 @@ async function loadMrrWaterfall(f: ReportFilters): Promise<ReportPayload> {
       ],
     },
     rows: [
-      { component: "Starting MRR", value: starting },
+      { component: "Starting MRR", value: starting, ...(compareLabel ? { [compareLabel]: priorComparison } : {}) },
       { component: "Expansion",    value: expansion },
       { component: "New MRR",      value: newMrr },
       { component: "Contraction",  value: -contraction },
       { component: "Churn",        value: -churn },
-      { component: "Ending MRR",   value: ending },
+      { component: "Ending MRR",   value: ending,   ...(compareLabel ? { [compareLabel]: endingComparison } : {}) },
     ],
     insights: [
       starting === 0
@@ -154,7 +206,16 @@ async function loadMrrWaterfall(f: ReportFilters): Promise<ReportPayload> {
       churn > 0
         ? { title: `Churn impact`, body: `$${Math.round(churn).toLocaleString()} of MRR cancelled in this window.`, tone: churn > expansion ? "warning" : "neutral" }
         : { title: `No churn`, body: "Zero cancellations in the window.", tone: "positive" },
-    ],
+      compareTo !== "off" && compareLabel
+        ? {
+            title: `vs ${compareLabel}`,
+            body: priorComparison === 0
+              ? `No comparable activity ${compareLabel.toLowerCase()}.`
+              : `Movement was ${endingComparison >= priorComparison ? "positive" : "negative"} ${compareLabel.toLowerCase()} too — ending $${Math.round(endingComparison).toLocaleString()} vs starting $${Math.round(priorComparison).toLocaleString()}.`,
+            tone: "neutral",
+          }
+        : null,
+    ].filter(Boolean) as ReportInsight[],
   };
 }
 
@@ -162,48 +223,110 @@ async function loadMrrWaterfall(f: ReportFilters): Promise<ReportPayload> {
 /* 2. ARR Trend (12 months)                                   */
 /* ────────────────────────────────────────────────────────── */
 
-async function loadArrTrend12m(_f: ReportFilters): Promise<ReportPayload> {
+async function loadArrTrend12m(f: ReportFilters): Promise<ReportPayload> {
   // For each of the last 12 months, sum plan-price MRR for tenants
   // whose latest SubscriptionEvent at-or-before that month-end left
   // them paying.
   const now = new Date();
-  const buckets: Record<string, number> = {};
-  const labels: string[] = [];
+  const stack = f.dimensions?.stack === "plan";
+
+  // Build empty buckets per month — totals + per-plan slots.
+  const PLAN_KEYS = ["STARTER", "GROWTH", "PRO", "ENTERPRISE"] as const;
+  const months: { key: string; label: string }[] = [];
   for (let i = 11; i >= 0; i--) {
     const d = new Date(now.getFullYear(), now.getMonth() - i, 1);
-    const k = d.toISOString().slice(0, 7); // YYYY-MM
-    buckets[k] = 0;
-    labels.push(monthLabel(d));
+    months.push({ key: d.toISOString().slice(0, 7), label: monthLabel(d) });
   }
 
   const events = await db.subscriptionEvent.findMany({
-    select: { tenantId: true, toPriceMonthly: true, type: true, occurredAt: true },
+    select: { tenantId: true, toPriceMonthly: true, toPlan: true, type: true, occurredAt: true },
     orderBy: { occurredAt: "asc" },
   });
 
-  // Walk events forward, replaying the per-tenant price at each
-  // month-end snapshot.
-  const monthsKeys = Object.keys(buckets);
+  // Walk events forward, replaying per-tenant price + plan at month-end.
   const cursorPrice = new Map<string, number>();
+  const cursorPlan  = new Map<string, string>();
   let eventIdx = 0;
-  for (const monthKey of monthsKeys) {
-    const monthEnd = new Date(monthKey + "-01");
+  const data: Record<string, string | number>[] = months.map((m) => ({ label: m.label }));
+  for (const m of months) {
+    const monthEnd = new Date(m.key + "-01");
     monthEnd.setMonth(monthEnd.getMonth() + 1);
     monthEnd.setHours(0, 0, 0, 0);
     while (eventIdx < events.length && events[eventIdx]!.occurredAt < monthEnd) {
       const e = events[eventIdx]!;
-      if (e.type === "CANCELED") cursorPrice.set(e.tenantId, 0);
-      else cursorPrice.set(e.tenantId, Number(e.toPriceMonthly ?? 0));
+      if (e.type === "CANCELED") {
+        cursorPrice.set(e.tenantId, 0);
+      } else {
+        cursorPrice.set(e.tenantId, Number(e.toPriceMonthly ?? 0));
+        if (e.toPlan) cursorPlan.set(e.tenantId, e.toPlan);
+      }
       eventIdx += 1;
     }
-    let mrrAtMonthEnd = 0;
-    for (const v of cursorPrice.values()) mrrAtMonthEnd += v;
-    buckets[monthKey] = mrrAtMonthEnd * 12;
+    if (stack) {
+      const perPlan: Record<string, number> = {};
+      for (const [tid, price] of cursorPrice) {
+        if (price <= 0) continue;
+        const plan = cursorPlan.get(tid) ?? "OTHER";
+        perPlan[plan] = (perPlan[plan] ?? 0) + price;
+      }
+      const row = data[months.indexOf(m)]!;
+      for (const k of PLAN_KEYS) row[k] = (perPlan[k] ?? 0) * 12;
+    } else {
+      let mrr = 0;
+      for (const v of cursorPrice.values()) mrr += v;
+      data[months.indexOf(m)]!.ARR = mrr * 12;
+    }
   }
 
-  const data = monthsKeys.map((k, i) => ({ label: labels[i]!, ARR: buckets[k] ?? 0 }));
-  const latest = data[data.length - 1]?.ARR ?? 0;
-  const earliest = data[0]?.ARR ?? 0;
+  // Comparison: just attach a 12-month-ago reference number per
+  // bucket. We're already showing 12 months of trend; comparison
+  // here means tagging the year-ago reference value alongside.
+  const compareTo = f.compareTo ?? "off";
+  if (compareTo === "year" && !stack) {
+    // Replay events going back 24 months and snapshot at the same
+    // month boundaries shifted by 12 months.
+    const yearBackBuckets = new Map<string, number>();
+    const cursorPrice2 = new Map<string, number>();
+    let idx2 = 0;
+    for (const m of months) {
+      const target = new Date(m.key + "-01");
+      target.setMonth(target.getMonth() - 12);
+      target.setMonth(target.getMonth() + 1);
+      target.setHours(0, 0, 0, 0);
+      while (idx2 < events.length && events[idx2]!.occurredAt < target) {
+        const e = events[idx2]!;
+        if (e.type === "CANCELED") cursorPrice2.set(e.tenantId, 0);
+        else cursorPrice2.set(e.tenantId, Number(e.toPriceMonthly ?? 0));
+        idx2 += 1;
+      }
+      let mrr = 0;
+      for (const v of cursorPrice2.values()) mrr += v;
+      yearBackBuckets.set(m.key, mrr * 12);
+    }
+    for (const m of months) {
+      data[months.indexOf(m)]!["ARR (1y ago)"] = yearBackBuckets.get(m.key) ?? 0;
+    }
+  }
+
+  const series = stack
+    ? PLAN_KEYS.map((p, i) => ({
+        dataKey: p,
+        name: p.charAt(0) + p.slice(1).toLowerCase(),
+        color: ["var(--brand-300)", "var(--brand-500)", "var(--brand-700)", "var(--cyan-500)"][i],
+      }))
+    : compareTo === "year"
+      ? [
+          { dataKey: "ARR",          name: "ARR",         color: "var(--brand-600)" },
+          { dataKey: "ARR (1y ago)", name: "ARR (1y ago)", color: "var(--slate-400)" },
+        ]
+      : [{ dataKey: "ARR", name: "ARR", color: "var(--brand-600)" }];
+
+  const latest = stack
+    ? PLAN_KEYS.reduce((s, k) => s + Number(data[data.length - 1]?.[k] ?? 0), 0)
+    : Number(data[data.length - 1]?.ARR ?? 0);
+  const earliest = stack
+    ? PLAN_KEYS.reduce((s, k) => s + Number(data[0]?.[k] ?? 0), 0)
+    : Number(data[0]?.ARR ?? 0);
   const deltaPct = earliest === 0 ? null : Math.round(((latest - earliest) / earliest) * 1000) / 10;
 
   return {
@@ -211,10 +334,11 @@ async function loadArrTrend12m(_f: ReportFilters): Promise<ReportPayload> {
     viz: {
       kind: "area",
       xKey: "label",
-      series: [{ dataKey: "ARR", name: "ARR", color: "var(--brand-600)" }],
+      series,
       data,
+      stacked: stack,
     },
-    rows: data.map((d) => ({ month: d.label, arr: d.ARR })),
+    rows: data.map((d) => ({ ...d })),
     insights: [
       latest === 0
         ? { title: "No ARR yet", body: "No paying tenants on file.", tone: "neutral" }

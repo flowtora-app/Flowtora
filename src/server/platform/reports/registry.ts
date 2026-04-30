@@ -288,3 +288,90 @@ export function findReportByKey(key: string): ReportRegistryEntry | undefined {
 export function reportsByCategory(category: ReportCategory): ReportRegistryEntry[] {
   return REPORT_REGISTRY.filter((r) => r.category === category);
 }
+
+/* ────────────────────────────────────────────────────────── */
+/* Per-report dimension declarations                          */
+/* ────────────────────────────────────────────────────────── */
+
+// A `dimension` lets the user re-pivot a report along a different
+// axis without leaving the detail page (e.g. "show MRR Movement
+// grouped by Plan"). Each report below declares what dimensions it
+// supports and what values each can take.
+//
+// Loaders read the resolved value from `filters.dimensions[<key>]`
+// and adjust their query accordingly. Defaults (the implicit "off"
+// state) keep the existing behavior.
+
+export interface ReportDimension {
+  key: string;
+  label: string;
+  options: { value: string; label: string }[];
+}
+
+export const REPORT_DIMENSIONS: Record<string, ReportDimension[]> = {
+  "mrr-movement-waterfall": [
+    {
+      key: "groupBy",
+      label: "Group by",
+      options: [
+        { value: "off",  label: "Total (default)" },
+        { value: "plan", label: "Per plan" },
+      ],
+    },
+  ],
+  "arr-trend-12m": [
+    {
+      key: "stack",
+      label: "Stacking",
+      options: [
+        { value: "off",  label: "Total (default)" },
+        { value: "plan", label: "Stack by plan" },
+      ],
+    },
+  ],
+  "churn-analysis": [
+    {
+      key: "metric",
+      label: "Primary metric",
+      options: [
+        { value: "logo",    label: "Logo churn (count)" },
+        { value: "revenue", label: "Revenue churn ($)" },
+      ],
+    },
+  ],
+  "revenue-by-region": [
+    {
+      key: "scope",
+      label: "Scope",
+      options: [
+        { value: "country", label: "Country (default)" },
+        { value: "tenant",  label: "Tenant" },
+      ],
+    },
+  ],
+  "cohort-retention-heatmap": [
+    {
+      key: "granularity",
+      label: "Cohort grain",
+      options: [
+        { value: "month", label: "Monthly (default)" },
+        { value: "week",  label: "Weekly" },
+      ],
+    },
+  ],
+  "support-sla-compliance": [
+    {
+      key: "scope",
+      label: "Scope",
+      options: [
+        { value: "all",     label: "All categories" },
+        { value: "bug",     label: "Bug only" },
+        { value: "billing", label: "Billing only" },
+      ],
+    },
+  ],
+};
+
+export function dimensionsForReport(key: string): ReportDimension[] {
+  return REPORT_DIMENSIONS[key] ?? [];
+}

@@ -11,7 +11,21 @@ import { revalidatePath } from "next/cache";
 import { z } from "zod";
 import { db } from "@/lib/db";
 import { requirePlatformStaff, logPlatformAudit } from "@/lib/platform";
+import type { PlatformPermission } from "@/lib/rbac";
 import { findReportByKey } from "@/server/platform/reports/registry";
+
+// Reports & Insights actions enforce permission gates via
+// `ctx.can("reports.*")`. The relevant permissions are:
+//   • reports.read     — implicit via PLATFORM_BASELINE_READ
+//   • reports.create   — fork prebuilt → custom Report
+//   • reports.edit     — rename, share, revert version, set defaults
+//   • reports.delete   — destroy a custom Report (owner-only too)
+//   • reports.schedule — create / pause / delete schedules
+//   • reports.export   — download CSV / JSON / PDF
+//
+// READ_ONLY_VIEWER + ANALYST get reports.read + .export but not the
+// mutating ones, so an auditor can run + export every report
+// without being able to change anyone's saved view.
 
 const NAME_LIMIT = 80;
 const FILTERS_LIMIT = 4_000;
@@ -67,6 +81,7 @@ const dupeSchema = z.object({
  *  Redirects to the new custom report's detail page. */
 export async function duplicateReport(formData: FormData) {
   const ctx = await requirePlatformStaff();
+  if (!ctx.can("reports.create")) return { ok: false, error: "Your role can't create reports" } as const;
   const parsed = dupeSchema.safeParse(Object.fromEntries(formData.entries()));
   if (!parsed.success) return { ok: false, error: "Invalid input" } as const;
   const source = findReportByKey(parsed.data.fromKey);
@@ -113,6 +128,7 @@ const renameSchema = z.object({
 
 export async function renameReport(formData: FormData) {
   const ctx = await requirePlatformStaff();
+  if (!ctx.can("reports.edit")) return { ok: false, error: "Your role can't edit reports" } as const;
   const parsed = renameSchema.safeParse(Object.fromEntries(formData.entries()));
   if (!parsed.success) return { ok: false, error: "Invalid input" } as const;
   const r = await db.report.findUnique({
@@ -162,6 +178,7 @@ const shareSchema = z.object({
 
 export async function setReportShared(formData: FormData) {
   const ctx = await requirePlatformStaff();
+  if (!ctx.can("reports.edit")) return { ok: false, error: "Your role can't edit reports" } as const;
   const parsed = shareSchema.safeParse(Object.fromEntries(formData.entries()));
   if (!parsed.success) return { ok: false, error: "Invalid input" } as const;
   const r = await db.report.findUnique({ where: { id: parsed.data.reportId }, select: { id: true, ownerUserId: true, name: true } });
@@ -182,6 +199,7 @@ export async function setReportShared(formData: FormData) {
 
 export async function deleteReport(formData: FormData) {
   const ctx = await requirePlatformStaff();
+  if (!ctx.can("reports.delete")) return { ok: false, error: "Your role can't delete reports" } as const;
   const id = String(formData.get("reportId") ?? formData.get("id") ?? "").trim();
   if (!id) return { ok: false, error: "Missing id" } as const;
   const r = await db.report.findUnique({ where: { id }, select: { id: true, ownerUserId: true, name: true } });
@@ -203,6 +221,7 @@ export async function deleteReport(formData: FormData) {
 
 export async function revertReportVersion(formData: FormData) {
   const ctx = await requirePlatformStaff();
+  if (!ctx.can("reports.edit")) return { ok: false, error: "Your role can't edit reports" } as const;
   const versionId = String(formData.get("versionId") ?? "").trim();
   if (!versionId) return { ok: false, error: "Missing versionId" } as const;
 
@@ -281,6 +300,7 @@ const scheduleCreateSchema = z.object({
 
 export async function createReportSchedule(formData: FormData) {
   const ctx = await requirePlatformStaff();
+  if (!ctx.can("reports.schedule")) return { ok: false, error: "Your role can't schedule report deliveries" } as const;
   const parsed = scheduleCreateSchema.safeParse(Object.fromEntries(formData.entries()));
   if (!parsed.success) return { ok: false, error: "Invalid input" } as const;
 
@@ -329,6 +349,7 @@ export async function createReportSchedule(formData: FormData) {
 
 export async function deleteReportSchedule(formData: FormData) {
   const ctx = await requirePlatformStaff();
+  if (!ctx.can("reports.schedule")) return { ok: false, error: "Your role can't manage schedules" } as const;
   const id = String(formData.get("id") ?? "").trim();
   if (!id) return { ok: false, error: "Missing id" } as const;
 
@@ -353,6 +374,7 @@ export async function deleteReportSchedule(formData: FormData) {
 
 export async function toggleReportSchedulePause(formData: FormData) {
   const ctx = await requirePlatformStaff();
+  if (!ctx.can("reports.schedule")) return { ok: false, error: "Your role can't manage schedules" } as const;
   const id = String(formData.get("id") ?? "").trim();
   if (!id) return { ok: false, error: "Missing id" } as const;
 

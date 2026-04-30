@@ -218,9 +218,13 @@ export default async function ReportsLibraryPage({
             description="Build, save, and schedule reports across financials, subscriptions, tenants, and operations."
             actions={
               <>
-                <Link href="/platform/reports/new">
-                  <Button size="sm">+ New report</Button>
-                </Link>
+                {ctx.can("reports.create") ? (
+                  <Link href="/platform/reports/new">
+                    <Button size="sm">+ New report</Button>
+                  </Link>
+                ) : (
+                  <Button size="sm" disabled title="Your role is read-only on reports.">+ New report</Button>
+                )}
                 <Link href="/platform/reports?scope=templates">
                   <Button size="sm" variant="secondary">Browse templates</Button>
                 </Link>

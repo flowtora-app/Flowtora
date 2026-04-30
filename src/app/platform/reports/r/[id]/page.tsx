@@ -14,17 +14,18 @@ import {
   EmptyState,
   PageHeader,
 } from "@/components/ui";
-import { findReportByKey, REPORT_CATEGORIES } from "@/server/platform/reports/registry";
+import { findReportByKey, REPORT_CATEGORIES, dimensionsForReport } from "@/server/platform/reports/registry";
 import { loadReport, type ReportFilters } from "@/server/platform/reports/loaders";
 import { ReportVizRenderer } from "../../_components/ReportViz";
 import { ReportHeaderActions, type ScheduleRow } from "../../_components/ReportHeaderActions";
 import { ReportEditableName } from "../../_components/ReportEditableName";
 import { ReportVersions } from "../../_components/ReportVersions";
 import { ReportDataTable } from "../../_components/ReportDataTable";
+import { ReportFilterBar } from "../../_components/ReportFilterBar";
 
 export const dynamic = "force-dynamic";
 
-type SearchParams = { since?: string; until?: string; tab?: string };
+type SearchParams = Record<string, string | undefined>;
 
 // Custom-report detail page. Same layout as the prebuilt detail
 // (/platform/reports/[key]) but the title is editable, schedules
@@ -68,13 +69,22 @@ export default async function CustomReportDetailPage({
 
   // Resolve filters: report's saved querystring + any URL overrides.
   const baseQs = new URLSearchParams(report.filters);
-  if (sp.since) baseQs.set("since", sp.since);
-  if (sp.until) baseQs.set("until", sp.until);
+  for (const [k, v] of Object.entries(sp)) {
+    if (typeof v === "string" && v.length > 0 && k !== "tab") baseQs.set(k, v);
+  }
   const since = baseQs.get("since") ? new Date(baseQs.get("since")!) : undefined;
   const until = baseQs.get("until") ? new Date(baseQs.get("until")!) : undefined;
   const filters: ReportFilters = {};
   if (since && !Number.isNaN(since.getTime())) filters.since = since;
   if (until && !Number.isNaN(until.getTime())) filters.until = until;
+  const ct = baseQs.get("compareTo");
+  if (ct === "previous" || ct === "year") filters.compareTo = ct;
+  const dimensions: Record<string, string> = {};
+  for (const [k, v] of baseQs.entries()) {
+    if (k.startsWith("dim_")) dimensions[k.slice(4)] = v;
+  }
+  if (Object.keys(dimensions).length > 0) filters.dimensions = dimensions;
+  const reportDimensions = report.key ? dimensionsForReport(report.key) : [];
 
   // Touch user state on view.
   await db.reportUserState.upsert({
@@ -190,19 +200,21 @@ export default async function CustomReportDetailPage({
 
       {/* Filter bar */}
       <Card padding="md">
-        <form className="flex flex-wrap items-end gap-3" method="get">
-          <FilterField label="Since" name="since" defaultValue={sp.since ?? ""} />
-          <FilterField label="Until" name="until" defaultValue={sp.until ?? ""} />
-          <Button type="submit" size="sm">Run now</Button>
-          {(sp.since || sp.until) && (
-            <Link href={`/platform/reports/r/${id}`} className="text-[12px]" style={{ color: "var(--text-muted)" }}>
-              Reset
-            </Link>
-          )}
-          <span className="ml-auto text-[11px]" style={{ color: "var(--text-faint)" }}>
-            Stored default: <code>?{report.filters || "(none)"}</code>
-          </span>
-        </form>
+        <ReportFilterBar
+          basePath={`/platform/reports/r/${id}`}
+          initial={{
+            since: sp.since ?? "",
+            until: sp.until ?? "",
+            compareTo: ct === "previous" || ct === "year" ? ct : "off",
+            dimensions,
+          }}
+          dimensions={reportDimensions}
+        />
+        {report.filters && (
+          <div className="mt-2 text-[11px]" style={{ color: "var(--text-faint)" }}>
+            Stored default: <code>?{report.filters}</code>
+          </div>
+        )}
       </Card>
 
       <div className="flex flex-wrap items-center gap-2">
@@ -305,20 +317,6 @@ export default async function CustomReportDetailPage({
   void categoryId;
 }
 
-function FilterField({ label, name, defaultValue }: { label: string; name: string; defaultValue: string }) {
-  return (
-    <label className="flex flex-col gap-1">
-      <span className="text-[10px] font-semibold uppercase tracking-wide" style={{ color: "var(--text-faint)" }}>{label}</span>
-      <input
-        type="date"
-        name={name}
-        defaultValue={defaultValue}
-        className="ts-focus h-8 rounded-md border px-2 text-[13px]"
-        style={{ background: "var(--surface-1)", borderColor: "var(--border-default)", color: "var(--text-default)" }}
-      />
-    </label>
-  );
-}
 
 function TabLink({ href, active, children }: { href: string; active: boolean; children: React.ReactNode }) {
   return (

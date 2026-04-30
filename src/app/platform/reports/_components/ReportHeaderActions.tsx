@@ -322,7 +322,7 @@ function ScheduleModal({
                   { value: "HTML_EMAIL", label: "Inline HTML email" },
                   { value: "CSV",        label: "CSV attachment" },
                 ]}
-                hint="PDF reserved for a future slice"
+                hint="PDF available via Export menu — schedule delivery is HTML/CSV"
               />
               <Select
                 label="Frequency"

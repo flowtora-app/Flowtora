@@ -1,20 +1,35 @@
-// GET /api/platform/reports/[key]/export?format=csv|json
+// GET /api/platform/reports/[key]/export?format=csv|json|pdf
 //
 // Exports the data table for a single prebuilt report (the table
 // shown under the chart on the detail page). Honours the same
 // since/until query params as the detail view.
+//
+// PDF format renders the report (header + insights + table) via
+// @react-pdf/renderer — pure JS, no headless Chromium needed, works
+// on Vercel out of the box. Charts in PDF are intentionally text-
+// only (insight callouts + table) since rendering Recharts SVG
+// inside react-pdf needs a custom path; can be added in a later
+// slice if there's demand.
 
 import { requirePlatformStaff, logPlatformAudit } from "@/lib/platform";
 import { findReportByKey } from "@/server/platform/reports/registry";
 import { loadReport, type ReportFilters } from "@/server/platform/reports/loaders";
+import { renderReportPdf } from "@/server/platform/reports/pdf";
 
 export const dynamic = "force-dynamic";
+export const runtime = "nodejs";
 
 export async function GET(
   req: Request,
   { params }: { params: Promise<{ key: string }> },
 ) {
   const ctx = await requirePlatformStaff();
+  if (!ctx.can("reports.export")) {
+    return new Response(JSON.stringify({ ok: false, error: "Your role can't export reports" }), {
+      status: 403,
+      headers: { "Content-Type": "application/json" },
+    });
+  }
   const { key } = await params;
   const entry = findReportByKey(key);
   if (!entry) {
@@ -25,7 +40,9 @@ export async function GET(
   }
   const url = new URL(req.url);
   const sp = url.searchParams;
-  const format = (sp.get("format") ?? "csv").toLowerCase() === "json" ? "json" : "csv";
+  const formatRaw = (sp.get("format") ?? "csv").toLowerCase();
+  const format: "csv" | "json" | "pdf" =
+    formatRaw === "json" ? "json" : formatRaw === "pdf" ? "pdf" : "csv";
 
   const filters: ReportFilters = {};
   const since = sp.get("since"); if (since) { const d = new Date(since); if (!Number.isNaN(d.getTime())) filters.since = d; }
@@ -43,6 +60,20 @@ export async function GET(
 
   const ts = new Date().toISOString().replace(/[:.]/g, "-").slice(0, 19);
   const baseFilename = `flowtora-${entry.key}-${ts}`;
+
+  if (format === "pdf") {
+    const buf = await renderReportPdf({
+      report: { key: entry.key, name: entry.name, description: entry.description, icon: entry.icon, category: entry.category },
+      payload,
+    });
+    return new Response(new Uint8Array(buf), {
+      status: 200,
+      headers: {
+        "Content-Type": "application/pdf",
+        "Content-Disposition": `attachment; filename="${baseFilename}.pdf"`,
+      },
+    });
+  }
 
   if (format === "json") {
     return new Response(JSON.stringify({

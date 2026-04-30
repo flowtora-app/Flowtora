@@ -219,6 +219,14 @@ export type PlatformPermission =
   | "revenue.read"
   | "usage.read"
 
+  // Reports & Insights (Page 3)
+  | "reports.read"            // view library + run prebuilt reports
+  | "reports.create"          // fork prebuilt → custom Report
+  | "reports.edit"            // rename, change defaults, share with team
+  | "reports.delete"          // delete a custom Report
+  | "reports.schedule"        // create / pause / delete schedules
+  | "reports.export"          // export CSV / JSON / PDF
+
   // System / DevOps
   | "system.read_settings"
   | "system.write_settings"
@@ -239,6 +247,8 @@ const PLATFORM_ALL: PlatformPermission[] = [
   "announcement.read", "announcement.write", "readiness.manage",
   "leads.read", "leads.manage", "plans.manage", "features.manage",
   "analytics.read", "analytics.export", "revenue.read", "usage.read",
+  "reports.read", "reports.create", "reports.edit", "reports.delete",
+  "reports.schedule", "reports.export",
   "system.read_settings", "system.write_settings",
   "system.maintenance_mode", "system.feature_freeze",
   "notifications.read", "notifications.manage",
@@ -252,6 +262,7 @@ const PLATFORM_BASELINE_READ: PlatformPermission[] = [
   "support.read", "health.read", "audit.read", "compliance.read",
   "feature_flag.read", "announcement.read", "leads.read",
   "analytics.read", "revenue.read", "usage.read",
+  "reports.read", "reports.export", // every staff role reads + can export
   "system.read_settings", "notifications.read",
 ];
 
@@ -273,6 +284,7 @@ export const PLATFORM_ROLE_PERMISSIONS: Record<PlatformRole, PlatformPermission[
     "announcement.write", "readiness.manage",
     "leads.manage", "plans.manage", "features.manage",
     "analytics.export",
+    "reports.create", "reports.edit", "reports.delete", "reports.schedule",
     "system.write_settings", "system.maintenance_mode", "system.feature_freeze",
     "notifications.manage",
   ]),
@@ -300,6 +312,7 @@ export const PLATFORM_ROLE_PERMISSIONS: Record<PlatformRole, PlatformPermission[
     "announcement.write", "readiness.manage",
     "leads.manage",
     "analytics.export",
+    "reports.create", "reports.edit", "reports.schedule",
     "notifications.manage",
   ]),
   // Owns the support queue; can manage macros & triage feedback but
@@ -319,6 +332,9 @@ export const PLATFORM_ROLE_PERMISSIONS: Record<PlatformRole, PlatformPermission[
     "audit.read", "compliance.read",
     "revenue.read", "usage.read", "analytics.read", "analytics.export",
     "plans.manage",
+    // Finance can read every report + run financial-domain ones,
+    // create custom reports, schedule them, and export.
+    "reports.read", "reports.create", "reports.edit", "reports.schedule", "reports.export",
     "notifications.read",
   ]),
   // Engineering — owns flags, can read every system surface, can
@@ -353,6 +369,10 @@ export const PLATFORM_ROLE_PERMISSIONS: Record<PlatformRole, PlatformPermission[
     "analytics.read", "analytics.export",
     "revenue.read", "usage.read",
     "leads.read",
+    // Analyst is the report power-user — read, create, edit, schedule,
+    // export. Cannot delete reports owned by others (delete still
+    // gated to Admins through ownership checks at write time).
+    "reports.read", "reports.create", "reports.edit", "reports.schedule", "reports.export",
   ]),
   // Exec / auditor — read-only across the platform.
   READ_ONLY_VIEWER: PLATFORM_BASELINE_READ,
