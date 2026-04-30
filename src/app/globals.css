@@ -714,6 +714,18 @@ button.underline:not([class*="ts-btn"]):not(:disabled):hover {
   100% { transform: scale(1);    box-shadow: 0 0 0 0 transparent; }
 }
 
+/* Live-feed pulse — the green dot at the top of /platform/activity.
+   Kept as a global keyframe so re-rendering the component doesn't
+   re-inject a <style> tag every tick. */
+@keyframes ts-activity-live-pulse {
+  0%   { box-shadow: 0 0 0 0 rgba(16, 185, 129, 0.55); }
+  70%  { box-shadow: 0 0 0 6px rgba(16, 185, 129, 0); }
+  100% { box-shadow: 0 0 0 0 rgba(16, 185, 129, 0); }
+}
+.ts-activity-live-pulse {
+  animation: ts-activity-live-pulse 2s ease-out infinite;
+}
+
 
 /* Brand logomark — swap variants based on theme. Default theme is
    dark, so the dark variant shows by default; [data-theme="light"]

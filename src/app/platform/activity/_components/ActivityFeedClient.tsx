@@ -8,19 +8,41 @@ import type { ActivityRow, ActivitySeverity, ActivitySource } from "@/server/pla
 // ActivityFeedClient — the live, infinite-scrolling feed body.
 //
 // Owns:
-//   • Live polling (every 5s) — fetches `?after=<lastSeen>` and
-//     prepends new rows. Pauses when the user has scrolled past the
-//     top, when manual pause is set, or when the tab is hidden.
+//   • Live polling — fetches `?after=<lastSeen>` and prepends new
+//     rows. Pauses when the user has scrolled past the top, when
+//     manual pause is set, or when the tab is hidden. Polling
+//     interval scales up on consecutive errors to protect the
+//     server.
 //   • Infinite scroll — IntersectionObserver on a sentinel triggers
-//     `?before=<oldestSeen>` for the next 50 rows.
+//     `?before=<oldestSeen>` for the next page. Capped at MAX_ROWS
+//     so the in-memory list never grows unbounded.
 //   • Expand-to-detail — each row clicks open the metadata JSON,
 //     IP/user-agent, and entity link inline.
 //   • Grouping — flat / hour / tenant / event-type pivots.
 //   • Date dividers — sticky "Today / Yesterday / Tuesday Apr 28"
 //     headings that appear at the right boundary in flat view.
+//
+// Memory hygiene matters here — early versions of this file polled
+// every 5s with take=200 and had no upper bound on the rows array,
+// which OOM'd long-lived tabs. The constants below cap both axes.
 
-const POLL_MS = 5_000;
-const PAGE_SIZE = 50;
+/** Default poll interval. 30s feels live but doesn't hammer the
+ *  server — admins are using this to catch new events, not as a
+ *  millisecond-precision dashboard. */
+const POLL_MS_BASE = 30_000;
+/** Max poll interval after consecutive errors. */
+const POLL_MS_MAX  = 120_000;
+/** Max events to fetch in a single live-poll round trip. */
+const POLL_TAKE    = 50;
+/** Max events to fetch in a single infinite-scroll page. */
+const PAGE_SIZE    = 50;
+/** Hard cap on rows kept in client memory at any time. We trim the
+ *  oldest beyond this — infinite scroll stops loading when we're at
+ *  the cap. Default sized so a long-lived tab stays under ~50MB. */
+const MAX_ROWS     = 300;
+/** Hard cap on the pendingBuffer so a user who scrolled away an
+ *  hour ago doesn't accumulate 10k events in memory. */
+const MAX_PENDING  = 200;
 
 type Group = "flat" | "hour" | "tenant" | "type";
 
@@ -67,28 +89,38 @@ export function ActivityFeedClient({
     if (paused) return;
     let cancelled = false;
     let timer: ReturnType<typeof setTimeout> | null = null;
+    let consecutiveErrors = 0;
+
+    const nextDelay = (): number => {
+      // Exponential backoff up to POLL_MS_MAX. Resets to base on a
+      // successful tick.
+      if (consecutiveErrors === 0) return POLL_MS_BASE;
+      const factor = Math.min(8, 2 ** consecutiveErrors);
+      return Math.min(POLL_MS_MAX, POLL_MS_BASE * factor);
+    };
 
     const tick = async () => {
       if (cancelled) return;
       // Skip the round-trip when the tab is hidden — comes back on
       // visibilitychange handler below.
       if (typeof document !== "undefined" && document.hidden) {
-        timer = setTimeout(tick, POLL_MS);
+        timer = setTimeout(tick, nextDelay());
         return;
       }
       try {
         const after = newestRef.current;
         if (!after) {
-          timer = setTimeout(tick, POLL_MS);
+          timer = setTimeout(tick, nextDelay());
           return;
         }
-        const url = `/api/platform/activity?${filterQs}&after=${encodeURIComponent(after)}&take=200`;
+        const url = `/api/platform/activity?${filterQs}&after=${encodeURIComponent(after)}&take=${POLL_TAKE}`;
         const res = await fetch(url, { cache: "no-store" });
         if (!res.ok) throw new Error("poll failed");
         const data = (await res.json()) as { rows: ActivityRow[] };
+        consecutiveErrors = 0;
         if (cancelled) return;
         if (data.rows.length === 0) {
-          timer = setTimeout(tick, POLL_MS);
+          timer = setTimeout(tick, nextDelay());
           return;
         }
         // The API gives newest-first.
@@ -96,24 +128,27 @@ export function ActivityFeedClient({
         // immediately. Otherwise hold them in `pendingNew` so the
         // user can opt-in via the live pill.
         if (scrollAtTopRef.current) {
-          setRows((prev) => mergeNewer(data.rows, prev));
+          setRows((prev) => trimRows(mergeNewer(data.rows, prev)));
           newestRef.current = data.rows[0]!.createdAtIso;
         } else {
-          setPendingNew((n) => n + data.rows.length);
-          // Still pre-fetched — stash them so the apply step is instant.
-          pendingBufferRef.current = mergeNewer(data.rows, pendingBufferRef.current ?? []);
+          // Cap the pending count so the live pill doesn't claim
+          // "999+ new events" when really we discarded most of them.
+          setPendingNew((n) => Math.min(MAX_PENDING, n + data.rows.length));
+          // Stash newest-first; cap the buffer at MAX_PENDING.
+          pendingBufferRef.current = mergeNewer(data.rows, pendingBufferRef.current ?? []).slice(0, MAX_PENDING);
           newestRef.current = data.rows[0]!.createdAtIso;
         }
       } catch {
-        // Silent on error — we'll retry on the next tick. Showing a
-        // toast on every flaky network blip would be noisier than
-        // useful for a passive live feed.
+        // Bump the error counter so the next delay is longer. Don't
+        // toast — a flaky network on a passive live feed isn't
+        // worth interrupting the user.
+        consecutiveErrors += 1;
       } finally {
-        if (!cancelled) timer = setTimeout(tick, POLL_MS);
+        if (!cancelled) timer = setTimeout(tick, nextDelay());
       }
     };
 
-    timer = setTimeout(tick, POLL_MS);
+    timer = setTimeout(tick, POLL_MS_BASE);
     return () => {
       cancelled = true;
       if (timer) clearTimeout(timer);
@@ -169,8 +204,19 @@ export function ActivityFeedClient({
       const res = await fetch(url, { cache: "no-store" });
       if (!res.ok) throw new Error("load failed");
       const data = (await res.json()) as { rows: ActivityRow[]; cursor: string | null };
-      setRows((prev) => prev.concat(data.rows));
-      setCursor(data.cursor);
+      setRows((prev) => {
+        const merged = prev.concat(data.rows);
+        // Hit the cap → stop offering more pages so the user
+        // doesn't accidentally OOM the tab. They can apply a
+        // narrower filter or use Export CSV for the full set.
+        if (merged.length >= MAX_ROWS) {
+          setCursor(null);
+          return merged.slice(0, MAX_ROWS);
+        }
+        return merged;
+      });
+      // If we didn't hit the cap above, advance the cursor.
+      setCursor((prevCursor) => (prevCursor == null ? null : data.cursor));
     } catch {
       // Silent — IntersectionObserver will retry if the user keeps
       // scrolling. Showing a toast per blip would be noisy.
@@ -182,7 +228,7 @@ export function ActivityFeedClient({
   const showPending = React.useCallback(() => {
     const buf = pendingBufferRef.current ?? [];
     if (buf.length > 0) {
-      setRows((prev) => mergeNewer(buf, prev));
+      setRows((prev) => trimRows(mergeNewer(buf, prev)));
       pendingBufferRef.current = null;
     }
     setPendingNew(0);
@@ -275,12 +321,17 @@ export function ActivityFeedClient({
         </ul>
       )}
 
-      {cursor && (
+      {cursor && rows.length < MAX_ROWS && (
         <div ref={sentinelRef} className="flex h-12 items-center justify-center text-[11px]" style={{ color: "var(--text-faint)" }}>
           {loading ? "Loading…" : "Scroll for more"}
         </div>
       )}
-      {!cursor && rows.length > 0 && (
+      {rows.length >= MAX_ROWS && (
+        <div className="flex h-12 items-center justify-center text-center text-[11px]" style={{ color: "var(--text-faint)" }}>
+          Showing {MAX_ROWS} most recent · narrow filters or use Export CSV for older events.
+        </div>
+      )}
+      {!cursor && rows.length > 0 && rows.length < MAX_ROWS && (
         <div className="flex h-12 items-center justify-center text-[11px]" style={{ color: "var(--text-faint)" }}>
           End of feed.
         </div>
@@ -455,20 +506,15 @@ function CopyButton({ text, label }: { text: string; label: string }) {
 function LiveDot({ paused }: { paused: boolean }) {
   return (
     <span className="inline-flex items-center gap-1.5 text-[11px]" style={{ color: paused ? "var(--text-muted)" : "var(--emerald-700)" }}>
-      <span aria-hidden style={{
-        width: 8, height: 8, borderRadius: 4,
-        background: paused ? "var(--slate-400)" : "var(--emerald-500)",
-        boxShadow: paused ? "none" : "0 0 0 0 var(--emerald-500)",
-        animation: paused ? "none" : "ts-live-pulse 2s ease-out infinite",
-      }} />
+      <span
+        aria-hidden
+        className={paused ? undefined : "ts-activity-live-pulse"}
+        style={{
+          width: 8, height: 8, borderRadius: 4,
+          background: paused ? "var(--slate-400)" : "var(--emerald-500)",
+        }}
+      />
       <span>{paused ? "Paused" : "Live"}</span>
-      <style>{`
-        @keyframes ts-live-pulse {
-          0%   { box-shadow: 0 0 0 0 rgba(16,185,129,0.55); }
-          70%  { box-shadow: 0 0 0 6px rgba(16,185,129,0); }
-          100% { box-shadow: 0 0 0 0 rgba(16,185,129,0); }
-        }
-      `}</style>
     </span>
   );
 }
@@ -555,6 +601,14 @@ function mergeNewer(newer: ActivityRow[], existing: ActivityRow[]): ActivityRow[
   const seen = new Set(existing.map((r) => r.id));
   const merged = [...newer.filter((r) => !seen.has(r.id)), ...existing];
   return merged.sort((a, b) => b.createdAtIso.localeCompare(a.createdAtIso));
+}
+
+/** Cap an array of rows at MAX_ROWS, keeping the newest. Older rows
+ *  fall off the bottom — the user can re-apply a narrower filter or
+ *  use Export CSV to access them. */
+function trimRows(rows: ActivityRow[]): ActivityRow[] {
+  if (rows.length <= MAX_ROWS) return rows;
+  return rows.slice(0, MAX_ROWS);
 }
 
 function dayLabel(d: Date): string {
