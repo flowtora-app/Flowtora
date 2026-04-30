@@ -1,4 +1,5 @@
 import { Suspense, cache } from "react";
+import Link from "next/link";
 import { requirePlatformStaff } from "@/lib/platform";
 import { resolveRange, type ResolvedRange } from "@/lib/reports";
 import {
@@ -6,231 +7,677 @@ import {
   loadAlerts,
   loadTriage,
   loadPlatformActivity,
+  loadTopTenantsByMrr,
+  loadRecentSignups,
+  loadRecentCancellations,
+  type Alert,
+  type PlatformActivityItem,
+  type RecentSignupRow,
+  type RecentCancellationRow,
+  type TriageBundle,
+  type TriageItem,
 } from "@/server/platform/overview-metrics";
-import { fmtNumber, fmtUsd, fmtUsdCompact } from "@/lib/platform-format";
+import { fmtUsd, fmtUsdCompact } from "@/lib/platform-format";
 
-import { AlertRail } from "@/components/platform/AlertRail";
-import { HeroRevenueCard } from "@/components/platform/HeroRevenueCard";
-import { HealthCard } from "@/components/platform/HealthCard";
-import { Kpi, KpiStrip } from "@/components/platform/KpiStrip";
-import { RevenueTrendCard } from "@/components/platform/RevenueTrendCard";
-import { PlanMixCard } from "@/components/platform/PlanMixCard";
-import { GrowthFunnelCard } from "@/components/platform/GrowthFunnelCard";
-import { ChurnReasonsCard } from "@/components/platform/ChurnReasonsCard";
-import { TriageTabs } from "@/components/platform/TriageTabs";
-import { PlatformActivityFeed } from "@/components/platform/PlatformActivityFeed";
-import { OpsRow } from "@/components/platform/OpsRow";
-import { PlatformQuickActions } from "@/components/platform/PlatformQuickActions";
+import {
+  AreaChartCard,
+  Avatar,
+  Badge,
+  BarChartCard,
+  Banner,
+  Breadcrumb,
+  Card,
+  CardBody,
+  CardFooter,
+  CardHeader,
+  DonutChartCard,
+  EmptyState,
+  PageHeader,
+  Skeleton,
+  StatusPill,
+} from "@/components/ui";
+
 import { RangeSelector } from "@/components/platform/RangeSelector";
 import { FreshnessBadge } from "@/components/platform/FreshnessBadge";
+import { KpiCard } from "./_dashboard/KpiCard";
+import { TopTenantsTable } from "./_dashboard/TopTenantsTable";
 
 export const dynamic = "force-dynamic";
 
-// React `cache` dedupes per-request. Both the Glance and Orient
-// sections need the same metrics, but they render in separate
-// Suspense boundaries — caching means one query bundle, two renders.
+// React `cache` dedupes per-request — multiple sections share the
+// same metrics bundle while staying inside their own Suspense boundary.
 const getMetrics = cache(async (range: ResolvedRange) => loadOverviewMetrics(range));
 
 type SearchParams = { range?: string; from?: string; to?: string };
 
 // ──────────────────────────────────────────────────────────────────
-// Platform command-center overview.
+// Page 1 — Dashboard (docs/flowtora-admin-spec.md §Page 1).
 //
-// Layout follows an act → glance → orient progression — Quick actions
-// sit at the top so the most common admin operations (impersonate,
-// run readiness, etc.) are one click away without scrolling past the
-// dashboards:
-//   Top:                   quick actions
-//   Band 1 (glance, < 5s): alerts rail · MRR hero · health gauge · KPI strip · ops vitals
-//   Band 2 (orient):       revenue trend + plan mix · growth funnel + churn reasons
-//   Band 3 (act, deeper):  triage queues · recent activity
+// Layout (12-col grid, gap 16px):
+//   Row 1 — Welcome row (greeting + date + range)
+//   Row 2 — KPI primary (6 cards, 2 cols each)
+//   Row 3 — KPI secondary (4 cards, 3 cols each)
+//   Row 4 — MRR/ARR area (8 cols) + Tenant growth bars (4 cols)
+//   Row 5 — Plan-mix donut (4 cols) + Top 10 tenants (8 cols)
+//   Row 6 — Tenants at risk (6 cols) + Activity feed (6 cols)
+//   Row 7 — System health (4 cols) + Geographic placeholder (8 cols)
+//   Row 8 — Recent signups (6 cols) + Recent cancellations (6 cols)
+//
+// Built from @/components/ui primitives — Card / PageHeader /
+// AreaChartCard / DonutChartCard / Table / StatusPill / Badge / Banner.
 // ──────────────────────────────────────────────────────────────────
 
-export default async function PlatformOverviewPage({
+export default async function PlatformDashboardPage({
   searchParams,
 }: {
   searchParams: Promise<SearchParams>;
 }) {
-  await requirePlatformStaff();
+  const ctx = await requirePlatformStaff();
   const sp = await searchParams;
   const range = resolveRange(sp);
 
   return (
     <div className="space-y-6">
-      <TopBar range={range} />
-
-      <PlatformQuickActions />
-
-      <Suspense fallback={<SectionSkeleton height={60} />}>
-        <AlertsSection />
+      <Suspense fallback={<HeaderSkeleton />}>
+        <Header rangeLabel={range.label} userEmail={ctx.email} />
       </Suspense>
 
-      <Suspense fallback={<GlanceSkeleton />}>
-        <GlanceSection range={range} />
+      <Suspense fallback={<SectionSkeleton height={64} />}>
+        <AlertsRow />
       </Suspense>
 
-      <Suspense fallback={<OrientSkeleton />}>
-        <OrientSection range={range} />
+      <Suspense fallback={<KpiPrimarySkeleton />}>
+        <KpiPrimary range={range} />
       </Suspense>
 
-      <Suspense fallback={<ActSkeleton />}>
-        <ActSection />
+      <Suspense fallback={<KpiSecondarySkeleton />}>
+        <KpiSecondary range={range} />
+      </Suspense>
+
+      <Suspense fallback={<ChartsSkeleton />}>
+        <ChartsRow range={range} />
+      </Suspense>
+
+      <Suspense fallback={<DonutTableSkeleton />}>
+        <PlanMixAndTopTenants range={range} />
+      </Suspense>
+
+      <Suspense fallback={<TwoColSkeleton height={360} />}>
+        <RiskAndActivity />
+      </Suspense>
+
+      <Suspense fallback={<TwoColSkeleton height={280} />}>
+        <SystemHealthAndGeo range={range} />
+      </Suspense>
+
+      <Suspense fallback={<TwoColSkeleton height={360} />}>
+        <SignupsAndCancellations />
       </Suspense>
     </div>
   );
 }
 
 // ──────────────────────────────────────────────────────────────────
-// Top bar: title + range + freshness
+// Row 1 — Header / Welcome row
 // ──────────────────────────────────────────────────────────────────
 
-function TopBar({ range }: { range: ReturnType<typeof resolveRange> }) {
+function Header({ rangeLabel, userEmail }: { rangeLabel: string; userEmail: string }) {
+  const now = new Date();
+  const greeting = greetingFor(now);
+  const dateLabel = now.toLocaleDateString(undefined, {
+    weekday: "long",
+    month: "long",
+    day: "numeric",
+    year: "numeric",
+  });
+  const timeLabel = now.toLocaleTimeString(undefined, { hour: "numeric", minute: "2-digit" });
+  const firstName = userEmail.split("@")[0]?.split(".")[0] ?? "there";
+
   return (
-    <header className="flex flex-wrap items-center justify-between gap-3">
-      <div>
-        <h1
-          className="text-2xl font-semibold tracking-tight"
-          style={{ color: "var(--text-default)" }}
-        >
-          Platform overview
-        </h1>
-        <p className="mt-0.5 text-sm" style={{ color: "var(--text-muted)" }}>
-          Mission control for Flowtora — revenue, health, and what needs your attention.
-        </p>
+    <div>
+      <Breadcrumb items={[{ label: "Platform", href: "/platform" }, { label: "Dashboard" }]} />
+      <div className="mt-3">
+        <PageHeader
+          eyebrow={`${dateLabel} · ${timeLabel} · ${rangeLabel}`}
+          title={`${greeting}, ${firstName}`}
+          description="Mission control for Flowtora — revenue, growth, tenant health, and what needs your attention."
+          actions={
+            <>
+              <RangeSelector range={resolveRange({})} />
+              <FreshnessBadge computedAt={new Date()} />
+            </>
+          }
+        />
       </div>
-      <div className="flex flex-wrap items-center gap-3">
-        <RangeSelector range={range} />
-        <FreshnessBadge computedAt={new Date()} />
-      </div>
-    </header>
+    </div>
+  );
+}
+
+function greetingFor(d: Date): string {
+  const h = d.getHours();
+  if (h < 5)  return "Up late";
+  if (h < 12) return "Good morning";
+  if (h < 17) return "Good afternoon";
+  if (h < 21) return "Good evening";
+  return "Hello";
+}
+
+// ──────────────────────────────────────────────────────────────────
+// Alerts strip
+// ──────────────────────────────────────────────────────────────────
+
+async function AlertsRow() {
+  const alerts = await loadAlerts();
+  if (alerts.length === 0) return null;
+  return (
+    <div className="grid grid-cols-1 gap-3 lg:grid-cols-2 xl:grid-cols-3">
+      {alerts.slice(0, 6).map((a) => (
+        <AlertChip key={a.id} alert={a} />
+      ))}
+    </div>
+  );
+}
+
+function AlertChip({ alert }: { alert: Alert }) {
+  const variant = alert.severity === "critical" ? "error" : alert.severity === "warning" ? "warning" : "info";
+  return (
+    <Banner variant={variant} layout="inline" cta={{ label: "Open", href: alert.href }}>
+      <span className="font-medium">{alert.label}</span>
+      {alert.count > 0 && (
+        <span className="ml-2 inline-flex items-center rounded-full bg-white/40 px-1.5 text-[10px] font-semibold tabular-nums">
+          {alert.count}
+        </span>
+      )}
+    </Banner>
   );
 }
 
 // ──────────────────────────────────────────────────────────────────
-// Sections
+// Row 2 — KPI primary (MRR · ARR · Active · New · Churn · Revenue)
 // ──────────────────────────────────────────────────────────────────
 
-async function AlertsSection() {
-  const alerts = await loadAlerts();
-  return <AlertRail alerts={alerts} />;
-}
-
-async function GlanceSection({ range }: { range: ReturnType<typeof resolveRange> }) {
+async function KpiPrimary({ range }: { range: ResolvedRange }) {
   const m = await getMetrics(range);
+  const sparkRevenue = m.revenueSparkline14d.map((p) => p.value);
 
   return (
-    <div className="space-y-4">
-      {/* Hero row: MRR left, Health right */}
-      <div className="grid grid-cols-1 gap-4 lg:grid-cols-[1.4fr_1fr]">
-        <HeroRevenueCard
-          mrr={m.mrr}
-          arr={m.arr}
-          mrrDeltaPct={m.mrrDeltaPct}
-          mrrPrior={m.mrrPrior}
-          spark={m.revenueSparkline14d}
-        />
-        <HealthCard score={m.healthScore} factors={m.healthFactors} />
-      </div>
-
-      {/* KPI strip */}
-      <KpiStrip>
-        <Kpi
-          label="Active tenants"
-          value={fmtNumber(m.activeTenants)}
-          sub={m.trialTenants > 0 ? `+${m.trialTenants} in trial` : undefined}
-          href="/platform/tenants?status=ACTIVE"
-          spark={m.sparkSignups14d}
-        />
-        <Kpi
-          label="New sign-ups"
-          value={fmtNumber(m.newTenantsInRange)}
-          deltaPct={m.newTenantsDeltaPct}
-          deltaHint="vs. prior period"
-          sub={range.label}
-          href="/platform/tenants"
-          spark={m.sparkSignups14d}
-          sparkColor="var(--success)"
-        />
-        <Kpi
-          label="Trial → paid"
-          value={m.trialToPaidPct30d == null ? "—" : `${m.trialToPaidPct30d}%`}
-          sub="30d conversion"
-          tone={m.trialToPaidPct30d != null && m.trialToPaidPct30d >= 30 ? "success" : "default"}
-        />
-        <Kpi
-          label="ARPU"
-          value={fmtUsd(m.arpu)}
-          sub={`${fmtUsdCompact(m.arr)} ARR`}
-        />
-        <Kpi
-          label="Churn (30d)"
-          value={m.churnPct30d == null ? "—" : `${m.churnPct30d}%`}
-          deltaInvertGood
-          sub={`${fmtNumber(m.canceledTenants)} lifetime`}
-          tone={m.churnPct30d != null && m.churnPct30d > 5 ? "danger" : "default"}
-        />
-        <Kpi
-          label="Past due"
-          value={fmtNumber(m.pastDueTenants)}
-          sub={m.suspendedTenants > 0 ? `+${m.suspendedTenants} suspended` : "none suspended"}
-          href="/platform/tenants?status=PAST_DUE"
-          tone={m.pastDueTenants > 0 ? "warning" : "default"}
-        />
-      </KpiStrip>
-
-      {/* Ops vitals */}
-      <OpsRow
-        emailsOut24h={m.emailsOut24h}
-        activeImpersonations={m.activeImpersonations}
-        pendingExports={m.pendingExports}
-        dueExportsOld={m.dueExportsOld}
-        paymentSuccessPct30d={m.paymentSuccessPct30d}
-        paymentsFailed30d={m.paymentsFailed30d}
+    <div className="grid grid-cols-1 gap-3 sm:grid-cols-2 lg:grid-cols-3 xl:grid-cols-6">
+      <KpiCard
+        label="MRR"
+        value={fmtUsd(m.mrr)}
+        deltaPct={m.mrrDeltaPct}
+        sub={`vs ${fmtUsdCompact(m.mrrPrior)} prior`}
+        spark={sparkRevenue}
+        href="/platform/billing/analytics"
+        hint="Monthly Recurring Revenue · Sum of all active subscription monthly amounts"
+      />
+      <KpiCard
+        label="ARR"
+        value={fmtUsd(m.arr)}
+        sub="MRR × 12"
+        spark={sparkRevenue}
+        sparkColor="var(--cyan-500)"
+        href="/platform/billing/analytics"
+      />
+      <KpiCard
+        label="Active tenants"
+        value={m.activeTenants.toLocaleString()}
+        sub={m.trialTenants > 0 ? `+${m.trialTenants} in trial` : `of ${m.totalTenants.toLocaleString()} total`}
+        spark={m.sparkSignups14d}
+        sparkColor="var(--emerald-500)"
+        href="/platform/tenants?status=ACTIVE"
+      />
+      <KpiCard
+        label="New tenants"
+        value={m.newTenantsInRange.toLocaleString()}
+        deltaPct={m.newTenantsDeltaPct}
+        sub={range.label}
+        spark={m.sparkSignups14d}
+        sparkColor="var(--emerald-500)"
+        href="/platform/tenants"
+      />
+      <KpiCard
+        label="Churn rate (30d)"
+        value={m.churnPct30d == null ? "—" : `${m.churnPct30d}%`}
+        invertDelta
+        sub={`${m.canceledTenants.toLocaleString()} cancelled lifetime`}
+        tone={m.churnPct30d != null && m.churnPct30d > 5 ? "danger" : "default"}
+        href="/platform/tenants?status=CANCELED"
+        hint="Cancelled MRR / Starting MRR over the period"
+      />
+      <KpiCard
+        label="Revenue"
+        value={fmtUsd(m.paymentsInRange)}
+        sub={range.label}
+        spark={sparkRevenue}
+        sparkColor="var(--brand-500)"
+        href="/platform/billing/payments"
       />
     </div>
   );
 }
 
-async function OrientSection({ range }: { range: ReturnType<typeof resolveRange> }) {
+// ──────────────────────────────────────────────────────────────────
+// Row 3 — KPI secondary (Tickets · Active users · Trial→Paid · NRR)
+// ──────────────────────────────────────────────────────────────────
+
+async function KpiSecondary({ range }: { range: ResolvedRange }) {
+  const [m, triage] = await Promise.all([getMetrics(range), loadTriage()]);
+  const tickets = triage.support.length;
+
+  return (
+    <div className="grid grid-cols-1 gap-3 sm:grid-cols-2 xl:grid-cols-4">
+      <KpiCard
+        label="Open support tickets"
+        value={tickets.toLocaleString()}
+        sub={tickets > 0 ? `Top priority across ${triage.payments.length} also failing payment` : "Inbox empty"}
+        tone={tickets > 5 ? "warning" : "default"}
+        href="/platform/support"
+      />
+      <KpiCard
+        label="Active impersonations"
+        value={m.activeImpersonations.toLocaleString()}
+        sub={m.activeImpersonations === 0 ? "All staff working as themselves" : "Live sessions in progress"}
+        tone={m.activeImpersonations > 0 ? "warning" : "default"}
+        href="/platform/security"
+      />
+      <KpiCard
+        label="Trial → paid"
+        value={m.trialToPaidPct30d == null ? "—" : `${m.trialToPaidPct30d}%`}
+        sub="30d conversion"
+        tone={m.trialToPaidPct30d != null && m.trialToPaidPct30d >= 30 ? "success" : "default"}
+        href="/platform/tenants"
+      />
+      <KpiCard
+        label="Payment success"
+        value={`${m.paymentSuccessPct30d}%`}
+        sub={m.paymentsFailed30d > 0 ? `${m.paymentsFailed30d} failed in 30d` : "No failures in 30d"}
+        invertDelta={false}
+        tone={m.paymentSuccessPct30d < 95 ? "warning" : "success"}
+        href="/platform/billing/payments"
+      />
+    </div>
+  );
+}
+
+// ──────────────────────────────────────────────────────────────────
+// Row 4 — MRR/ARR area (8 cols) + Tenant growth bars (4 cols)
+// ──────────────────────────────────────────────────────────────────
+
+async function ChartsRow({ range }: { range: ResolvedRange }) {
   const m = await getMetrics(range);
+
+  // Build tenant-growth series from signupsTrend (the trend already
+  // emits per-bucket counts under "value"; we render it as a bar).
+  const growthSeries = m.signupsTrend.map((p) => ({ ...p }));
 
   return (
     <div className="grid grid-cols-1 gap-4 lg:grid-cols-[2fr_1fr]">
-      <RevenueTrendCard
-        data={m.revenueTrend}
-        stackKeys={m.planStackKeys}
-        planMix={m.planMix}
-        totalInRange={m.paymentsInRange}
-        rangeLabel={range.label}
-      />
-      <PlanMixCard planMix={m.planMix} totalMrr={m.mrr} totalActive={m.activeTenants} />
+      <Card padding="md" className="h-full">
+        <CardHeader
+          title="Revenue trend"
+          description={`MRR by plan over ${range.label.toLowerCase()}`}
+          right={<Link href="/platform/billing/analytics" className="text-[12px] font-medium" style={{ color: "var(--accent-primary)" }}>Analytics →</Link>}
+        />
+        <CardBody>
+          {m.revenueTrend.length > 0 ? (
+            <AreaChartCard
+              data={m.revenueTrend}
+              xKey="label"
+              series={m.planStackKeys.map((k) => ({ dataKey: k, name: k }))}
+              stacked
+              height="md"
+              valueFormat={fmtUsdCompact}
+            />
+          ) : (
+            <ChartEmpty label="No paid revenue in this range yet." />
+          )}
+        </CardBody>
+      </Card>
 
-      <GrowthFunnelCard
-        data={m.conversionTrend}
-        newTenantsInRange={m.newTenantsInRange}
-        newTenantsDeltaPct={m.newTenantsDeltaPct}
-        trialToPaidPct30d={m.trialToPaidPct30d}
-        rangeLabel={range.label}
-      />
-      <ChurnReasonsCard
-        reasons={m.churnReasons}
-        churnPct30d={m.churnPct30d}
-      />
+      <Card padding="md" className="h-full">
+        <CardHeader title="Tenant growth" description="New sign-ups by period" />
+        <CardBody>
+          {growthSeries.length > 0 ? (
+            <BarChartCard
+              data={growthSeries}
+              xKey="label"
+              series={[{ dataKey: "value", name: "New sign-ups", color: "var(--emerald-500)" }]}
+              height="md"
+              showLegend={false}
+            />
+          ) : (
+            <ChartEmpty label="No signups yet in this range." />
+          )}
+        </CardBody>
+      </Card>
     </div>
   );
 }
 
-async function ActSection() {
-  const [triage, activity] = await Promise.all([
-    loadTriage(),
-    loadPlatformActivity(12),
-  ]);
+// ──────────────────────────────────────────────────────────────────
+// Row 5 — Revenue by Plan donut + Top 10 tenants
+// ──────────────────────────────────────────────────────────────────
+
+async function PlanMixAndTopTenants({ range }: { range: ResolvedRange }) {
+  const [m, top] = await Promise.all([getMetrics(range), loadTopTenantsByMrr(10)]);
+  const donutData = m.planMix
+    .filter((p) => p.mrr > 0)
+    .map((p) => ({ name: p.name, value: p.mrr }));
+  const colors = m.planMix.filter((p) => p.mrr > 0).map((p) => p.color);
 
   return (
-    <div className="grid grid-cols-1 gap-4 lg:grid-cols-[1.2fr_1fr]">
-      <TriageTabs triage={triage} />
-      <PlatformActivityFeed items={activity} />
+    <div className="grid grid-cols-1 gap-4 lg:grid-cols-[1fr_2fr]">
+      <Card padding="md" className="h-full">
+        <CardHeader title="Revenue by plan" description={`MRR mix · ${fmtUsd(m.mrr)} total`} />
+        <CardBody>
+          {donutData.length > 0 ? (
+            <DonutChartCard
+              data={donutData}
+              colors={colors}
+              centerLabel={fmtUsdCompact(m.mrr)}
+              height="md"
+              valueFormat={fmtUsdCompact}
+            />
+          ) : (
+            <ChartEmpty label="No paid plans active yet." />
+          )}
+        </CardBody>
+      </Card>
+
+      <Card padding="none" className="h-full overflow-hidden">
+        <div className="px-4 pt-4 pb-3">
+          <CardHeader
+            title="Top tenants by MRR"
+            description="Highest-value paying accounts"
+            right={<Link href="/platform/tenants" className="text-[12px] font-medium" style={{ color: "var(--accent-primary)" }}>View all →</Link>}
+          />
+        </div>
+        {top.length > 0 ? (
+          <TopTenantsTable rows={top} />
+        ) : (
+          <div className="p-6">
+            <EmptyState
+              title="No tenants on a paid plan yet"
+              description="Once tenants upgrade from trial, they'll show up here ranked by monthly recurring revenue."
+            />
+          </div>
+        )}
+      </Card>
     </div>
+  );
+}
+
+// ──────────────────────────────────────────────────────────────────
+// Row 6 — Tenants at risk + Activity feed
+// ──────────────────────────────────────────────────────────────────
+
+async function RiskAndActivity() {
+  const [triage, activity] = await Promise.all([loadTriage(), loadPlatformActivity(12)]);
+
+  return (
+    <div className="grid grid-cols-1 gap-4 lg:grid-cols-2">
+      <Card padding="none" className="h-full overflow-hidden">
+        <div className="px-4 pt-4 pb-2">
+          <CardHeader
+            title="Tenants at risk"
+            description="Past-due, suspended, or trial about to expire"
+            right={<Link href="/platform/tenants?status=PAST_DUE" className="text-[12px] font-medium" style={{ color: "var(--accent-primary)" }}>All at-risk →</Link>}
+          />
+        </div>
+        <RiskList triage={triage} />
+      </Card>
+
+      <Card padding="none" className="h-full overflow-hidden">
+        <div className="px-4 pt-4 pb-2">
+          <CardHeader
+            title="Recent activity"
+            description="Last 12 platform events"
+            right={<Link href="/platform/audit" className="text-[12px] font-medium" style={{ color: "var(--accent-primary)" }}>Open feed →</Link>}
+          />
+        </div>
+        <ActivityList items={activity} />
+      </Card>
+    </div>
+  );
+}
+
+function RiskList({ triage }: { triage: TriageBundle }) {
+  // Combine the most-urgent risk buckets into a single list, prefixed
+  // by category so the operator can see what's most pressing.
+  const items: { item: TriageItem; tag: string }[] = [
+    ...triage.unhealthy.slice(0, 4).map((i) => ({ item: i, tag: "Unhealthy" })),
+    ...triage.payments.slice(0, 3).map((i) => ({ item: i, tag: "Failed pay" })),
+    ...triage.trials.slice(0, 3).map((i) => ({ item: i, tag: "Trial ends" })),
+  ];
+
+  if (items.length === 0) {
+    return (
+      <div className="p-6">
+        <EmptyState title="All quiet" description="No tenants flagged as at-risk right now." />
+      </div>
+    );
+  }
+
+  return (
+    <ul className="divide-y" style={{ borderColor: "var(--border-subtle)" }}>
+      {items.map(({ item, tag }) => (
+        <li key={item.id}>
+          <Link
+            href={item.href}
+            className="flex items-center gap-3 px-4 py-2.5 hover:bg-[var(--surface-2)]"
+          >
+            <Avatar size="xs" name={item.title} />
+            <div className="min-w-0 flex-1">
+              <div className="flex items-center gap-2">
+                <span className="truncate text-[13px] font-medium" style={{ color: "var(--text-default)" }}>{item.title}</span>
+                <Badge size="xs" color={item.tone === "danger" ? "error" : item.tone === "warning" ? "warning" : "neutral"}>
+                  {tag}
+                </Badge>
+              </div>
+              <div className="truncate text-[11px]" style={{ color: "var(--text-muted)" }}>{item.meta}</div>
+            </div>
+            <span style={{ color: "var(--text-faint)" }}>→</span>
+          </Link>
+        </li>
+      ))}
+    </ul>
+  );
+}
+
+function ActivityList({ items }: { items: PlatformActivityItem[] }) {
+  if (items.length === 0) {
+    return (
+      <div className="p-6">
+        <EmptyState title="No recent activity" description="Events from the last 72 hours will show up here." />
+      </div>
+    );
+  }
+  return (
+    <ul className="divide-y" style={{ borderColor: "var(--border-subtle)" }}>
+      {items.map((it) => {
+        const dot = it.tone === "danger"  ? "var(--rose-500)"
+                  : it.tone === "warning" ? "var(--amber-500)"
+                  : it.tone === "success" ? "var(--emerald-500)"
+                  : it.tone === "info"    ? "var(--brand-500)"
+                  : "var(--slate-400)";
+        const inner = (
+          <div className="flex items-start gap-3 px-4 py-2.5">
+            <span aria-hidden style={{ width: 8, height: 8, marginTop: 7, borderRadius: 4, background: dot }} />
+            <div className="min-w-0 flex-1">
+              <div className="truncate text-[13px]" style={{ color: "var(--text-default)" }}>{it.title}</div>
+              <div className="truncate text-[11px]" style={{ color: "var(--text-muted)" }}>
+                {it.subtitle} · {formatRelative(it.occurredAt)}
+              </div>
+            </div>
+          </div>
+        );
+        return (
+          <li key={it.id}>
+            {it.href ? (
+              <Link href={it.href} className="block hover:bg-[var(--surface-2)]">{inner}</Link>
+            ) : (
+              inner
+            )}
+          </li>
+        );
+      })}
+    </ul>
+  );
+}
+
+// ──────────────────────────────────────────────────────────────────
+// Row 7 — System health + Geographic placeholder
+// ──────────────────────────────────────────────────────────────────
+
+async function SystemHealthAndGeo({ range }: { range: ResolvedRange }) {
+  const m = await getMetrics(range);
+  const stats: { label: string; value: string; tone: "success" | "warning" | "danger" | "neutral" }[] = [
+    { label: "Payment success (30d)", value: `${m.paymentSuccessPct30d}%`, tone: m.paymentSuccessPct30d >= 95 ? "success" : m.paymentSuccessPct30d >= 90 ? "warning" : "danger" },
+    { label: "Emails sent (24h)",     value: m.emailsOut24h.toLocaleString(), tone: "neutral" },
+    { label: "Active impersonations",  value: m.activeImpersonations.toLocaleString(), tone: m.activeImpersonations > 0 ? "warning" : "success" },
+    { label: "Pending data exports",   value: m.pendingExports.toLocaleString(), tone: m.dueExportsOld > 0 ? "warning" : "neutral" },
+  ];
+
+  return (
+    <div className="grid grid-cols-1 gap-4 lg:grid-cols-[1fr_2fr]">
+      <Card padding="md" className="h-full">
+        <CardHeader title="System health" description="Last 30 days" />
+        <CardBody>
+          <ul className="flex flex-col gap-2">
+            {stats.map((s) => (
+              <li key={s.label} className="flex items-center justify-between gap-2">
+                <span className="flex items-center gap-2 text-[13px]" style={{ color: "var(--text-default)" }}>
+                  <span aria-hidden style={{
+                    width: 8, height: 8, borderRadius: 4,
+                    background: s.tone === "success" ? "var(--emerald-500)"
+                              : s.tone === "warning" ? "var(--amber-500)"
+                              : s.tone === "danger"  ? "var(--rose-500)"
+                              : "var(--slate-400)",
+                  }} />
+                  {s.label}
+                </span>
+                <span className="font-mono text-[13px] font-semibold tabular-nums" style={{ color: "var(--text-default)" }}>
+                  {s.value}
+                </span>
+              </li>
+            ))}
+          </ul>
+        </CardBody>
+        <CardFooter>
+          <Link href="/platform/health" className="text-[12px] font-medium" style={{ color: "var(--accent-primary)" }}>
+            System status →
+          </Link>
+        </CardFooter>
+      </Card>
+
+      <Card padding="md" className="h-full">
+        <CardHeader title="Geographic distribution" description="Tenants by country" />
+        <CardBody>
+          <EmptyState
+            title="Coming soon"
+            description="The choropleth + bubble overlay arrives once we wire the geo-aggregator. Tenant counts by country are already collected — only the renderer is missing."
+          />
+        </CardBody>
+      </Card>
+    </div>
+  );
+}
+
+// ──────────────────────────────────────────────────────────────────
+// Row 8 — Recent signups + Recent cancellations
+// ──────────────────────────────────────────────────────────────────
+
+async function SignupsAndCancellations() {
+  const [signups, cancellations] = await Promise.all([
+    loadRecentSignups(8),
+    loadRecentCancellations(8),
+  ]);
+  return (
+    <div className="grid grid-cols-1 gap-4 lg:grid-cols-2">
+      <Card padding="none" className="h-full overflow-hidden">
+        <div className="px-4 pt-4 pb-2">
+          <CardHeader
+            title="Recent signups"
+            description="Newest tenants on Flowtora"
+            right={<Link href="/platform/tenants" className="text-[12px] font-medium" style={{ color: "var(--accent-primary)" }}>Onboarding →</Link>}
+          />
+        </div>
+        <SignupList rows={signups} />
+      </Card>
+      <Card padding="none" className="h-full overflow-hidden">
+        <div className="px-4 pt-4 pb-2">
+          <CardHeader
+            title="Recent cancellations"
+            description="Tenants who closed their account"
+            right={<Link href="/platform/tenants?status=CANCELED" className="text-[12px] font-medium" style={{ color: "var(--accent-primary)" }}>Churn report →</Link>}
+          />
+        </div>
+        <CancellationList rows={cancellations} />
+      </Card>
+    </div>
+  );
+}
+
+function SignupList({ rows }: { rows: RecentSignupRow[] }) {
+  if (rows.length === 0) {
+    return (
+      <div className="p-6">
+        <EmptyState title="No recent signups" description="When new tenants sign up, they'll show here." />
+      </div>
+    );
+  }
+  return (
+    <ul className="divide-y" style={{ borderColor: "var(--border-subtle)" }}>
+      {rows.map((r) => (
+        <li key={r.id}>
+          <Link href={`/platform/tenants/${r.id}`} className="flex items-center gap-3 px-4 py-2.5 hover:bg-[var(--surface-2)]">
+            <Avatar size="xs" name={r.name} />
+            <div className="min-w-0 flex-1">
+              <div className="flex items-center gap-2">
+                <span className="truncate text-[13px] font-medium" style={{ color: "var(--text-default)" }}>{r.name}</span>
+                <Badge size="xs" color={r.status === "TRIAL" ? "info" : "success"}>
+                  {r.status === "TRIAL" ? "Trial" : r.plan}
+                </Badge>
+              </div>
+              <div className="truncate text-[11px]" style={{ color: "var(--text-muted)" }}>
+                {r.ownerEmail ?? "—"}{r.country ? ` · ${r.country}` : ""} · {formatRelative(r.createdAt)}
+              </div>
+            </div>
+          </Link>
+        </li>
+      ))}
+    </ul>
+  );
+}
+
+function CancellationList({ rows }: { rows: RecentCancellationRow[] }) {
+  if (rows.length === 0) {
+    return (
+      <div className="p-6">
+        <EmptyState title="No cancellations" description="Cancelled accounts will appear here once requests complete." />
+      </div>
+    );
+  }
+  return (
+    <ul className="divide-y" style={{ borderColor: "var(--border-subtle)" }}>
+      {rows.map((r) => (
+        <li key={r.id}>
+          <Link href={`/platform/tenants/${r.tenantId}`} className="flex items-center gap-3 px-4 py-2.5 hover:bg-[var(--surface-2)]">
+            <Avatar size="xs" name={r.tenantName} />
+            <div className="min-w-0 flex-1">
+              <div className="flex items-center gap-2">
+                <span className="truncate text-[13px] font-medium" style={{ color: "var(--text-default)" }}>{r.tenantName}</span>
+                <StatusPill status="cancelled" size="sm" />
+              </div>
+              <div className="truncate text-[11px]" style={{ color: "var(--text-muted)" }}>
+                Was on {r.plan} · −{fmtUsd(r.mrrLost)} MRR · {formatRelative(r.cancelledAt)}{r.reason ? ` · "${r.reason}"` : ""}
+              </div>
+            </div>
+          </Link>
+        </li>
+      ))}
+    </ul>
   );
 }
 
@@ -238,56 +685,91 @@ async function ActSection() {
 // Skeletons
 // ──────────────────────────────────────────────────────────────────
 
+function HeaderSkeleton() {
+  return (
+    <div className="flex flex-col gap-3">
+      <Skeleton className="h-3 w-48" />
+      <Skeleton className="h-8 w-72" />
+      <Skeleton className="h-4 w-96" />
+    </div>
+  );
+}
+
 function SectionSkeleton({ height }: { height: number }) {
   return (
-    <div
-      className="animate-pulse rounded-2xl"
-      style={{
-        height,
-        background: "var(--surface-1)",
-        border: "1px solid var(--border-subtle)",
-      }}
-    />
+    <Skeleton style={{ height }} className="w-full rounded-lg" />
   );
 }
 
-function GlanceSkeleton() {
+function KpiPrimarySkeleton() {
   return (
-    <div className="space-y-4">
-      <div className="grid grid-cols-1 gap-4 lg:grid-cols-[1.4fr_1fr]">
-        <SectionSkeleton height={160} />
-        <SectionSkeleton height={160} />
-      </div>
-      <div className="grid grid-cols-2 gap-3 md:grid-cols-3 xl:grid-cols-6">
-        {Array.from({ length: 6 }).map((_, i) => (
-          <SectionSkeleton key={i} height={120} />
-        ))}
-      </div>
-      <div className="grid grid-cols-1 gap-3 sm:grid-cols-2 lg:grid-cols-4">
-        {Array.from({ length: 4 }).map((_, i) => (
-          <SectionSkeleton key={i} height={88} />
-        ))}
-      </div>
+    <div className="grid grid-cols-1 gap-3 sm:grid-cols-2 lg:grid-cols-3 xl:grid-cols-6">
+      {Array.from({ length: 6 }).map((_, i) => (
+        <SectionSkeleton key={i} height={132} />
+      ))}
     </div>
   );
 }
 
-function OrientSkeleton() {
+function KpiSecondarySkeleton() {
+  return (
+    <div className="grid grid-cols-1 gap-3 sm:grid-cols-2 xl:grid-cols-4">
+      {Array.from({ length: 4 }).map((_, i) => (
+        <SectionSkeleton key={i} height={132} />
+      ))}
+    </div>
+  );
+}
+
+function ChartsSkeleton() {
   return (
     <div className="grid grid-cols-1 gap-4 lg:grid-cols-[2fr_1fr]">
-      <SectionSkeleton height={320} />
-      <SectionSkeleton height={320} />
+      <SectionSkeleton height={360} />
+      <SectionSkeleton height={360} />
+    </div>
+  );
+}
+
+function DonutTableSkeleton() {
+  return (
+    <div className="grid grid-cols-1 gap-4 lg:grid-cols-[1fr_2fr]">
       <SectionSkeleton height={320} />
       <SectionSkeleton height={320} />
     </div>
   );
 }
 
-function ActSkeleton() {
+function TwoColSkeleton({ height }: { height: number }) {
   return (
-    <div className="grid grid-cols-1 gap-4 lg:grid-cols-[1.2fr_1fr]">
-      <SectionSkeleton height={440} />
-      <SectionSkeleton height={440} />
+    <div className="grid grid-cols-1 gap-4 lg:grid-cols-2">
+      <SectionSkeleton height={height} />
+      <SectionSkeleton height={height} />
     </div>
   );
 }
+
+// ──────────────────────────────────────────────────────────────────
+// Helpers
+// ──────────────────────────────────────────────────────────────────
+
+function ChartEmpty({ label }: { label: string }) {
+  return (
+    <div
+      className="flex h-[240px] items-center justify-center rounded-md text-[12px]"
+      style={{ background: "var(--surface-2)", color: "var(--text-muted)" }}
+    >
+      {label}
+    </div>
+  );
+}
+
+function formatRelative(d: Date): string {
+  const ms = Date.now() - d.getTime();
+  const min = 60_000, hour = 60 * min, day = 24 * hour;
+  if (ms < min)  return "just now";
+  if (ms < hour) return `${Math.floor(ms / min)}m ago`;
+  if (ms < day)  return `${Math.floor(ms / hour)}h ago`;
+  if (ms < 30 * day) return `${Math.floor(ms / day)}d ago`;
+  return d.toLocaleDateString();
+}
+

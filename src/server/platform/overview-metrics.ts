@@ -822,3 +822,134 @@ function ageLabel(d: Date): string {
   const days = Math.round(hrs / 24);
   return `${days}d ago`;
 }
+
+// ──────────────────────────────────────────────────────────────────
+// Page 1 dashboard widgets — Top tenants, Recent signups, Cancellations
+// ──────────────────────────────────────────────────────────────────
+
+export type TopTenantRow = {
+  id: string;
+  name: string;
+  slug: string;
+  plan: string;
+  planSlug: string;
+  status: TenantStatus;
+  mrr: number;
+  users: number;
+  lastActivityAt: Date | null;
+  healthScore: number;
+};
+
+/** Top N active tenants by approximate MRR (plan price × 1).
+ *  Ranks by plan price desc, then user count desc as tiebreaker. */
+export async function loadTopTenantsByMrr(limit = 10): Promise<TopTenantRow[]> {
+  const plans = await getAllPlans();
+  const priceByEnum = priceByEnumKey(plans);
+
+  const tenants = await db.tenant.findMany({
+    where: { status: { in: ["ACTIVE", "PAST_DUE"] } },
+    select: {
+      id: true, name: true, slug: true, plan: true, status: true, lastActivityAt: true,
+      _count: { select: { memberships: true } },
+    },
+  });
+
+  const rows: TopTenantRow[] = tenants.map((t) => {
+    const price = priceByEnum.get(t.plan)?.price ?? 0;
+    // Health score heuristic: ACTIVE = 90 baseline, PAST_DUE = 40, then
+    // shave 30 if last activity > 30d, 10 if 7–30d.
+    const baseScore = t.status === "ACTIVE" ? 90 : 40;
+    const lastDays = t.lastActivityAt
+      ? Math.floor((Date.now() - t.lastActivityAt.getTime()) / DAY)
+      : null;
+    const activityPenalty = lastDays == null ? 20 : lastDays > 30 ? 30 : lastDays > 7 ? 10 : 0;
+    return {
+      id: t.id,
+      name: t.name,
+      slug: t.slug,
+      plan: priceByEnum.get(t.plan)?.plan.name ?? String(t.plan),
+      planSlug: priceByEnum.get(t.plan)?.plan.slug ?? String(t.plan).toLowerCase(),
+      status: t.status,
+      mrr: price,
+      users: t._count.memberships,
+      lastActivityAt: t.lastActivityAt,
+      healthScore: Math.max(0, Math.min(100, baseScore - activityPenalty)),
+    };
+  });
+
+  rows.sort((a, b) => (b.mrr - a.mrr) || (b.users - a.users));
+  return rows.slice(0, limit);
+}
+
+export type RecentSignupRow = {
+  id: string;
+  name: string;
+  slug: string;
+  plan: string;
+  status: TenantStatus;
+  ownerEmail: string | null;
+  country: string | null;
+  createdAt: Date;
+};
+
+export async function loadRecentSignups(limit = 8): Promise<RecentSignupRow[]> {
+  const tenants = await db.tenant.findMany({
+    where: { status: { in: ["TRIAL", "ACTIVE"] } },
+    orderBy: { createdAt: "desc" },
+    take: limit,
+    select: {
+      id: true, name: true, slug: true, plan: true, status: true, country: true, createdAt: true,
+      memberships: {
+        where: { role: "OWNER" },
+        select: { user: { select: { email: true } } },
+        take: 1,
+      },
+    },
+  });
+
+  return tenants.map((t) => ({
+    id: t.id,
+    name: t.name,
+    slug: t.slug,
+    plan: String(t.plan),
+    status: t.status,
+    ownerEmail: t.memberships[0]?.user?.email ?? null,
+    country: t.country,
+    createdAt: t.createdAt,
+  }));
+}
+
+export type RecentCancellationRow = {
+  id: string;
+  tenantId: string;
+  tenantName: string;
+  plan: string;
+  mrrLost: number;
+  reason: string | null;
+  cancelledAt: Date;
+};
+
+export async function loadRecentCancellations(limit = 8): Promise<RecentCancellationRow[]> {
+  const plans = await getAllPlans();
+  const priceByEnum = priceByEnumKey(plans);
+
+  const completions = await db.accountDeletionRequest.findMany({
+    where: { status: "COMPLETED", completedAt: { not: null } },
+    orderBy: { completedAt: "desc" },
+    take: limit,
+    select: {
+      id: true, completedAt: true, reason: true,
+      tenant: { select: { id: true, name: true, plan: true } },
+    },
+  });
+
+  return completions.map((c) => ({
+    id: c.id,
+    tenantId: c.tenant.id,
+    tenantName: c.tenant.name,
+    plan: String(c.tenant.plan),
+    mrrLost: priceByEnum.get(c.tenant.plan)?.price ?? 0,
+    reason: c.reason,
+    cancelledAt: c.completedAt!,
+  }));
+}
