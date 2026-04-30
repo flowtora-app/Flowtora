@@ -23,17 +23,14 @@ import {
 import { fmtUsd, fmtUsdCompact } from "@/lib/platform-format";
 
 import {
-  AreaChartCard,
   Avatar,
   Badge,
-  BarChartCard,
   Banner,
   Breadcrumb,
   Card,
   CardBody,
   CardFooter,
   CardHeader,
-  DonutChartCard,
   EmptyState,
   PageHeader,
   Skeleton,
@@ -45,6 +42,7 @@ import { FreshnessBadge } from "@/components/platform/FreshnessBadge";
 import { KpiCard } from "./_dashboard/KpiCard";
 import { TopTenantsTable } from "./_dashboard/TopTenantsTable";
 import { TenantWorldMap } from "./_dashboard/TenantWorldMap";
+import { RevenueAreaChart, GrowthBarChart, PlanMixDonut } from "./_dashboard/DashboardCharts";
 
 export const dynamic = "force-dynamic";
 
@@ -334,13 +332,12 @@ async function ChartsRow({ range }: { range: ResolvedRange }) {
         />
         <CardBody>
           {m.revenueTrend.length > 0 ? (
-            <AreaChartCard
+            <RevenueAreaChart
               data={m.revenueTrend}
               xKey="label"
               series={m.planStackKeys.map((k) => ({ dataKey: k, name: k }))}
               stacked
               height="md"
-              valueFormat={fmtUsdCompact}
             />
           ) : (
             <ChartEmpty label="No paid revenue in this range yet." />
@@ -352,7 +349,7 @@ async function ChartsRow({ range }: { range: ResolvedRange }) {
         <CardHeader title="Tenant growth" description="New sign-ups by period" />
         <CardBody>
           {growthSeries.length > 0 ? (
-            <BarChartCard
+            <GrowthBarChart
               data={growthSeries}
               xKey="label"
               series={[{ dataKey: "value", name: "New sign-ups", color: "var(--emerald-500)" }]}
@@ -385,12 +382,11 @@ async function PlanMixAndTopTenants({ range }: { range: ResolvedRange }) {
         <CardHeader title="Revenue by plan" description={`MRR mix · ${fmtUsd(m.mrr)} total`} />
         <CardBody>
           {donutData.length > 0 ? (
-            <DonutChartCard
+            <PlanMixDonut
               data={donutData}
               colors={colors}
               centerLabel={fmtUsdCompact(m.mrr)}
               height="md"
-              valueFormat={fmtUsdCompact}
             />
           ) : (
             <ChartEmpty label="No paid plans active yet." />
