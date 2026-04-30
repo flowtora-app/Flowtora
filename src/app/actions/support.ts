@@ -22,14 +22,19 @@ import { sendNotification } from "@/lib/notifications";
 import { getPref, resolvePrefs, resolveEffectivePref } from "@/lib/notif-prefs";
 import { appOrigin } from "@/lib/share";
 import { computeDueBy } from "@/lib/support-sla";
-import type { SupportTicketCategory, SupportTicketPriority } from "@prisma/client";
+import type { SupportTicketCategory, SupportTicketPriority, SupportTicketModule } from "@prisma/client";
 
 const CATEGORIES = ["BILLING", "BUG", "FEATURE_REQUEST", "QUESTION", "OTHER"] as const;
 const PRIORITIES = ["LOW", "NORMAL", "HIGH", "URGENT"] as const;
+const MODULES = [
+  "BILLING", "AUTH", "PROOFS", "ORDERS", "INVOICES", "QUOTES",
+  "PRODUCTS", "REPORTS", "INTEGRATIONS", "PORTAL", "EMAIL", "ADMIN", "OTHER",
+] as const;
 
 const openSchema = z.object({
   subject:  z.string().min(3).max(200),
   category: z.enum(CATEGORIES),
+  module:   z.enum(MODULES).optional(),
   priority: z.enum(PRIORITIES).optional(),
   body:     z.string().min(1).max(8000),
 });
@@ -40,14 +45,16 @@ export async function openSupportTicket(slug: string, formData: FormData) {
   if (!parsed.success) {
     redirect(`/t/${slug}/support/new?error=${encodeURIComponent("Add a subject, category, and body.")}`);
   }
-  const { subject, category, priority, body } = parsed.data;
+  const { subject, category, module: moduleName, priority, body } = parsed.data;
   const effectivePriority = (priority ?? "NORMAL") as SupportTicketPriority;
+  const effectiveModule   = (moduleName ?? "OTHER") as SupportTicketModule;
 
   const ticket = await db.supportTicket.create({
     data: {
       tenantId: ctx.tenant.id,
       subject,
       category: category as SupportTicketCategory,
+      module: effectiveModule,
       priority: effectivePriority,
       openedByUserId: ctx.userId,
       // Phase 20 Slice C — start the SLA clock immediately. Platform staff
@@ -69,7 +76,7 @@ export async function openSupportTicket(slug: string, formData: FormData) {
     action: "support.ticket_opened",
     entityType: "SupportTicket",
     entityId: ticket.id,
-    metadata: { subject, category, priority: priority ?? "NORMAL" },
+    metadata: { subject, category, module: effectiveModule, priority: priority ?? "NORMAL" },
   });
 
   redirect(`/t/${slug}/support/${ticket.id}`);

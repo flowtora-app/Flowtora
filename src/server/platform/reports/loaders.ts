@@ -64,18 +64,18 @@ export async function loadReport(key: string, filters: ReportFilters = {}): Prom
     case "onboarding-funnel":        return loadOnboardingFunnel(filters);
     case "trial-conversion-funnel":  return loadTrialConversionFunnel(filters);
     case "feature-adoption-matrix":  return loadFeatureAdoptionMatrix(filters);
-    case "nps-trend":                return pending("NPS isn't tracked yet — needs a Survey + SurveyResponse table or a Sprig / Delighted integration.");
+    case "nps-trend":                return loadNpsTrend(filters);
     case "top-customer-ltv":         return loadTopCustomerLtv(filters);
     case "plan-migration-sankey":    return loadPlanMigrationSankey(filters);
     case "revenue-by-region":        return loadRevenueByRegion(filters);
     case "tax-liability-jurisdiction": return loadTaxLiabilityJurisdiction(filters);
     case "support-sla-compliance":   return loadSupportSlaCompliance(filters);
-    case "bug-volume-by-module":     return pending("SupportTicket doesn't carry a `module` field yet. Adding the enum + wiring the form picker enables this report.");
+    case "bug-volume-by-module":     return loadBugVolumeByModule(filters);
     case "api-usage-by-tenant":      return loadApiUsageByTenant(filters);
     case "storage-growth-by-tenant": return loadStorageGrowth(filters);
     case "failed-payment-recovery":  return loadFailedPaymentRecovery(filters);
     case "coupon-performance":       return loadCouponPerformance(filters);
-    case "affiliate-earnings":       return pending("Flowtora doesn't operate an affiliate program yet — needs Affiliate / Referral tables and a referral-token capture in the signup flow.");
+    case "affiliate-earnings":       return loadAffiliateEarnings(filters);
     case "industry-vertical-benchmarks": return loadIndustryBenchmarks(filters);
     default:
       throw new Error(`Unknown report key: ${key}`);
@@ -944,6 +944,218 @@ async function loadCouponPerformance(_f: ReportFilters): Promise<ReportPayload> 
       rows.length === 0
         ? { title: "No coupons", body: "Issue a coupon from /platform/billing/coupons to start tracking.", tone: "neutral" }
         : { title: `Top performer`, body: `${rows[0]!.code} — ${rows[0]!.redemptions} redemptions.`, tone: "neutral" },
+    ],
+  };
+}
+
+/* ────────────────────────────────────────────────────────── */
+/* 8. NPS Trend (Survey-backed)                                 */
+/* ────────────────────────────────────────────────────────── */
+
+async function loadNpsTrend(f: ReportFilters): Promise<ReportPayload> {
+  const since = f.since ?? new Date(Date.now() - 365 * DAY);
+  const until = f.until ?? new Date();
+
+  // We don't filter by Survey.kind here — the report is named NPS but
+  // any 0–10 survey kind contributes. CSAT/CES would need their own
+  // report (different scale + math).
+  const responses = await db.surveyResponse.findMany({
+    where: {
+      createdAt: { gte: since, lte: until },
+      survey: { kind: "NPS" },
+    },
+    select: { score: true, createdAt: true },
+    orderBy: { createdAt: "asc" },
+  });
+
+  // Bucket by month.
+  const buckets = new Map<string, { promoters: number; passives: number; detractors: number; total: number }>();
+  const cursor = new Date(since.getFullYear(), since.getMonth(), 1);
+  while (cursor <= until) {
+    const k = cursor.toISOString().slice(0, 7);
+    buckets.set(k, { promoters: 0, passives: 0, detractors: 0, total: 0 });
+    cursor.setMonth(cursor.getMonth() + 1);
+  }
+  for (const r of responses) {
+    const k = r.createdAt.toISOString().slice(0, 7);
+    const b = buckets.get(k);
+    if (!b) continue;
+    if (r.score >= 9)      b.promoters  += 1;
+    else if (r.score >= 7) b.passives   += 1;
+    else                   b.detractors += 1;
+    b.total += 1;
+  }
+
+  const data = Array.from(buckets.entries()).map(([k, b]) => ({
+    label: monthLabel(new Date(k + "-01")),
+    nps: b.total === 0 ? 0 : Math.round(((b.promoters - b.detractors) / b.total) * 100),
+    promoters: b.promoters,
+    passives: b.passives,
+    detractors: b.detractors,
+  }));
+
+  const totalResponses = responses.length;
+  const overall = (() => {
+    if (totalResponses === 0) return null;
+    let p = 0, d = 0;
+    for (const r of responses) {
+      if (r.score >= 9) p += 1;
+      else if (r.score < 7) d += 1;
+    }
+    return Math.round(((p - d) / totalResponses) * 100);
+  })();
+
+  return {
+    state: "READY",
+    viz: {
+      kind: "line",
+      xKey: "label",
+      series: [
+        { dataKey: "nps", name: "NPS",         color: "var(--brand-600)" },
+      ],
+      data,
+    },
+    rows: data.map((d) => ({
+      month: d.label,
+      nps: d.nps,
+      promoters: d.promoters,
+      passives: d.passives,
+      detractors: d.detractors,
+    })),
+    insights: [
+      totalResponses === 0
+        ? { title: "No NPS responses yet", body: "Open a Survey row of kind=NPS and wait for responses to roll in.", tone: "neutral" }
+        : { title: `Overall NPS`, body: `${overall} across ${totalResponses} responses.`, tone: overall != null && overall >= 30 ? "positive" : overall != null && overall >= 0 ? "neutral" : "warning" },
+    ],
+  };
+}
+
+/* ────────────────────────────────────────────────────────── */
+/* 14. Bug Volume by Module                                     */
+/* ────────────────────────────────────────────────────────── */
+
+async function loadBugVolumeByModule(f: ReportFilters): Promise<ReportPayload> {
+  const since = f.since ?? new Date(Date.now() - 90 * DAY);
+  const until = f.until ?? new Date();
+
+  const grouped = await db.supportTicket.groupBy({
+    by: ["module"],
+    where: { category: "BUG", createdAt: { gte: since, lte: until } },
+    _count: { _all: true },
+    orderBy: { _count: { module: "desc" } },
+  });
+
+  const data = grouped.map((g) => ({
+    label: String(g.module),
+    value: g._count._all,
+  }));
+
+  const total = data.reduce((s, d) => s + (d.value as number), 0);
+
+  return {
+    state: "READY",
+    viz: {
+      kind: "bar",
+      xKey: "label",
+      series: [{ dataKey: "value", name: "Bug tickets", color: "var(--rose-500)" }],
+      data,
+      horizontal: true,
+    },
+    rows: data,
+    insights: [
+      total === 0
+        ? { title: "No bug tickets in window", body: "Bug-category tickets grouped by module land here.", tone: "positive" }
+        : (() => {
+            const top = data[0];
+            return {
+              title: `Most-affected module`,
+              body: top ? `${top.label} — ${top.value} bug ticket${top.value === 1 ? "" : "s"} of ${total} total.` : `${total} bug tickets in window.`,
+              tone: total > 20 ? "warning" : "neutral",
+            };
+          })(),
+    ],
+  };
+}
+
+/* ────────────────────────────────────────────────────────── */
+/* 19. Affiliate Earnings                                       */
+/* ────────────────────────────────────────────────────────── */
+
+async function loadAffiliateEarnings(f: ReportFilters): Promise<ReportPayload> {
+  const since = f.since ?? new Date(Date.now() - 365 * DAY);
+  const until = f.until ?? new Date();
+
+  const affiliates = await db.affiliate.findMany({
+    select: {
+      id: true, code: true, name: true, email: true, status: true,
+      commissionPct: true, commissionDurationMonths: true,
+      referrals: {
+        select: {
+          tenantId: true,
+          attributedAt: true,
+          commissionPctAtAttribution: true,
+        },
+      },
+    },
+  });
+
+  // For each affiliate, sum payments from attributed tenants within
+  // the commission window, then multiply by the commission pct.
+  const tenantIds = affiliates.flatMap((a) => a.referrals.map((r) => r.tenantId));
+  const payments = tenantIds.length === 0
+    ? []
+    : await db.payment.findMany({
+        where: {
+          tenantId: { in: tenantIds },
+          voidedAt: null, failedAt: null,
+          receivedAt: { gte: since, lte: until },
+        },
+        select: { tenantId: true, amount: true, receivedAt: true },
+      });
+
+  const paymentsByTenant = new Map<string, { amount: number; receivedAt: Date }[]>();
+  for (const p of payments) {
+    if (!paymentsByTenant.has(p.tenantId)) paymentsByTenant.set(p.tenantId, []);
+    paymentsByTenant.get(p.tenantId)!.push({ amount: Number(p.amount), receivedAt: p.receivedAt! });
+  }
+
+  const rows = affiliates.map((a) => {
+    let referralCount = a.referrals.length;
+    let attributedRevenue = 0;
+    let commissionEarned = 0;
+    for (const ref of a.referrals) {
+      const ps = paymentsByTenant.get(ref.tenantId) ?? [];
+      const windowEnd = new Date(ref.attributedAt);
+      windowEnd.setMonth(windowEnd.getMonth() + a.commissionDurationMonths);
+      for (const p of ps) {
+        if (p.receivedAt >= ref.attributedAt && p.receivedAt <= windowEnd) {
+          attributedRevenue += p.amount;
+          commissionEarned += p.amount * (Number(ref.commissionPctAtAttribution) / 100);
+        }
+      }
+    }
+    return {
+      affiliate: a.name,
+      code: a.code,
+      email: a.email,
+      status: a.status,
+      commissionPct: Number(a.commissionPct),
+      referrals: referralCount,
+      attributedRevenueUsd: Math.round(attributedRevenue),
+      commissionEarnedUsd: Math.round(commissionEarned),
+    };
+  }).sort((a, b) => (b.commissionEarnedUsd as number) - (a.commissionEarnedUsd as number));
+
+  const totalEarned = rows.reduce((s, r) => s + (r.commissionEarnedUsd as number), 0);
+
+  return {
+    state: "READY",
+    viz: { kind: "table-only" },
+    rows,
+    insights: [
+      affiliates.length === 0
+        ? { title: "No affiliates yet", body: "Create an Affiliate row to start tracking referrals.", tone: "neutral" }
+        : { title: "Total commission earned", body: `$${totalEarned.toLocaleString()} across ${affiliates.length} affiliates.`, tone: "neutral" },
     ],
   };
 }

@@ -248,6 +248,9 @@ model Tenant {
   invites            Invite[]
   auditLogs          AuditLog[]
   subscriptionEvents SubscriptionEvent[]
+  // Page 3 follow-up — referral attribution captured at signup time
+  // when the user lands via ?ref=<code>. One-to-one with the tenant.
+  referral           Referral?
   customers          Customer[]
   contacts           Contact[]
   interactions       Interaction[]
@@ -2550,6 +2553,11 @@ model SupportTicket {
   tenantId String
   subject  String
   category SupportTicketCategory @default(QUESTION)
+  // Page 3 §Bug Volume by Module — fine-grained module tag set at
+  // ticket creation. Defaults to OTHER for legacy rows / when the
+  // form picker didn't fire. Surfaced in the support form's module
+  // dropdown and grouped by the Bug Volume by Module report.
+  module   SupportTicketModule   @default(OTHER)
   priority SupportTicketPriority @default(NORMAL)
   status   SupportTicketStatus   @default(OPEN)
 
@@ -5152,6 +5160,7 @@ model Report {
   owner      User                @relation(fields: [ownerUserId], references: [id], onDelete: Cascade)
   userStates ReportUserState[]
   schedules  ReportSchedule[]
+  versions   ReportVersion[]
 
   @@index([ownerUserId, updatedAt])
   @@index([key])
@@ -5171,6 +5180,9 @@ model ReportUserState {
   isFavorite   Boolean @default(false)
   isPinned     Boolean @default(false)
   lastViewedAt DateTime?
+  // Page 3 follow-up — per-user view counter. Bumped on every detail-
+  // page view; used by the library "Most viewed" sort option.
+  viewCount    Int      @default(0)
 
   createdAt DateTime @default(now())
   updatedAt DateTime @updatedAt
@@ -5245,4 +5257,190 @@ enum ReportScheduleFrequency {
   WEEKLY
   MONTHLY
   CRON
+}
+
+// ────────────────────────────────────────────────────────────
+// Page 3 follow-up — versioning + view-count counters.
+// ────────────────────────────────────────────────────────────
+
+model ReportVersion {
+  id       String @id @default(cuid())
+  reportId String
+
+  // Snapshot of every editable field. Authoring saves a new row;
+  // revert copies an old version's snapshot back into the live Report.
+  name        String
+  description String?
+  category    String?
+  filters     String  @default("")
+  chartConfig Json?
+
+  // Who/why/when. `note` is optional free-form so someone can label a
+  // version "after Q3 pricing change" before reverting later.
+  authorUserId String
+  note         String?
+
+  createdAt DateTime @default(now())
+
+  report Report @relation(fields: [reportId], references: [id], onDelete: Cascade)
+
+  @@index([reportId, createdAt])
+}
+
+// ────────────────────────────────────────────────────────────
+// Page 3 follow-up — Net Promoter Score surveys.
+//
+// Two-table model: Survey owns one campaign per audience (per plan,
+// per locale, etc.); SurveyResponse stores the per-tenant 0–10 score.
+// Distribution today is in-app only — the bell button surfaces the
+// active survey to admin members on dashboard load. A later slice can
+// add an email invite path through the existing Resend dispatcher.
+// ────────────────────────────────────────────────────────────
+
+model Survey {
+  id          String       @id @default(cuid())
+  kind        SurveyKind   @default(NPS)
+  title       String
+  // Audience filter — for NPS we typically scope to ACTIVE / PAST_DUE
+  // tenants only (excluding TRIALs which haven't formed an opinion yet).
+  // Stored as JSON so future surveys can express richer audiences
+  // without a schema change.
+  audience    Json?
+  // ISO2 / locale code; null = no preference.
+  locale      String?
+  // Active = served to the audience; CLOSED = no longer collecting.
+  status      SurveyStatus @default(ACTIVE)
+  // Optional bounding window. CLOSED-by-cron when `closeAt` passes.
+  openAt      DateTime     @default(now())
+  closeAt     DateTime?
+
+  createdAt DateTime @default(now())
+  updatedAt DateTime @updatedAt
+
+  responses SurveyResponse[]
+
+  @@index([kind, status])
+  @@index([status, openAt])
+}
+
+model SurveyResponse {
+  id       String @id @default(cuid())
+  surveyId String
+
+  // Which tenant + which member submitted. Both nullable so we can
+  // accept anonymous responses (off by default; flagged at survey
+  // create time for sensitive surveys).
+  tenantId String?
+  userId   String?
+
+  // 0–10 for NPS; reused as 1–5 for CSAT-style surveys (we range-check
+  // at write time based on the parent survey's `kind`).
+  score    Int
+  // Free-form follow-up. Capped to keep the table small.
+  comment  String?
+
+  // De-dupe per (survey, user). Empty userId allows multiple rows
+  // (anonymous mode).
+  createdAt DateTime @default(now())
+
+  survey Survey @relation(fields: [surveyId], references: [id], onDelete: Cascade)
+
+  @@index([surveyId, createdAt])
+  @@index([tenantId, createdAt])
+  @@unique([surveyId, userId], map: "SurveyResponse_unique_per_user_when_set")
+}
+
+enum SurveyKind {
+  NPS    // 0–10 with promoter / detractor split
+  CSAT   // 1–5 satisfaction
+  CES    // 1–7 customer effort score
+}
+
+enum SurveyStatus {
+  ACTIVE
+  CLOSED
+}
+
+// ────────────────────────────────────────────────────────────
+// Page 3 follow-up — Affiliate / referral program.
+//
+// Bare-minimum model so the Affiliate Earnings report has real data
+// to render. An affiliate gets a unique code; tenants signing up via
+// `?ref=<code>` are attributed to that affiliate; commissions accrue
+// based on payments the referred tenant makes.
+//
+// Commission math is deliberately simple (flat percentage of net
+// payments in the first 12 months). Per-tier / per-cohort rules are
+// reserved for a future slice.
+// ────────────────────────────────────────────────────────────
+
+model Affiliate {
+  id    String @id @default(cuid())
+  // Stable referral code — appears in `?ref=<code>` URLs.
+  code  String @unique
+  name  String
+  email String
+
+  // Flat percentage commission (0–100) applied to attributed payments
+  // for `commissionDurationMonths` from the tenant's signup date.
+  commissionPct            Decimal @default(20) @db.Decimal(5, 2)
+  commissionDurationMonths Int     @default(12)
+
+  status    AffiliateStatus @default(ACTIVE)
+  notes     String?
+
+  createdAt DateTime @default(now())
+  updatedAt DateTime @updatedAt
+
+  referrals Referral[]
+
+  @@index([status])
+}
+
+model Referral {
+  id          String @id @default(cuid())
+  affiliateId String
+  tenantId    String @unique
+
+  // Captured at signup from the `?ref=` querystring or affiliate
+  // landing page. Snapshot the affiliate's commission rate AT
+  // attribution time so changing the rate later doesn't retroactively
+  // alter past earnings.
+  commissionPctAtAttribution Decimal @db.Decimal(5, 2)
+
+  attributedAt DateTime @default(now())
+
+  affiliate Affiliate @relation(fields: [affiliateId], references: [id], onDelete: Cascade)
+  tenant    Tenant    @relation(fields: [tenantId],   references: [id], onDelete: Cascade)
+
+  @@index([affiliateId, attributedAt])
+}
+
+enum AffiliateStatus {
+  ACTIVE
+  PAUSED
+  ARCHIVED
+}
+
+// ────────────────────────────────────────────────────────────
+// Support module enum (Page 3 §Bug Volume by Module).
+//
+// Tags every SupportTicket with the module the ticket relates to so
+// the Bug Volume report can break tickets down by area.
+// ────────────────────────────────────────────────────────────
+
+enum SupportTicketModule {
+  BILLING
+  AUTH
+  PROOFS
+  ORDERS
+  INVOICES
+  QUOTES
+  PRODUCTS
+  REPORTS
+  INTEGRATIONS
+  PORTAL
+  EMAIL
+  ADMIN
+  OTHER
 }

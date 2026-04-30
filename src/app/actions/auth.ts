@@ -42,6 +42,10 @@ const signupSchema = z.object({
   // unknown / non-purchasable slug falls back to the trial flow.
   plan: z.string().min(1).max(64).optional(),
   cycle: z.enum(["monthly", "annual"]).optional(),
+  // Page 3 §Affiliate Earnings — referral attribution. Captured from
+  // the signup landing page's `?ref=<code>` querystring when set;
+  // looked up against the Affiliate table to create a Referral row.
+  ref: z.string().min(1).max(64).optional(),
 });
 
 export async function signupAction(formData: FormData) {
@@ -102,6 +106,32 @@ export async function signupAction(formData: FormData) {
     metadata: { signupSource: "self_serve" },
     occurredAt: tenant.createdAt,
   });
+
+  // Page 3 §Affiliate Earnings — referral capture. If a `?ref=<code>`
+  // landed on the signup page and made it through the form, attribute
+  // the new tenant to that affiliate. We snapshot the affiliate's
+  // current commissionPct so changing rates later doesn't retroactively
+  // alter past earnings.
+  if (parsed.data.ref) {
+    const affiliate = await db.affiliate.findUnique({
+      where: { code: parsed.data.ref.trim() },
+      select: { id: true, status: true, commissionPct: true },
+    });
+    if (affiliate && affiliate.status === "ACTIVE") {
+      try {
+        await db.referral.create({
+          data: {
+            affiliateId: affiliate.id,
+            tenantId: tenant.id,
+            commissionPctAtAttribution: affiliate.commissionPct,
+          },
+        });
+      } catch {
+        // Ignore unique-constraint conflicts — a referral row already
+        // exists for this tenant. Don't block signup on attribution.
+      }
+    }
+  }
 
   // Phase 2 — fire off the initial email-verification token. Failures
   // here don't block signup (the user can re-send from the banner

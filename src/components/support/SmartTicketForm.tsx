@@ -69,6 +69,10 @@ export function SmartTicketForm({
   const router = useRouter();
   const [category, setCategory] = React.useState<CategoryKey>(initialCategory);
   const [priority, setPriority] = React.useState<PriorityKey>("NORMAL");
+  // Page 3 §Bug Volume by Module — fine-grained module tag the
+  // platform-side report buckets by. Optional from the user's POV
+  // (defaults to OTHER if they leave it).
+  const [module_, setModule] = React.useState<string>("OTHER");
   const [subject, setSubject] = React.useState("");
   const [body, setBody] = React.useState("");
   const [pending, setPending] = React.useState(false);
@@ -90,6 +94,7 @@ export function SmartTicketForm({
     const fd = new FormData();
     fd.set("subject", subject.trim());
     fd.set("category", category);
+    fd.set("module", module_);
     fd.set("priority", priority);
     fd.set("body", composeBody(body, ctx));
     setPending(true);
@@ -146,6 +151,35 @@ export function SmartTicketForm({
           })}
         </div>
       </fieldset>
+
+      {/* ── Module ─────────────────────────────────────────── */}
+      {category === "BUG" && (
+        <fieldset>
+          <legend className="mb-2 text-sm font-semibold" style={{ color: "var(--text-default)" }}>
+            Which area is affected?
+          </legend>
+          <select
+            value={module_}
+            onChange={(e) => setModule(e.target.value)}
+            className="ts-focus w-full rounded-lg border bg-transparent px-3 py-2 text-sm"
+            style={{ background: "var(--surface-1)", borderColor: "var(--border-default)", color: "var(--text-default)" }}
+          >
+            <option value="BILLING">Billing</option>
+            <option value="AUTH">Sign-in / accounts</option>
+            <option value="PROOFS">Proofs</option>
+            <option value="ORDERS">Orders</option>
+            <option value="INVOICES">Invoices</option>
+            <option value="QUOTES">Quotes</option>
+            <option value="PRODUCTS">Products / pricing</option>
+            <option value="REPORTS">Reports</option>
+            <option value="INTEGRATIONS">Integrations</option>
+            <option value="PORTAL">Customer portal</option>
+            <option value="EMAIL">Email delivery</option>
+            <option value="ADMIN">Admin / settings</option>
+            <option value="OTHER">Something else</option>
+          </select>
+        </fieldset>
+      )}
 
       {/* ── Severity ─────────────────────────────────────────── */}
       <fieldset>

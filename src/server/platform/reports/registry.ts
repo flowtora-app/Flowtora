@@ -150,11 +150,10 @@ export const REPORT_REGISTRY: ReportRegistryEntry[] = [
   {
     key: "nps-trend",
     name: "NPS Trend",
-    description: "Net Promoter Score over time, broken down by plan.",
+    description: "Net Promoter Score over time, plus promoter / passive / detractor split.",
     category: "engagement",
     viz: "line",
-    dataState: "PENDING",
-    dataNote: "Flowtora doesn't run NPS surveys yet. Wiring the source means adding a Survey + SurveyResponse pair of tables (or a Sprig / Delighted integration) and a delivery cron — call it out and we'll build it.",
+    dataState: "READY",
     icon: "💬",
   },
   // 9
@@ -212,11 +211,10 @@ export const REPORT_REGISTRY: ReportRegistryEntry[] = [
   {
     key: "bug-volume-by-module",
     name: "Bug Report Volume by Module",
-    description: "Inbound bug-tagged tickets grouped by module.",
+    description: "BUG-category tickets grouped by the module they touch.",
     category: "operations",
     viz: "bar",
-    dataState: "PENDING",
-    dataNote: "We don't tag tickets by module yet — adding a `module` enum on SupportTicket and wiring the support-form picker turns this on. Until then the chart would be a single bar; we'd rather show the gap than hide it.",
+    dataState: "READY",
     icon: "🐛",
   },
   // 15
@@ -265,11 +263,10 @@ export const REPORT_REGISTRY: ReportRegistryEntry[] = [
   {
     key: "affiliate-earnings",
     name: "Affiliate Earnings",
-    description: "Referral attributions × commission earned per affiliate.",
+    description: "Per-affiliate referrals + commission accrued from attributed payments.",
     category: "financials",
     viz: "table-only",
-    dataState: "PENDING",
-    dataNote: "Flowtora doesn't operate an affiliate program yet — needs an Affiliate / Referral table pair and a referral-token capture in the signup flow. Once that lands, this report turns on without a UI change.",
+    dataState: "READY",
     icon: "🤝",
   },
   // 20

@@ -38,11 +38,14 @@ function parseCycle(raw?: string): "monthly" | "annual" {
 export default async function SignupPage({
   searchParams,
 }: {
-  searchParams: Promise<{ error?: string; plan?: string; cycle?: string }>;
+  searchParams: Promise<{ error?: string; plan?: string; cycle?: string; ref?: string }>;
 }) {
   const sp = await searchParams;
   const rawSlug = (sp.plan ?? "").trim().toLowerCase();
   const cycle = parseCycle(sp.cycle);
+  // Page 3 §Affiliate Earnings — capture `?ref=<code>` so it survives
+  // the form POST and lands on the signup action.
+  const ref = (sp.ref ?? "").trim().slice(0, 64) || null;
 
   // Resolve the plan against the published catalog. Only plans that
   // are self-serve purchasable (not contact-sales, have a price,
@@ -106,6 +109,7 @@ export default async function SignupPage({
             <input type="hidden" name="cycle" value={cycle} />
           </>
         )}
+        {ref && <input type="hidden" name="ref" value={ref} />}
 
         <div className="grid grid-cols-1 gap-5 sm:grid-cols-2">
           <Field
