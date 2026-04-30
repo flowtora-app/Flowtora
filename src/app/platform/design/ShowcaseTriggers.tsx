@@ -7,6 +7,7 @@ import {
   ColorPicker,
   Combobox,
   CommandPalette,
+  type ColumnDef,
   ConfirmDialog,
   DatePicker,
   DateRangePicker,
@@ -26,6 +27,7 @@ import {
   ScheduleCalendar,
   SearchWithSuggestions,
   type Suggestion,
+  Table,
   TagsInput,
   TenantSwitcher,
   type TenantOption,
@@ -34,6 +36,7 @@ import {
   UserMenu,
   useToast,
   type DateRange,
+  type SortDir,
 } from "@/components/ui";
 
 // Interactive demos for the design system page. The page itself is a
@@ -653,6 +656,103 @@ export function ImageLightboxDemo() {
         ))}
       </div>
       <ImageLightbox images={images} index={index} onIndexChange={setIndex} onClose={() => setIndex(-1)} />
+    </div>
+  );
+}
+
+/* ── Table demo ──────────────────────────────────────────── */
+
+interface TenantRow {
+  id: string;
+  name: string;
+  slug: string;
+  plan: string;
+  health: "Healthy" | "Watch" | "Unhealthy";
+  mrr: number;
+  orders: number;
+  signedUp: string;
+}
+
+const SAMPLE_TENANTS: TenantRow[] = [
+  { id: "t1", name: "ACME Signs Co.",     slug: "acme-signs", plan: "Pro",        health: "Healthy",   mrr: 2_499, orders:  47, signedUp: "2024-11-02" },
+  { id: "t2", name: "Apex Print Co.",     slug: "apex-print", plan: "Growth",     health: "Watch",     mrr:   899, orders:  12, signedUp: "2025-02-14" },
+  { id: "t3", name: "Northwind Studio",   slug: "northwind",  plan: "Starter",    health: "Unhealthy", mrr:   149, orders:   3, signedUp: "2025-08-20" },
+  { id: "t4", name: "Lakeside Banner",    slug: "lakeside",   plan: "Trial",      health: "Watch",     mrr:     0, orders:   0, signedUp: "2026-04-12" },
+  { id: "t5", name: "Halcyon Press Ltd.", slug: "halcyon",    plan: "Pro",        health: "Healthy",   mrr: 3_199, orders:  89, signedUp: "2024-06-30" },
+  { id: "t6", name: "Beacon Imaging",     slug: "beacon",     plan: "Enterprise", health: "Healthy",   mrr: 9_400, orders: 211, signedUp: "2023-04-09" },
+];
+
+export function TableDemo() {
+  const [sort, setSort] = React.useState<{ key: string; dir: SortDir } | null>({ key: "mrr", dir: "desc" });
+  const [selected, setSelected] = React.useState<Set<string>>(new Set());
+
+  const columns = React.useMemo<ColumnDef<TenantRow>[]>(
+    () => [
+      {
+        key: "name",
+        header: "Tenant",
+        cell: (r) => (
+          <div className="min-w-0">
+            <div className="truncate font-medium" style={{ color: "var(--text-default)" }}>{r.name}</div>
+            <div className="truncate font-mono text-[10px]" style={{ color: "var(--text-faint)" }}>{r.slug}</div>
+          </div>
+        ),
+        sortable: true,
+        sticky: "left",
+        width: 220,
+      },
+      { key: "plan", header: "Plan", cell: (r) => r.plan, sortable: true, width: 120 },
+      {
+        key: "health",
+        header: "Health",
+        cell: (r) => (
+          <span style={{
+            color: r.health === "Healthy" ? "var(--emerald-700)" : r.health === "Watch" ? "var(--amber-700)" : "var(--rose-700)",
+          }}>● {r.health}</span>
+        ),
+        sortable: true,
+        width: 120,
+      },
+      { key: "mrr",      header: "MRR",       cell: (r) => "$" + r.mrr.toLocaleString(), kind: "money",  sortable: true, width: 100 },
+      { key: "orders",   header: "Orders",    cell: (r) => r.orders,                     kind: "number", sortable: true, width:  90 },
+      { key: "signedUp", header: "Signed up", cell: (r) => r.signedUp,                   kind: "date",   sortable: true, width: 130 },
+    ],
+    [],
+  );
+
+  const sorted = React.useMemo(() => {
+    if (!sort) return SAMPLE_TENANTS;
+    const copy = [...SAMPLE_TENANTS];
+    copy.sort((a, b) => {
+      const av = (a as unknown as Record<string, unknown>)[sort.key];
+      const bv = (b as unknown as Record<string, unknown>)[sort.key];
+      let cmp = 0;
+      if (typeof av === "number" && typeof bv === "number") cmp = av - bv;
+      else cmp = String(av ?? "").localeCompare(String(bv ?? ""));
+      return sort.dir === "asc" ? cmp : -cmp;
+    });
+    return copy;
+  }, [sort]);
+
+  return (
+    <div className="space-y-3">
+      <Table<TenantRow>
+        rows={sorted}
+        columns={columns}
+        sort={sort}
+        onSortChange={setSort}
+        selected={selected}
+        onToggleSelected={(id, on) => setSelected((prev) => {
+          const next = new Set(prev);
+          if (on) next.add(id); else next.delete(id);
+          return next;
+        })}
+        onToggleAll={(on) => setSelected(on ? new Set(SAMPLE_TENANTS.map((r) => r.id)) : new Set())}
+        density="comfortable"
+      />
+      <div className="text-[11px]" style={{ color: "var(--text-faint)" }}>
+        Click headers to sort · Tick rows to see the bulk-action bar appear (caller wires actions in real pages).
+      </div>
     </div>
   );
 }
