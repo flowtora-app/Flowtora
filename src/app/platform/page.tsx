@@ -10,6 +10,9 @@ import {
   loadTopTenantsByMrr,
   loadRecentSignups,
   loadRecentCancellations,
+  loadGeoDistribution,
+  loadActiveUsers,
+  loadNrr,
   type Alert,
   type PlatformActivityItem,
   type RecentSignupRow,
@@ -41,6 +44,7 @@ import { RangeSelector } from "@/components/platform/RangeSelector";
 import { FreshnessBadge } from "@/components/platform/FreshnessBadge";
 import { KpiCard } from "./_dashboard/KpiCard";
 import { TopTenantsTable } from "./_dashboard/TopTenantsTable";
+import { TenantWorldMap } from "./_dashboard/TenantWorldMap";
 
 export const dynamic = "force-dynamic";
 
@@ -262,7 +266,12 @@ async function KpiPrimary({ range }: { range: ResolvedRange }) {
 // ──────────────────────────────────────────────────────────────────
 
 async function KpiSecondary({ range }: { range: ResolvedRange }) {
-  const [m, triage] = await Promise.all([getMetrics(range), loadTriage()]);
+  const [m, triage, activeUsers, nrr] = await Promise.all([
+    getMetrics(range),
+    loadTriage(),
+    loadActiveUsers(),
+    loadNrr(),
+  ]);
   const tickets = triage.support.length;
 
   return (
@@ -275,11 +284,13 @@ async function KpiSecondary({ range }: { range: ResolvedRange }) {
         href="/platform/support"
       />
       <KpiCard
-        label="Active impersonations"
-        value={m.activeImpersonations.toLocaleString()}
-        sub={m.activeImpersonations === 0 ? "All staff working as themselves" : "Live sessions in progress"}
-        tone={m.activeImpersonations > 0 ? "warning" : "default"}
-        href="/platform/security"
+        label="Active users"
+        value={activeUsers.dau.toLocaleString()}
+        sub={`DAU · ${activeUsers.wau.toLocaleString()} WAU · ${activeUsers.mau.toLocaleString()} MAU`}
+        spark={activeUsers.spark14d}
+        sparkColor="var(--brand-500)"
+        href="/platform/users"
+        hint="Distinct users with login activity. DAU = today, WAU = last 7d, MAU = last 30d."
       />
       <KpiCard
         label="Trial → paid"
@@ -289,12 +300,14 @@ async function KpiSecondary({ range }: { range: ResolvedRange }) {
         href="/platform/tenants"
       />
       <KpiCard
-        label="Payment success"
-        value={`${m.paymentSuccessPct30d}%`}
-        sub={m.paymentsFailed30d > 0 ? `${m.paymentsFailed30d} failed in 30d` : "No failures in 30d"}
-        invertDelta={false}
-        tone={m.paymentSuccessPct30d < 95 ? "warning" : "success"}
-        href="/platform/billing/payments"
+        label="Net revenue retention"
+        value={nrr.pct == null ? "—" : `${nrr.pct}%`}
+        sub={nrr.cohortSize > 0
+          ? `Cohort of ${nrr.cohortSize} from 30d ago`
+          : "No cohort to measure yet"}
+        tone={nrr.pct == null ? "default" : nrr.pct >= 100 ? "success" : nrr.pct >= 90 ? "warning" : "danger"}
+        href="/platform/billing/analytics"
+        hint="Approximate NRR — cohort MRR today ÷ same cohort 30 days ago × 100. >100% means net expansion."
       />
     </div>
   );
@@ -531,7 +544,7 @@ function ActivityList({ items }: { items: PlatformActivityItem[] }) {
 // ──────────────────────────────────────────────────────────────────
 
 async function SystemHealthAndGeo({ range }: { range: ResolvedRange }) {
-  const m = await getMetrics(range);
+  const [m, geo] = await Promise.all([getMetrics(range), loadGeoDistribution()]);
   const stats: { label: string; value: string; tone: "success" | "warning" | "danger" | "neutral" }[] = [
     { label: "Payment success (30d)", value: `${m.paymentSuccessPct30d}%`, tone: m.paymentSuccessPct30d >= 95 ? "success" : m.paymentSuccessPct30d >= 90 ? "warning" : "danger" },
     { label: "Emails sent (24h)",     value: m.emailsOut24h.toLocaleString(), tone: "neutral" },
@@ -571,15 +584,7 @@ async function SystemHealthAndGeo({ range }: { range: ResolvedRange }) {
         </CardFooter>
       </Card>
 
-      <Card padding="md" className="h-full">
-        <CardHeader title="Geographic distribution" description="Tenants by country" />
-        <CardBody>
-          <EmptyState
-            title="Coming soon"
-            description="The choropleth + bubble overlay arrives once we wire the geo-aggregator. Tenant counts by country are already collected — only the renderer is missing."
-          />
-        </CardBody>
-      </Card>
+      <TenantWorldMap data={geo} />
     </div>
   );
 }

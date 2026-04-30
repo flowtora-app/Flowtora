@@ -16,6 +16,7 @@
 import type { TenantStatus } from "@prisma/client";
 import { db } from "@/lib/db";
 import { getAllPlans, type PlanOut } from "@/lib/plans";
+import { normalizeCountry } from "@/lib/country-codes";
 import {
   chooseBucketGranularity,
   bucketKey,
@@ -952,4 +953,187 @@ export async function loadRecentCancellations(limit = 8): Promise<RecentCancella
     reason: c.reason,
     cancelledAt: c.completedAt!,
   }));
+}
+
+// ──────────────────────────────────────────────────────────────────
+// Geographic distribution — Page 1 §Row 7 right
+// ──────────────────────────────────────────────────────────────────
+
+export type GeoCountryRow = {
+  iso2: string;
+  /** 3-digit ISO numeric code — matches world-atlas-110m feature ids. */
+  isoNum: string;
+  name: string;
+  count: number;
+  mrr: number;
+  topTenants: { id: string; name: string; mrr: number }[];
+};
+
+export type GeoDistribution = {
+  countries: GeoCountryRow[];
+  /** Tenants with no recognised country, surfaced as a single bucket
+   *  so we don't silently drop them. */
+  unknown: { count: number; mrr: number };
+};
+
+export async function loadGeoDistribution(): Promise<GeoDistribution> {
+  const plans = await getAllPlans();
+  const priceByEnum = priceByEnumKey(plans);
+
+  const tenants = await db.tenant.findMany({
+    where: { status: { in: ["ACTIVE", "PAST_DUE", "TRIAL"] } },
+    select: { id: true, name: true, country: true, plan: true, status: true },
+  });
+
+  const byIso = new Map<string, GeoCountryRow>();
+  let unknownCount = 0;
+  let unknownMrr = 0;
+
+  for (const t of tenants) {
+    const norm = normalizeCountry(t.country);
+    const mrr = t.status === "TRIAL" ? 0 : (priceByEnum.get(t.plan)?.price ?? 0);
+    if (!norm) {
+      unknownCount += 1;
+      unknownMrr += mrr;
+      continue;
+    }
+    const existing = byIso.get(norm.iso2) ?? {
+      iso2: norm.iso2,
+      isoNum: norm.isoNum,
+      name: norm.name,
+      count: 0,
+      mrr: 0,
+      topTenants: [] as GeoCountryRow["topTenants"],
+    };
+    existing.count += 1;
+    existing.mrr   += mrr;
+    existing.topTenants.push({ id: t.id, name: t.name, mrr });
+    byIso.set(norm.iso2, existing);
+  }
+
+  // Trim each country's topTenants to the 3 highest-MRR.
+  for (const row of byIso.values()) {
+    row.topTenants.sort((a, b) => b.mrr - a.mrr);
+    row.topTenants = row.topTenants.slice(0, 3);
+  }
+
+  const countries = Array.from(byIso.values()).sort(
+    (a, b) => b.mrr - a.mrr || b.count - a.count,
+  );
+
+  return {
+    countries,
+    unknown: { count: unknownCount, mrr: unknownMrr },
+  };
+}
+
+// ──────────────────────────────────────────────────────────────────
+// Active users — DAU / WAU / MAU
+// ──────────────────────────────────────────────────────────────────
+
+export type ActiveUsers = {
+  dau: number;
+  wau: number;
+  mau: number;
+  /** Per-day distinct user counts for the last 14 days — drives the
+   *  KPI card sparkline. */
+  spark14d: number[];
+};
+
+/** Computes distinct active users from `User.lastLoginAt` for the
+ *  current snapshot, plus a 14-day spark series from `AuditLog` where
+ *  each bucket is the count of distinct `userId`s that emitted any
+ *  audit event that day. AuditLog gives us per-day granularity that
+ *  `lastLoginAt` alone (a single timestamp) cannot. */
+export async function loadActiveUsers(): Promise<ActiveUsers> {
+  const now = Date.now();
+  const dayAgo  = new Date(now -      DAY);
+  const weekAgo = new Date(now -  7 * DAY);
+  const monthAgo = new Date(now - 30 * DAY);
+  const fourteenDaysAgo = new Date(now - 14 * DAY);
+
+  const [dau, wau, mau, audits] = await Promise.all([
+    db.user.count({ where: { lastLoginAt: { gte: dayAgo } } }),
+    db.user.count({ where: { lastLoginAt: { gte: weekAgo } } }),
+    db.user.count({ where: { lastLoginAt: { gte: monthAgo } } }),
+    db.auditLog.findMany({
+      where: { createdAt: { gte: fourteenDaysAgo }, userId: { not: null } },
+      select: { userId: true, createdAt: true },
+    }),
+  ]);
+
+  // Bucket distinct user ids per day for the last 14 days.
+  const buckets = new Map<string, Set<string>>();
+  for (let i = 13; i >= 0; i--) {
+    const d = new Date(now - i * DAY);
+    d.setHours(0, 0, 0, 0);
+    buckets.set(bucketKey(d, "day"), new Set());
+  }
+  for (const a of audits) {
+    if (!a.userId) continue;
+    const k = bucketKey(a.createdAt, "day");
+    if (buckets.has(k)) buckets.get(k)!.add(a.userId);
+  }
+  const spark14d = Array.from(buckets.values()).map((set) => set.size);
+
+  return { dau, wau, mau, spark14d };
+}
+
+// ──────────────────────────────────────────────────────────────────
+// Net Revenue Retention — Page 1 §Row 3 card 4
+// ──────────────────────────────────────────────────────────────────
+
+export type NrrSnapshot = {
+  /** % retained from the cohort that existed 30 days ago.
+   *  100 = perfectly retained, >100 = expansion, <100 = contraction. */
+  pct: number | null;
+  /** MRR contribution today from tenants that existed 30 days ago. */
+  currentFromCohort: number;
+  /** What the same cohort was worth 30 days ago (using current plan
+   *  prices — a fair approximation since plan prices rarely shift). */
+  priorFromCohort: number;
+  /** How many tenants the cohort started with. */
+  cohortSize: number;
+};
+
+/** Approximate NRR = (current cohort MRR) / (cohort MRR 30d ago) × 100.
+ *  Without a subscription-event log we rely on the cohort's CURRENT
+ *  status: ACTIVE/PAST_DUE → still paying current plan, anything else
+ *  → contracted to $0. */
+export async function loadNrr(): Promise<NrrSnapshot> {
+  const plans = await getAllPlans();
+  const priceByEnum = priceByEnumKey(plans);
+  const thirtyDaysAgo = new Date(Date.now() - 30 * DAY);
+
+  const cohort = await db.tenant.findMany({
+    where: {
+      createdAt: { lte: thirtyDaysAgo },
+      // 30 days ago, these tenants were paying. Today they may not be.
+      // We include CANCELED and ARCHIVED specifically because they
+      // *were* contributing to MRR 30 days ago and have since churned —
+      // exactly what NRR should capture as contraction.
+      status: { in: ["ACTIVE", "PAST_DUE", "CANCELED", "ARCHIVED"] },
+    },
+    select: { plan: true, status: true },
+  });
+
+  if (cohort.length === 0) {
+    return { pct: null, currentFromCohort: 0, priorFromCohort: 0, cohortSize: 0 };
+  }
+
+  let priorFromCohort = 0;
+  let currentFromCohort = 0;
+  for (const t of cohort) {
+    const price = priceByEnum.get(t.plan)?.price ?? 0;
+    priorFromCohort += price;
+    if (t.status === "ACTIVE" || t.status === "PAST_DUE") {
+      currentFromCohort += price;
+    }
+  }
+
+  const pct = priorFromCohort === 0
+    ? null
+    : Math.round((currentFromCohort / priorFromCohort) * 1000) / 10;
+
+  return { pct, currentFromCohort, priorFromCohort, cohortSize: cohort.length };
 }
