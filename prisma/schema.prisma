@@ -218,6 +218,27 @@ model Tenant {
   // never see these. Free-form lowercase strings, e.g. "vip", "beta",
   // "at-risk", "enterprise-pilot".
   adminTags String[] @default([])
+
+  // ── Page 4 (Tenants list) — surfaced fields ─────────────────────
+  // Account manager / CSM. Nullable so we can leave new tenants
+  // unassigned in the triage queue. SetNull on cascade so removing a
+  // staff member doesn't orphan tenant rows.
+  accountManagerId String?
+  accountManager   User?    @relation("TenantAccountManager", fields: [accountManagerId], references: [id], onDelete: SetNull)
+  // Optional custom-domain (e.g. quotes.acme-signs.com). Drives the
+  // "Has custom domain" filter chip + an optional list-view column.
+  customDomain     String?
+  // SSO configuration. ssoEnabled toggles enforcement; ssoProvider is
+  // a free-form label (saml-okta / oidc-azure / google-workspace).
+  ssoEnabled       Boolean  @default(false)
+  ssoProvider      String?
+  // MFA enforcement: if true, every member must complete the 2FA
+  // setup flow before regaining access. Drives an at-a-glance pill
+  // on the list page + the "MFA enforced" filter.
+  mfaEnforced      Boolean  @default(false)
+  // Signup attribution. Captured at create time from referral codes,
+  // utm_source, or set manually by platform staff after a sales call.
+  signupSource     TenantSource @default(ORGANIC)
   // Trial nudge tracking — stamped when the "ends in Xd" banner is first
   // acknowledged or dismissed so we don't hammer owners with the same
   // warning. Billing alert tracking does the same for PAST_DUE.
@@ -378,7 +399,27 @@ model Location {
 enum BusinessType {
   SIGN_SHOP
   PRINT_SHOP
+  // Page 4 §Industry vertical filter — extended to match the spec's
+  // canonical list. HYBRID is kept as the legacy "multi-discipline"
+  // alias; new tenants pick from the more granular options below.
   HYBRID
+  APPAREL_SCREEN_PRINT
+  EMBROIDERY
+  PROMO_PRODUCTS
+  TRADE_PRINTER
+  WIDE_FORMAT_ONLY
+  MULTI_DISCIPLINE
+  OTHER
+}
+
+// Page 4 — signup attribution. Used by the Tenants list "Source"
+// column + filter. ORGANIC = direct, REFERRAL = via Affiliate program,
+// PAID = paid acquisition channel, PARTNER = warm intro.
+enum TenantSource {
+  ORGANIC
+  REFERRAL
+  PAID
+  PARTNER
   OTHER
 }
 
@@ -620,6 +661,11 @@ model User {
   reports             Report[]
   reportUserStates    ReportUserState[]
   reportSchedules     ReportSchedule[]
+
+  // Page 4 — Tenants list "Account manager" assignment. Reverse side
+  // of Tenant.accountManager — staff member assigned as the CSM
+  // for one or more tenants.
+  csmTenants          Tenant[] @relation("TenantAccountManager")
 }
 
 // Platform-side roles. The first three (SUPER_ADMIN, SITE_MANAGER,

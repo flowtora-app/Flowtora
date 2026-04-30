@@ -144,6 +144,18 @@ const PRESETS: Record<BusinessType, BusinessDefaults> = {
   SIGN_SHOP,
   PRINT_SHOP,
   HYBRID,
+  // The four newer industry verticals share PRINT_SHOP-leaning
+  // defaults — they're print-shop subspecialties that all benefit
+  // from the same starter price book + product seeds. The
+  // onboarding form lets the user tune them after signup.
+  APPAREL_SCREEN_PRINT: PRINT_SHOP,
+  EMBROIDERY:           PRINT_SHOP,
+  PROMO_PRODUCTS:       PRINT_SHOP,
+  TRADE_PRINTER:        PRINT_SHOP,
+  // Wide-format and multi-discipline lean closer to SIGN_SHOP /
+  // HYBRID respectively.
+  WIDE_FORMAT_ONLY:     SIGN_SHOP,
+  MULTI_DISCIPLINE:     HYBRID,
   OTHER,
 };
 

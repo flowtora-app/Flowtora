@@ -17,9 +17,13 @@ import { requirePlatformStaff, logPlatformAudit } from "@/lib/platform";
 const NAME_LIMIT = 80;
 const FILTERS_LIMIT = 4_000;
 
+const SAVED_VIEW_KINDS = ["activity", "tenants"] as const;
+
 const savedViewSchema = z.object({
   name: z.string().min(1).max(NAME_LIMIT),
   filters: z.string().max(FILTERS_LIMIT),
+  /** Defaults to "activity" for backward compat with the Page 2 caller. */
+  kind: z.enum(SAVED_VIEW_KINDS).optional(),
   isShared: z.union([z.literal("on"), z.literal("true"), z.literal("false"), z.literal("")]).optional(),
 });
 
@@ -30,11 +34,12 @@ export async function createPlatformSavedView(formData: FormData) {
     return { ok: false, error: "Invalid input" } as const;
   }
   const isShared = parsed.data.isShared === "on" || parsed.data.isShared === "true";
+  const kind = parsed.data.kind ?? "activity";
 
   await db.platformSavedView.create({
     data: {
       userId: ctx.userId,
-      kind: "activity",
+      kind,
       name: parsed.data.name.trim(),
       filters: parsed.data.filters,
       isShared,
