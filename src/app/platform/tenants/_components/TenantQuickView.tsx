@@ -5,6 +5,7 @@ import Link from "next/link";
 import { Avatar, Badge, Button, Drawer, StatusPill } from "@/components/ui";
 import { flagEmoji } from "@/lib/country-codes";
 import type { TenantListRow } from "@/server/platform/tenants-list";
+import { TenantImpersonateButton } from "../[id]/_components/TenantImpersonateButton";
 
 // TenantQuickView — Page 4 §Quick view slide-over.
 //
@@ -27,9 +28,11 @@ interface ActivityItem {
 export function TenantQuickView({
   tenant,
   onClose,
+  canImpersonate,
 }: {
   tenant: TenantListRow;
   onClose: () => void;
+  canImpersonate: boolean;
 }) {
   const [recent, setRecent] = React.useState<ActivityItem[] | null>(null);
   const [loading, setLoading] = React.useState(true);
@@ -149,9 +152,13 @@ export function TenantQuickView({
         {/* Quick actions */}
         <Section title="Quick actions">
           <div className="flex flex-wrap gap-2">
-            <Link href={`/platform/tenants/${tenant.id}?action=impersonate`}>
-              <Button size="sm" variant="secondary">Impersonate</Button>
-            </Link>
+            <TenantImpersonateButton
+              tenantId={tenant.id}
+              tenantName={tenant.name}
+              size="sm"
+              variant="secondary"
+              enabled={canImpersonate}
+            />
             {tenant.ownerEmail && (
               <a href={`mailto:${tenant.ownerEmail}`}>
                 <Button size="sm" variant="secondary">Email owner</Button>

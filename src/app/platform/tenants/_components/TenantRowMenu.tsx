@@ -3,6 +3,7 @@
 import * as React from "react";
 import Link from "next/link";
 import { useToast } from "@/components/ui";
+import { startImpersonation } from "@/app/actions/platform";
 
 // Inline 3-dot menu per tenant row — Page 4 §Inline 3-dot menu
 // actions: Open · Impersonate · Send email · Edit plan · Apply credit
@@ -45,6 +46,21 @@ export function TenantRowMenu(props: TenantRowMenuProps) {
     setOpen(false);
   };
 
+  const onImpersonate = async () => {
+    setOpen(false);
+    // No reason prompt from the row menu — that's saved for the
+    // detail page's modal. Most impersonations from the row menu
+    // are quick "go look at the bug they reported" jumps.
+    const fd = new FormData();
+    try {
+      await startImpersonation(props.tenantId, fd);
+    } catch (err) {
+      const isRedirect = err instanceof Error && err.message === "NEXT_REDIRECT";
+      if (isRedirect) return;
+      toast.error(err instanceof Error ? err.message : "Couldn't start impersonation");
+    }
+  };
+
   return (
     <div ref={ref} className="relative inline-block">
       <button
@@ -65,7 +81,7 @@ export function TenantRowMenu(props: TenantRowMenuProps) {
         >
           <MenuLink href={`/platform/tenants/${props.tenantId}`}>Open</MenuLink>
           {props.canImpersonate && (
-            <MenuLink href={`/platform/tenants/${props.tenantId}?action=impersonate`}>Impersonate</MenuLink>
+            <MenuButton onClick={onImpersonate}>Impersonate</MenuButton>
           )}
           {props.ownerEmail && (
             <MenuLink href={`mailto:${props.ownerEmail}`}>Send email</MenuLink>

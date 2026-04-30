@@ -21,6 +21,7 @@ import { flagEmoji, normalizeCountry } from "@/lib/country-codes";
 import { getAllPlans } from "@/lib/plans";
 import type { Plan } from "@prisma/client";
 import { TenantRightRail } from "./_components/TenantRightRail";
+import { TenantImpersonateButton } from "./_components/TenantImpersonateButton";
 import { TenantNotesPanel } from "./_components/TenantNotesPanel";
 import { TenantUsersTab } from "./_components/TenantUsersTab";
 import { TenantBillingTab } from "./_components/TenantBillingTab";
@@ -181,9 +182,12 @@ export default async function PlatformTenantDetailPage({
           }
           actions={
             <>
-              <Link href={`?tab=settings#impersonate`}>
-                <Button size="sm">Impersonate</Button>
-              </Link>
+              <TenantImpersonateButton
+                tenantId={tenant.id}
+                tenantName={tenant.name}
+                size="sm"
+                enabled={ctx.can("tenant.impersonate")}
+              />
               {ownerUser?.email && (
                 <a href={`mailto:${ownerUser.email}`}>
                   <Button size="sm" variant="secondary">Send email</Button>
@@ -229,6 +233,7 @@ export default async function PlatformTenantDetailPage({
 
   const rail = (
     <TenantRightRail
+      canImpersonate={ctx.can("tenant.impersonate")}
       tenant={{
         id: tenant.id,
         name: tenant.name,

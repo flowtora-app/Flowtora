@@ -284,6 +284,7 @@ export function TenantsTable({
         <TenantQuickView
           tenant={quickView}
           onClose={() => setQuickView(null)}
+          canImpersonate={canImpersonate}
         />
       )}
     </div>

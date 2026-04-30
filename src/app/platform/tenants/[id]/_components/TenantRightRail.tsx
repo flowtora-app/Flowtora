@@ -10,6 +10,7 @@ import {
   StatusPill,
 } from "@/components/ui";
 import { flagEmoji } from "@/lib/country-codes";
+import { TenantImpersonateButton } from "./TenantImpersonateButton";
 
 // Sticky right rail for the tenant detail page — shared across every
 // tab. Contents per Page 4a §Right rail (sticky):
@@ -26,6 +27,7 @@ const STATUS_TO_PILL: Record<string, "active" | "trialing" | "past_due" | "suspe
 };
 
 export interface TenantRightRailProps {
+  canImpersonate: boolean;
   tenant: {
     id: string;
     name: string;
@@ -48,7 +50,7 @@ export interface TenantRightRailProps {
   recentViewers: { userId: string; name: string | null; email: string; viewedAt: Date }[];
 }
 
-export function TenantRightRail({ tenant, recentViewers }: TenantRightRailProps) {
+export function TenantRightRail({ tenant, recentViewers, canImpersonate }: TenantRightRailProps) {
   return (
     <aside className="space-y-3 lg:sticky lg:top-4 lg:self-start">
       {/* At-a-glance */}
@@ -86,9 +88,13 @@ export function TenantRightRail({ tenant, recentViewers }: TenantRightRailProps)
         <CardHeader title="Quick actions" />
         <CardBody>
           <div className="flex flex-wrap gap-2">
-            <Link href={`?tab=settings#impersonate`}>
-              <Button size="xs" variant="secondary">Impersonate</Button>
-            </Link>
+            <TenantImpersonateButton
+              tenantId={tenant.id}
+              tenantName={tenant.name}
+              size="xs"
+              variant="secondary"
+              enabled={canImpersonate}
+            />
             <Link href={`?tab=communications`}>
               <Button size="xs" variant="ghost">Send email</Button>
             </Link>
