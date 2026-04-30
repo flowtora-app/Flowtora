@@ -2,1546 +2,570 @@ import Link from "next/link";
 import { notFound } from "next/navigation";
 import { db } from "@/lib/db";
 import { requirePlatformStaff } from "@/lib/platform";
-import { Button, SelectField, TextArea, Field } from "@/components/Field";
 import {
-  updateTenantStatus,
-  updateTenantPlan,
-  updateTenantNotes,
-  updateTenantEnvironment,
-  updateTenantCohort,
-  archiveTenant,
-  restoreTenant,
-  startImpersonation,
-  resetTenantSandbox,
-  setTenantTags,
-} from "@/app/actions/platform";
-import {
-  upsertPriceOverride,
-  deletePriceOverride,
-} from "@/app/actions/plan-overrides";
-import {
-  startDunning,
-  advanceDunning,
-  pauseDunning,
-  resumeDunning,
-  resolveDunning,
-  detachCouponFromTenant,
-  updateTenantCurrency,
-} from "@/app/actions/platform-billing";
-import { SUPPORTED_CURRENCIES } from "@/lib/billing-currency";
-import { formatMoney } from "@/lib/format";
-import { resolveAllEntitlements } from "@/lib/entitlements";
-import type { FeatureKey } from "@/lib/entitlements";
-import { computeTenantHealth } from "@/lib/tenant-health";
-import { COHORT_OPTIONS } from "@/lib/cohorts";
-import { computeReadiness } from "@/lib/readiness";
+  Avatar,
+  Badge,
+  Banner,
+  Breadcrumb,
+  Button,
+  Card,
+  CardBody,
+  CardHeader,
+  EmptyState,
+  PageHeader,
+  ProgressBar,
+  StatusPill,
+  Tabs,
+} from "@/components/ui";
+import { flagEmoji, normalizeCountry } from "@/lib/country-codes";
+import { getAllPlans } from "@/lib/plans";
+import type { Plan } from "@prisma/client";
+import { TenantRightRail } from "./_components/TenantRightRail";
+import { TenantNotesPanel } from "./_components/TenantNotesPanel";
+import { TenantUsersTab } from "./_components/TenantUsersTab";
+import { TenantBillingTab } from "./_components/TenantBillingTab";
+import { TenantUsageTab } from "./_components/TenantUsageTab";
+import { TenantJobsTab } from "./_components/TenantJobsTab";
+import { TenantCustomersTab } from "./_components/TenantCustomersTab";
+import { TenantCatalogTab } from "./_components/TenantCatalogTab";
+import { TenantIntegrationsTab } from "./_components/TenantIntegrationsTab";
+import { TenantFeatureFlagsTab } from "./_components/TenantFeatureFlagsTab";
+import { TenantBrandingTab } from "./_components/TenantBrandingTab";
+import { TenantCommunicationsTab } from "./_components/TenantCommunicationsTab";
+import { TenantAuditTab } from "./_components/TenantAuditTab";
+import { TenantSecurityTab } from "./_components/TenantSecurityTab";
+import { TenantHealthScoreTab } from "./_components/TenantHealthScoreTab";
+import { TenantSettingsTab } from "./_components/TenantSettingsTab";
 
-import { TenantHeaderBar } from "@/components/platform/TenantHeaderBar";
-import { TenantTabs, type TenantTabKey, type TenantTab } from "@/components/platform/TenantTabs";
-import { TenantOverviewKPIs, type TenantKpi } from "@/components/platform/TenantOverviewKPIs";
-import { TenantHealthPanel } from "@/components/platform/TenantHealthPanel";
-import {
-  TenantFeaturesPanel,
-  type EntitlementMap,
-  type TenantFlagRow,
-} from "@/components/platform/TenantFeaturesPanel";
-import {
-  TenantActivityTimeline,
-  type ActivityEvent,
-} from "@/components/platform/TenantActivityTimeline";
+export const dynamic = "force-dynamic";
 
-// Phase 22 (transformation) — Tenant detail control center.
-//
-// One sticky identity header + tabbed body. Six tabs:
-//
-//   Overview · Billing · Access · Settings · Admin · Activity
-//
-// All data fetched up-front in a flat Promise.all so any tab loads at
-// the same speed as the current monolithic page; the cost is
-// amortized across the typical admin session who hops between tabs.
-//
-// All UI state lives in the URL (?tab=). No client-side state.
+const TAB_IDS = [
+  "overview", "users", "billing", "usage", "jobs", "customers",
+  "catalog", "integrations", "flags", "branding", "communications",
+  "audit", "security", "health", "notes", "settings",
+] as const;
+type TabId = (typeof TAB_IDS)[number];
 
-const TENANT_STATUSES = ["TRIAL", "ACTIVE", "PAST_DUE", "SUSPENDED", "CANCELED"] as const;
-const PLANS = ["STARTER", "GROWTH", "PRO", "ENTERPRISE"] as const;
-const ENVIRONMENTS = ["LIVE", "DEMO", "TEST"] as const;
-
-const TAB_KEYS: TenantTabKey[] = ["overview", "billing", "access", "settings", "admin", "activity"];
-
-const DAY_MS = 86_400_000;
+const STATUS_TO_PILL: Record<string, "active" | "trialing" | "past_due" | "suspended" | "cancelled" | "draft"> = {
+  ACTIVE: "active", TRIAL: "trialing", PAST_DUE: "past_due",
+  SUSPENDED: "suspended", CANCELED: "cancelled", ARCHIVED: "draft",
+};
 
 export default async function PlatformTenantDetailPage({
   params,
   searchParams,
 }: {
   params: Promise<{ id: string }>;
-  searchParams: Promise<{ tab?: string; error?: string; ok?: string }>;
+  searchParams: Promise<Record<string, string | string[] | undefined>>;
 }) {
+  const ctx = await requirePlatformStaff();
   const { id } = await params;
   const sp = await searchParams;
-  const ctx = await requirePlatformStaff();
+  const tabRaw = typeof sp.tab === "string" ? sp.tab : "overview";
+  const tab: TabId = (TAB_IDS as readonly string[]).includes(tabRaw) ? (tabRaw as TabId) : "overview";
 
-  const activeTab: TenantTabKey =
-    (TAB_KEYS as readonly string[]).includes(sp.tab ?? "")
-      ? (sp.tab as TenantTabKey)
-      : "overview";
-
-  const tenant = await db.tenant.findUnique({ where: { id } });
+  // ── Fan out the universal queries (header + right rail + counts).
+  const [tenant, plans] = await Promise.all([
+    db.tenant.findUnique({
+      where: { id },
+      select: {
+        id: true, name: true, slug: true, logoUrl: true,
+        plan: true, status: true, country: true,
+        createdAt: true, updatedAt: true, lastActivityAt: true, trialEndsAt: true,
+        adminTags: true, accountManagerId: true, customDomain: true,
+        ssoEnabled: true, ssoProvider: true, mfaEnforced: true,
+        signupSource: true, businessType: true, environment: true, betaCohort: true,
+        stripeCustomerId: true, stripeSubscriptionId: true,
+        notes: true, brandPrimaryColor: true,
+        currency: true, taxId: true, phone: true, website: true,
+        addressLine1: true, addressLine2: true, city: true, region: true, postalCode: true,
+        timezone: true,
+        archivedAt: true, archivedBy: true, archiveReasonCode: true,
+        suspensionReason: true,
+        accountManager: { select: { id: true, name: true, email: true } },
+        memberships: {
+          where: { role: "OWNER" },
+          select: { user: { select: { id: true, name: true, email: true } } },
+          take: 1,
+        },
+        _count: { select: { memberships: true } },
+      },
+    }),
+    getAllPlans(),
+  ]);
   if (!tenant) notFound();
 
-  // ── Time windows for trend deltas ───────────────────────────
-  const now = new Date();
-  const monthStart = new Date();
-  monthStart.setUTCDate(1);
-  monthStart.setUTCHours(0, 0, 0, 0);
-  const win30 = new Date(now.getTime() - 30 * DAY_MS);
-  const win60 = new Date(now.getTime() - 60 * DAY_MS);
+  const priceByPlan = new Map<Plan, number>();
+  for (const p of plans) priceByPlan.set(p.slug.toUpperCase() as Plan, p.priceMonthly ?? 0);
+  const planPrice = priceByPlan.get(tenant.plan) ?? 0;
+  const planName = plans.find((p) => p.slug.toUpperCase() === tenant.plan)?.name ?? String(tenant.plan);
+  const isPaying = tenant.status === "ACTIVE" || tenant.status === "PAST_DUE";
+  const mrr = isPaying ? planPrice : 0;
+  const norm = normalizeCountry(tenant.country);
+  const isVip = tenant.adminTags.includes("vip");
+  const ownerUser = tenant.memberships[0]?.user;
 
-  // ── Parallel data fetch ─────────────────────────────────────
-  const [
-    memberCount,
-    customerCount,
-    productCount,
-    quoteCount,
-    quoteThisMonth,
-    quotes30d,
-    quotesPrior30d,
-    orderCount,
-    orderThisMonth,
-    orders30d,
-    ordersPrior30d,
-    invoiceCount,
-    revenue,
-    revenue30d,
-    revenuePrior30d,
-    openAR,
-    lastQuote,
-    lastOrder,
-    recentAudits,
-    entitlements,
-    tenantFlagRows,
-    openTickets,
-    priceOverrides,
-    pricingPlans,
-  ] = await Promise.all([
-    db.membership.count({ where: { tenantId: id, status: "ACTIVE" } }),
-    db.customer.count({ where: { tenantId: id } }),
-    db.product.count({ where: { tenantId: id } }),
-    db.quote.count({ where: { tenantId: id } }),
-    db.quote.count({ where: { tenantId: id, createdAt: { gte: monthStart } } }),
-    db.quote.count({ where: { tenantId: id, createdAt: { gte: win30 } } }),
-    db.quote.count({ where: { tenantId: id, createdAt: { gte: win60, lt: win30 } } }),
-    db.order.count({ where: { tenantId: id } }),
-    db.order.count({ where: { tenantId: id, createdAt: { gte: monthStart } } }),
-    db.order.count({ where: { tenantId: id, createdAt: { gte: win30 } } }),
-    db.order.count({ where: { tenantId: id, createdAt: { gte: win60, lt: win30 } } }),
-    db.invoice.count({ where: { tenantId: id } }),
-    db.payment.aggregate({ where: { tenantId: id }, _sum: { amount: true } }),
-    db.payment.aggregate({
-      where: { tenantId: id, createdAt: { gte: win30 } },
-      _sum: { amount: true },
+  // Health score (heuristic; the Health tab can recompute + persist).
+  const lastDays = tenant.lastActivityAt
+    ? Math.floor((Date.now() - tenant.lastActivityAt.getTime()) / (1000 * 60 * 60 * 24))
+    : null;
+  const baseScore = tenant.status === "ACTIVE" ? 90 : tenant.status === "PAST_DUE" ? 40 : tenant.status === "TRIAL" ? 70 : 30;
+  const activityPenalty = lastDays == null ? 20 : lastDays > 30 ? 30 : lastDays > 7 ? 10 : 0;
+  const healthScore = Math.max(0, Math.min(100, baseScore - activityPenalty));
+
+  // LTV — sum of paid payments to date.
+  const lifetimePayments = await db.payment.aggregate({
+    where: { tenantId: id, voidedAt: null, failedAt: null },
+    _sum: { amount: true },
+  });
+  const ltv = Math.round(Number((lifetimePayments._sum as { amount?: unknown } | null)?.amount ?? 0));
+
+  // Touch viewer log + read recent viewers for the right rail.
+  await db.tenantViewedBy.upsert({
+    where: { tenantId_userId: { tenantId: id, userId: ctx.userId } },
+    update: { viewedAt: new Date() },
+    create: { tenantId: id, userId: ctx.userId, viewedAt: new Date() },
+  });
+  const recentViewers = await db.tenantViewedBy.findMany({
+    where: { tenantId: id, NOT: { userId: ctx.userId } },
+    orderBy: { viewedAt: "desc" },
+    take: 5,
+    select: {
+      userId: true, viewedAt: true,
+      user: { select: { name: true, email: true } },
+    },
+  });
+
+  /* ── Header ───────────────────────────────────────────── */
+
+  const header = (
+    <div>
+      <Breadcrumb
+        items={[
+          { label: "Platform", href: "/platform" },
+          { label: "Tenants", href: "/platform/tenants" },
+          { label: tenant.name },
+        ]}
+      />
+      <div className="mt-3">
+        <PageHeader
+          eyebrow={
+            <span className="inline-flex items-center gap-1.5">
+              <span className="font-mono text-[11px]">{tenant.slug}</span>
+              {isVip && <span title="VIP" aria-label="VIP">⭐</span>}
+              {tenant.environment !== "LIVE" && (
+                <Badge size="xs" color="warning">{tenant.environment}</Badge>
+              )}
+            </span>
+          }
+          title={
+            <span className="flex items-center gap-3">
+              <Avatar size="lg" src={tenant.logoUrl ?? undefined} name={tenant.name} />
+              <span className="min-w-0">{tenant.name}</span>
+            </span>
+          }
+          description={
+            <div className="flex flex-wrap items-center gap-2 text-[12px]">
+              <StatusPill status={STATUS_TO_PILL[tenant.status] ?? "draft"} size="sm" />
+              <Badge size="xs" color="brand">{planName}</Badge>
+              {mrr > 0 && <Badge size="xs" color="success">${mrr.toLocaleString()}/mo</Badge>}
+              <span style={{ color: "var(--text-muted)" }}>·</span>
+              <span style={{ color: "var(--text-muted)" }}>{tenant._count.memberships} {tenant._count.memberships === 1 ? "user" : "users"}</span>
+              {norm && (
+                <>
+                  <span style={{ color: "var(--text-muted)" }}>·</span>
+                  <span style={{ color: "var(--text-muted)" }}>{flagEmoji(norm.iso2)} {norm.name}</span>
+                </>
+              )}
+            </div>
+          }
+          actions={
+            <>
+              <Link href={`?tab=settings#impersonate`}>
+                <Button size="sm">Impersonate</Button>
+              </Link>
+              {ownerUser?.email && (
+                <a href={`mailto:${ownerUser.email}`}>
+                  <Button size="sm" variant="secondary">Send email</Button>
+                </a>
+              )}
+              <Link href={`?tab=notes`}>
+                <Button size="sm" variant="secondary">Add note</Button>
+              </Link>
+              <Link href={`?tab=communications#new-ticket`}>
+                <Button size="sm" variant="secondary">Create ticket</Button>
+              </Link>
+            </>
+          }
+        />
+      </div>
+    </div>
+  );
+
+  /* ── Tabs row ─────────────────────────────────────────── */
+
+  const baseTabs = [
+    { id: "overview",       label: "Overview" },
+    { id: "users",          label: "Users" },
+    { id: "billing",        label: "Billing" },
+    { id: "usage",          label: "Usage" },
+    { id: "jobs",           label: "Jobs" },
+    { id: "customers",      label: "Customers" },
+    { id: "catalog",        label: "Catalog" },
+    { id: "integrations",   label: "Integrations" },
+    { id: "flags",          label: "Flags" },
+    { id: "branding",       label: "Branding" },
+    { id: "communications", label: "Communications" },
+    { id: "audit",          label: "Audit" },
+    { id: "security",       label: "Security" },
+    { id: "health",         label: "Health" },
+    { id: "notes",          label: "Notes" },
+    { id: "settings",       label: "Settings" },
+  ];
+  const tabHrefFor = (id: string) => `/platform/tenants/${tenant.id}?tab=${id}`;
+  const activeHref = tabHrefFor(tab);
+
+  /* ── Right rail ───────────────────────────────────────── */
+
+  const rail = (
+    <TenantRightRail
+      tenant={{
+        id: tenant.id,
+        name: tenant.name,
+        slug: tenant.slug,
+        plan: tenant.plan,
+        planName,
+        status: tenant.status,
+        mrr,
+        ltv,
+        healthScore,
+        trialEndsAt: tenant.trialEndsAt,
+        countryIso2: norm?.iso2 ?? null,
+        countryName: norm?.name ?? null,
+        isVip,
+        adminTags: tenant.adminTags,
+        accountManager: tenant.accountManager
+          ? { id: tenant.accountManager.id, name: tenant.accountManager.name, email: tenant.accountManager.email }
+          : null,
+        stripeCustomerId: tenant.stripeCustomerId,
+        customDomain: tenant.customDomain,
+      }}
+      recentViewers={recentViewers.map((v) => ({
+        userId: v.userId,
+        name: v.user.name,
+        email: v.user.email,
+        viewedAt: v.viewedAt,
+      }))}
+    />
+  );
+
+  /* ── Tab content ──────────────────────────────────────── */
+
+  const headerCtx = { tenant, planName, mrr, ltv, healthScore, ownerUser };
+
+  return (
+    <div className="space-y-5">
+      {header}
+
+      {/* Status banner — reflects the most-impactful state. */}
+      {tenant.status === "PAST_DUE" && (
+        <Banner variant="error" title="Past due">
+          Payment failed and dunning is in progress. Settle the latest invoice or apply credit from the Billing tab.
+        </Banner>
+      )}
+      {tenant.status === "SUSPENDED" && (
+        <Banner variant="warning" title="Suspended">
+          {tenant.suspensionReason
+            ? <>Reason: {tenant.suspensionReason}</>
+            : "All members are signed out. Reactivate from Settings → Status to restore access."}
+        </Banner>
+      )}
+      {tenant.status === "ARCHIVED" && (
+        <Banner variant="neutral" title="Archived">
+          This tenant is soft-deleted. Restore from Settings → Status before any other change takes effect.
+        </Banner>
+      )}
+
+      <Tabs
+        variant="line"
+        activeHref={activeHref}
+        items={baseTabs.map((t) => ({ label: t.label, href: tabHrefFor(t.id) }))}
+      />
+
+      <div className="grid grid-cols-1 gap-5 lg:grid-cols-[1fr_320px]">
+        <div className="min-w-0 space-y-5">
+          {tab === "overview"       && <OverviewSection {...headerCtx} />}
+          {tab === "users"          && <TenantUsersTab tenantId={tenant.id} ownerEmail={ownerUser?.email ?? null} canImpersonate={ctx.can("tenant.impersonate")} canTag={ctx.can("tenant.tag")} />}
+          {tab === "billing"        && <TenantBillingTab tenantId={tenant.id} canPlanChange={ctx.can("billing.plan_change")} canRefund={ctx.can("billing.refund")} canCoupon={ctx.can("billing.coupon")} />}
+          {tab === "usage"          && <TenantUsageTab tenantId={tenant.id} />}
+          {tab === "jobs"           && <TenantJobsTab tenantId={tenant.id} canImpersonate={ctx.can("tenant.impersonate")} />}
+          {tab === "customers"      && <TenantCustomersTab tenantId={tenant.id} canImpersonate={ctx.can("tenant.impersonate")} />}
+          {tab === "catalog"        && <TenantCatalogTab tenantId={tenant.id} />}
+          {tab === "integrations"   && <TenantIntegrationsTab tenantId={tenant.id} canEdit={ctx.can("tenant.tag")} />}
+          {tab === "flags"          && <TenantFeatureFlagsTab tenantId={tenant.id} canWrite={ctx.can("feature_flag.write")} />}
+          {tab === "branding"       && <TenantBrandingTab tenantId={tenant.id} />}
+          {tab === "communications" && <TenantCommunicationsTab tenantId={tenant.id} />}
+          {tab === "audit"          && <TenantAuditTab tenantId={tenant.id} canExport={ctx.can("audit.read")} />}
+          {tab === "security"       && <TenantSecurityTab tenantId={tenant.id} canEdit={ctx.can("tenant.tag")} />}
+          {tab === "health"         && <TenantHealthScoreTab tenantId={tenant.id} canRecompute={ctx.can("tenant.tag")} />}
+          {tab === "notes"          && <TenantNotesPanel tenantId={tenant.id} currentUserId={ctx.userId} canWrite={ctx.can("tenant.tag")} />}
+          {tab === "settings"       && <TenantSettingsTab tenantId={tenant.id} tenantName={tenant.name} tenantSlug={tenant.slug} canRename={ctx.can("tenant.tag")} canTransfer={ctx.can("tenant.transfer")} canSuspend={ctx.can("tenant.suspend")} canDelete={ctx.can("tenant.delete")} canCancel={ctx.can("billing.plan_change")} />}
+        </div>
+        {rail}
+      </div>
+    </div>
+  );
+}
+
+/* ── Overview tab (inline — shares the header context) ──── */
+
+// We narrow the tenant shape to the subset the Overview reads — the
+// page-level fetch already pulls a wider select() but Overview only
+// needs these fields.
+interface OverviewTenant {
+  id: string;
+  name: string;
+  slug: string;
+  plan: string;
+  status: string;
+  country: string | null;
+  phone: string | null;
+  website: string | null;
+  addressLine1: string | null;
+  addressLine2: string | null;
+  city: string | null;
+  region: string | null;
+  postalCode: string | null;
+  customDomain: string | null;
+  taxId: string | null;
+  currency: string;
+  timezone: string;
+  businessType: string | null;
+  trialEndsAt: Date | null;
+  lastActivityAt: Date | null;
+  stripeCustomerId: string | null;
+  stripeSubscriptionId: string | null;
+  signupSource: string;
+}
+
+interface OverviewProps {
+  tenant: OverviewTenant;
+  planName: string;
+  mrr: number;
+  ltv: number;
+  healthScore: number;
+  ownerUser: { id: string; name: string | null; email: string } | undefined;
+}
+
+async function OverviewSection({ tenant, planName, mrr, ltv, healthScore, ownerUser }: OverviewProps) {
+  // Tile data — fetch counts + last 30 events.
+  const [userCount, customerCount, ytdJobs, fileSum, apiHits, integrationsCount, recentEvents, recentNotes] = await Promise.all([
+    db.membership.count({ where: { tenantId: tenant.id } }),
+    db.customer.count({ where: { tenantId: tenant.id } }),
+    db.order.count({
+      where: { tenantId: tenant.id, createdAt: { gte: new Date(new Date().getFullYear(), 0, 1) } },
     }),
-    db.payment.aggregate({
-      where: { tenantId: id, createdAt: { gte: win60, lt: win30 } },
-      _sum: { amount: true },
+    db.file.aggregate({ where: { tenantId: tenant.id }, _sum: { sizeBytes: true } }),
+    db.auditLog.count({
+      where: {
+        tenantId: tenant.id,
+        action: { startsWith: "api." },
+        createdAt: { gte: new Date(Date.now() - 30 * 86_400_000) },
+      },
     }),
-    db.invoice.findMany({
-      where: { tenantId: id, status: { in: ["SENT", "PARTIAL", "OVERDUE"] } },
-      select: { total: true, amountPaid: true, dueDate: true, status: true },
-    }),
-    db.quote.findFirst({
-      where: { tenantId: id },
-      orderBy: { createdAt: "desc" },
-      select: { createdAt: true },
-    }),
-    db.order.findFirst({
-      where: { tenantId: id },
-      orderBy: { createdAt: "desc" },
-      select: { createdAt: true },
-    }),
+    db.tenantIntegration.count({ where: { tenantId: tenant.id, status: "CONNECTED" } }),
     db.auditLog.findMany({
-      where: { tenantId: id },
-      orderBy: { createdAt: "desc" },
-      take: 50,
-      select: {
-        id: true,
-        action: true,
-        userId: true,
-        entityType: true,
-        entityId: true,
-        metadata: true,
-        createdAt: true,
-      },
-    }),
-    resolveAllEntitlements(tenant.id, tenant.plan),
-    db.featureFlag.findMany({
-      where: { tenantId: tenant.id },
-      select: { id: true, key: true, enabled: true, note: true },
-    }),
-    db.supportTicket.findMany({
-      where: { tenantId: tenant.id, status: { in: ["OPEN", "IN_PROGRESS", "WAITING_CUSTOMER"] } },
-      orderBy: [{ priority: "desc" }, { updatedAt: "desc" }],
-      take: 10,
-      select: {
-        id: true, subject: true, status: true, priority: true, category: true,
-        updatedAt: true, assignedTo: true,
-      },
-    }),
-    db.planPriceOverride.findMany({
       where: { tenantId: tenant.id },
       orderBy: { createdAt: "desc" },
-      select: {
-        id: true,
-        planId: true,
-        priceMonthly: true,
-        priceAnnual: true,
-        currency: true,
-        note: true,
-        expiresAt: true,
-        createdAt: true,
-        plan: { select: { slug: true, name: true } },
-      },
+      take: 30,
+      select: { id: true, action: true, createdAt: true, userId: true, entityType: true },
     }),
-    db.pricingPlan.findMany({
-      where: { status: { in: ["PUBLISHED", "HIDDEN"] } },
-      orderBy: [{ sortOrder: "asc" }],
-      select: { id: true, slug: true, name: true, priceMonthly: true, priceAnnual: true },
+    db.tenantNote.findMany({
+      where: { tenantId: tenant.id, isPrivate: false },
+      orderBy: [{ pinned: "desc" }, { createdAt: "desc" }],
+      take: 5,
+      select: {
+        id: true, body: true, pinned: true, createdAt: true,
+        author: { select: { name: true, email: true } },
+      },
     }),
   ]);
 
-  // Phase 3 — pull the active coupon details if attached. Separate
-  // query so the existing flat Promise.all stays type-stable; cheap
-  // because most tenants have no coupon attached.
-  const activeCoupon = tenant.activeCouponId
-    ? await db.coupon.findUnique({
-        where: { id: tenant.activeCouponId },
-        select: {
-          id: true, code: true, status: true,
-          discountType: true, amount: true, currency: true,
-          validUntil: true, redeemedCount: true, maxRedemptions: true,
-        },
-      })
-    : null;
-
-  const tenantFlagByKey = new Map<string, TenantFlagRow>(
-    tenantFlagRows.map((f) => [f.key, f]),
-  );
-
-  // Resolve userIds in audits to friendly names.
-  const userIds = Array.from(new Set(recentAudits.map((a) => a.userId).filter(Boolean))) as string[];
-  const users = userIds.length
-    ? await db.user.findMany({
-        where:  { id: { in: userIds } },
-        select: { id: true, email: true, name: true, platformRole: true },
-      })
-    : [];
-  const userById = new Map(users.map((u) => [u.id, u]));
-
-  // ── Derived numbers ─────────────────────────────────────────
-  const revenueTotal = revenue._sum.amount ? Number(revenue._sum.amount) : 0;
-  const revenue30dN  = revenue30d._sum.amount ? Number(revenue30d._sum.amount) : 0;
-  const revenuePrior30dN = revenuePrior30d._sum.amount ? Number(revenuePrior30d._sum.amount) : 0;
-  const openARTotal = openAR.reduce(
-    (sum, inv) => sum + (Number(inv.total) - Number(inv.amountPaid)),
-    0,
-  );
-  const overdueAR = openAR
-    .filter((inv) => inv.status === "OVERDUE" || (inv.dueDate && inv.dueDate.getTime() < now.getTime()))
-    .reduce((sum, inv) => sum + (Number(inv.total) - Number(inv.amountPaid)), 0);
-
-  const lastActivity =
-    tenant.lastActivityAt ?? lastQuote?.createdAt ?? lastOrder?.createdAt ?? tenant.createdAt;
-  const daysSinceActivity = Math.floor((now.getTime() - lastActivity.getTime()) / DAY_MS);
-  const lastActivityLabel =
-    daysSinceActivity === 0 ? "Active today"
-    : daysSinceActivity < 7 ? `Active ${daysSinceActivity}d ago`
-    : daysSinceActivity < 30 ? `Idle ${daysSinceActivity}d`
-    : `Dormant ${daysSinceActivity}d`;
-
-  const health = computeTenantHealth(tenant);
-  const readiness = computeReadiness({
-    tenant,
-    memberCount,
-    customerCount,
-    productCount,
-    quoteCount,
-    orderCount,
-  });
-
-  // ── Bound server actions to this tenant id ──────────────────
-  const saveStatus  = updateTenantStatus.bind(null, tenant.id);
-  const savePlan    = updateTenantPlan.bind(null, tenant.id);
-  const saveNotes   = updateTenantNotes.bind(null, tenant.id);
-  const saveEnv     = updateTenantEnvironment.bind(null, tenant.id);
-  const saveCohort  = updateTenantCohort.bind(null, tenant.id);
-  const saveTags    = setTenantTags.bind(null, tenant.id);
-  const doArchive   = archiveTenant.bind(null, tenant.id);
-  const doRestore   = restoreTenant.bind(null, tenant.id);
-  const resetSandbox = resetTenantSandbox.bind(null, tenant.id);
-  const impersonate = startImpersonation.bind(null, tenant.id);
-
-  // ── Header chips ────────────────────────────────────────────
-  const statusTone =
-    tenant.status === "ACTIVE"    ? "success" :
-    tenant.status === "TRIAL"     ? "accent"  :
-    tenant.status === "PAST_DUE"  ? "warning" :
-    tenant.status === "SUSPENDED" ? "danger"  :
-    tenant.status === "CANCELED"  ? "neutral" :
-    tenant.status === "ARCHIVED"  ? "neutral" :
-    "default";
-  const envTone = tenant.environment === "LIVE" ? "default" : tenant.environment === "DEMO" ? "warning" : "accent";
-  const healthTone =
-    health.level === "healthy"   ? "success" :
-    health.level === "attention" ? "accent"  :
-    health.level === "at-risk"   ? "warning" :
-    health.level === "critical"  ? "danger"  :
-    "neutral";
-
-  const headerChips: { label: string; tone: "default" | "accent" | "success" | "warning" | "danger" | "neutral"; dot?: boolean; title?: string }[] = [
-    { label: tenant.status,      tone: statusTone, title: "Account status" },
-    { label: tenant.plan,        tone: "default",  title: "Subscription plan" },
-    { label: tenant.environment, tone: envTone,    title: "Environment — non-LIVE shows a workspace ribbon" },
-    ...(tenant.betaCohort && tenant.betaCohort !== "NONE" ? [{ label: tenant.betaCohort, tone: "accent" as const, title: "Release cohort" }] : []),
-    { label: health.label, tone: healthTone, dot: true, title: health.signals.join(" · ") || "Tenant health" },
-  ];
-
-  const subline = `${tenant.slug} · ${lastActivityLabel}${
-    health.daysUntilTrialEnd !== null && health.daysUntilTrialEnd >= 0
-      ? ` · Trial ends in ${health.daysUntilTrialEnd}d`
-      : ""
-  }`;
-
-  // ── Tab bar with attention badges ───────────────────────────
-  const requiredMissing = readiness.checks.filter((c) => c.required && !c.done).length;
-  const tabs: TenantTab[] = [
-    { key: "overview", label: "Overview" },
-    {
-      key: "billing",
-      label: "Billing",
-      badge: !tenant.stripeCustomerId && tenant.environment === "LIVE" ? "!" : undefined,
-      badgeTone: "warning",
-    },
-    { key: "access",   label: "Access" },
-    { key: "settings", label: "Settings" },
-    {
-      key: "admin",
-      label: "Admin",
-      badge: openTickets.length > 0 ? openTickets.length : undefined,
-      badgeTone: "warning",
-    },
-    {
-      key: "activity",
-      label: "Activity",
-      badge: requiredMissing > 0 ? requiredMissing : undefined,
-      badgeTone: "danger",
-    },
-  ];
-
-  // ── KPI tiles ───────────────────────────────────────────────
-  const kpis: TenantKpi[] = [
-    { label: "Users",     value: memberCount.toString(),    subtitle: "active memberships" },
-    { label: "Customers", value: customerCount.toLocaleString() },
-    { label: "Products",  value: productCount.toLocaleString() },
-    {
-      label: "Quotes",
-      value: quoteCount.toLocaleString(),
-      subtitle: `${quoteThisMonth} this month`,
-      deltaPct: pctDelta(quotes30d, quotesPrior30d),
-    },
-    {
-      label: "Orders",
-      value: orderCount.toLocaleString(),
-      subtitle: `${orderThisMonth} this month`,
-      deltaPct: pctDelta(orders30d, ordersPrior30d),
-    },
-    { label: "Invoices", value: invoiceCount.toLocaleString() },
-    {
-      label: "Revenue",
-      value: formatMoney(revenueTotal, tenant.currency),
-      subtitle: "lifetime payments",
-      deltaPct: pctDelta(revenue30dN, revenuePrior30dN),
-      emphasis: "success",
-    },
-    {
-      label: "A/R open",
-      value: formatMoney(openARTotal.toFixed(2), tenant.currency),
-      subtitle: overdueAR > 0
-        ? `${formatMoney(overdueAR.toFixed(2), tenant.currency)} overdue`
-        : "outstanding balance",
-      emphasis: overdueAR > 0 ? "warning" : "default",
-    },
-  ];
-
-  // ── Activity events (latest 25 for the timeline preview / 50 for tab) ──
-  const auditEvents: ActivityEvent[] = recentAudits.map((a) => {
-    const actor = a.userId ? userById.get(a.userId) : null;
-    const who = actor?.name ?? actor?.email ?? (a.userId ? "unknown user" : "system");
-    return {
-      id: a.id,
-      action: a.action,
-      createdAt: a.createdAt,
-      actorLabel: actor?.platformRole ? `${who} (platform)` : who,
-      isPlatform: !!actor?.platformRole || a.action.startsWith("platform."),
-      entityType: a.entityType,
-      entityId: a.entityId,
-      metadata: a.metadata,
-    };
-  });
+  const storageBytes = Number(fileSum._sum.sizeBytes ?? 0);
 
   return (
-    <div>
-      {/* ── Identity header ─────────────────────────────────── */}
-      <TenantHeaderBar
-        name={tenant.name}
-        slug={tenant.slug}
-        workspaceHref={`/t/${tenant.slug}/dashboard`}
-        chips={headerChips}
-        subline={subline}
-      />
-
-      {/* ── Inline banners (always visible) ─────────────────── */}
-      <div className="mt-4 space-y-2">
-        {sp.error && (
-          <Banner tone="danger" title="Action failed" body={decodeURIComponent(sp.error)} />
-        )}
-        {sp.ok && (
-          <Banner tone="success" title="Saved" body={decodeURIComponent(sp.ok)} />
-        )}
-        {tenant.status === "TRIAL" && tenant.trialEndsAt && (() => {
-          const daysLeft = Math.ceil((tenant.trialEndsAt.getTime() - Date.now()) / DAY_MS);
-          if (daysLeft > 7) return null;
-          const overdue = daysLeft < 0;
-          return (
-            <Banner
-              tone={overdue ? "danger" : "warning"}
-              title={overdue ? `Trial expired ${Math.abs(daysLeft)} day${Math.abs(daysLeft) === 1 ? "" : "s"} ago` : `Trial ends in ${daysLeft} day${daysLeft === 1 ? "" : "s"}`}
-              body={`Expires ${tenant.trialEndsAt.toISOString().slice(0, 10)} — convert or suspend to avoid limbo.`}
-            />
-          );
-        })()}
-        {tenant.status === "SUSPENDED" && tenant.suspensionReason && (
-          <Banner tone="warning" title="Suspended" body={tenant.suspensionReason} />
-        )}
-        {tenant.status === "ARCHIVED" && (
-          <Banner
-            tone="neutral"
-            title="Archived"
-            body={
-              "Archived on " + (tenant.archivedAt?.toISOString().slice(0, 10) ?? "—") +
-              (tenant.scheduledDeletionAt
-                ? " · scheduled for permanent deletion " + tenant.scheduledDeletionAt.toISOString().slice(0, 10)
-                : "")
-            }
-          />
-        )}
-      </div>
-
-      {/* ── Tab nav ─────────────────────────────────────────── */}
-      <div className="mt-6">
-        <TenantTabs tenantId={tenant.id} active={activeTab} tabs={tabs} />
-      </div>
-
-      {/* ── Tab body ────────────────────────────────────────── */}
-      {activeTab === "overview" && (
-        <OverviewTab
-          kpis={kpis}
-          health={health}
-          readiness={readiness}
-          lastActivityLabel={lastActivityLabel}
-          recentEvents={auditEvents.slice(0, 8)}
-          tenantId={tenant.id}
-        />
-      )}
-
-      {activeTab === "billing" && (
-        <BillingTab
-          tenant={tenant}
-          canWrite={ctx.canWrite}
-          savePlan={savePlan}
-          priceOverrides={priceOverrides}
-          pricingPlans={pricingPlans}
-          activeCoupon={activeCoupon}
-        />
-      )}
-
-      {activeTab === "access" && (
-        <AccessTab
-          tenantId={tenant.id}
-          tenantPlan={tenant.plan}
-          entitlements={entitlements as EntitlementMap}
-          tenantFlagByKey={tenantFlagByKey}
-          canWrite={ctx.canWrite}
-          canImpersonate={ctx.canImpersonate}
-          impersonate={impersonate}
-        />
-      )}
-
-      {activeTab === "settings" && (
-        <SettingsTab
-          tenant={tenant}
-          canWrite={ctx.canWrite}
-          saveEnv={saveEnv}
-          saveCohort={saveCohort}
-          resetSandbox={resetSandbox}
-          saveTags={saveTags}
-        />
-      )}
-
-      {activeTab === "admin" && (
-        <AdminTab
-          tenant={tenant}
-          canWrite={ctx.canWrite}
-          saveStatus={saveStatus}
-          doArchive={doArchive}
-          doRestore={doRestore}
-          openTickets={openTickets}
-        />
-      )}
-
-      {activeTab === "activity" && (
-        <ActivityTab
-          events={auditEvents}
-          notes={tenant.notes}
-          saveNotes={saveNotes}
-        />
-      )}
-    </div>
-  );
-}
-
-// ────────────────────────────────────────────────────────────────
-// TAB PANELS
-// ────────────────────────────────────────────────────────────────
-
-function OverviewTab({
-  kpis,
-  health,
-  readiness,
-  lastActivityLabel,
-  recentEvents,
-  tenantId,
-}: {
-  kpis: TenantKpi[];
-  health: ReturnType<typeof computeTenantHealth>;
-  readiness: ReturnType<typeof computeReadiness>;
-  lastActivityLabel: string;
-  recentEvents: ActivityEvent[];
-  tenantId: string;
-}) {
-  return (
-    <div className="space-y-6">
-      <TenantOverviewKPIs kpis={kpis} />
-      <TenantHealthPanel
-        health={health}
-        readiness={readiness}
-        lastActivityLabel={lastActivityLabel}
-      />
-      <Section title="Recent activity" right={
-        <Link
-          href={`/platform/tenants/${tenantId}?tab=activity`}
-          className="text-xs underline"
-          style={{ color: "var(--text-muted)" }}
-        >
-          See all →
-        </Link>
-      }>
-        <TenantActivityTimeline events={recentEvents} />
-      </Section>
-    </div>
-  );
-}
-
-function BillingTab({
-  tenant,
-  canWrite,
-  savePlan,
-  priceOverrides,
-  pricingPlans,
-  activeCoupon,
-}: {
-  tenant: {
-    id: string;
-    plan: string;
-    currency: string;
-    stripeCustomerId: string | null;
-    stripeSubscriptionId: string | null;
-    trialEndsAt: Date | null;
-    environment: string;
-    dunningStage: string;
-    dunningStartedAt: Date | null;
-    dunningPausedAt: Date | null;
-    dunningLastEventAt: Date | null;
-  };
-  canWrite: boolean;
-  activeCoupon: {
-    id: string;
-    code: string;
-    status: string;
-    discountType: "PERCENT" | "FIXED";
-    amount: number;
-    currency: string | null;
-    validUntil: Date | null;
-    redeemedCount: number;
-    maxRedemptions: number | null;
-  } | null;
-  savePlan: (formData: FormData) => Promise<void>;
-  priceOverrides: Array<{
-    id: string;
-    planId: string;
-    priceMonthly: unknown;
-    priceAnnual: unknown;
-    currency: string;
-    note: string | null;
-    expiresAt: Date | null;
-    createdAt: Date;
-    plan: { slug: string; name: string };
-  }>;
-  pricingPlans: Array<{ id: string; slug: string; name: string; priceMonthly: unknown; priceAnnual: unknown }>;
-}) {
-  const stripeMissing = !tenant.stripeCustomerId && tenant.environment === "LIVE";
-  const inDunning = tenant.dunningStage !== "NONE" && tenant.dunningStage !== "RESOLVED";
-  return (
-    <div className="space-y-6">
-      {stripeMissing && (
-        <Banner
-          tone="warning"
-          title="No Stripe customer linked"
-          body="Live tenants need a Stripe customer to bill. Comp'd or grandfathered accounts can ignore this."
-        />
-      )}
-
-      {/* Phase 3 — dunning state. Always shown when in funnel; hidden
-          when NONE / RESOLVED. Lets ops staff act without leaving the
-          tenant detail. */}
-      {inDunning && (
-        <DunningPanel tenant={tenant} canWrite={canWrite} />
-      )}
-
-      {/* Phase 3 — active coupon attached to this tenant. Shows the
-          discount that will apply to the next manual invoice. */}
-      {activeCoupon && (
-        <ActiveCouponPanel coupon={activeCoupon} tenantId={tenant.id} canWrite={canWrite} />
-      )}
-
-      {/* Phase 3 — currency picker. Locks every NEW invoice issued for
-          this tenant to the selected currency; existing invoices stay
-          on whatever currency they were issued under. */}
-      <CurrencyPanel tenant={tenant} canWrite={canWrite} />
-
-      <div className="grid gap-4 md:grid-cols-2">
-        <Section title="Subscription plan" description="Bypasses Stripe — use only for comp'd, legacy, or manual accounts.">
-          <form action={savePlan} className="space-y-3">
-            <SelectField
-              label="Plan tier"
-              name="plan"
-              defaultValue={tenant.plan}
-              options={PLANS.map((p) => ({ value: p, label: p }))}
-            />
-            <Button type="submit" disabled={!canWrite}>
-              {canWrite ? "Save plan" : "Requires admin role"}
-            </Button>
-          </form>
-        </Section>
-
-        <Section title="Stripe linkage" description="Reference IDs pulled from the Stripe customer object.">
-          <dl className="space-y-2 text-sm">
-            <DT label="Customer ID"     value={tenant.stripeCustomerId} mono />
-            <DT label="Subscription ID" value={tenant.stripeSubscriptionId} mono />
-            <DT label="Currency"        value={tenant.currency} />
-            <DT label="Trial ends"      value={tenant.trialEndsAt?.toISOString().slice(0, 10) ?? null} />
+    <div className="space-y-5">
+      {/* Profile + ownership */}
+      <Card padding="md">
+        <CardHeader title="Profile" />
+        <CardBody>
+          <dl className="grid grid-cols-1 gap-3 text-[13px] md:grid-cols-2">
+            <Field label="Legal name" value={tenant.name} />
+            <Field label="Slug" value={<code className="font-mono">{tenant.slug}</code>} />
+            <Field label="Phone" value={tenant.phone} />
+            <Field label="Website" value={tenant.website ? <a href={tenant.website} target="_blank" rel="noopener noreferrer" className="hover:underline" style={{ color: "var(--accent-primary)" }}>{tenant.website}</a> : null} />
+            <Field label="Address"
+              value={[tenant.addressLine1, tenant.addressLine2, tenant.city, tenant.region, tenant.postalCode, tenant.country]
+                .filter(Boolean).join(", ") || null} />
+            <Field label="Custom domain" value={tenant.customDomain ?? null} />
+            <Field label="Tax ID" value={tenant.taxId} />
+            <Field label="Currency" value={tenant.currency} />
+            <Field label="Time zone" value={tenant.timezone} />
+            <Field label="Industry" value={tenant.businessType ? tenant.businessType.replace(/_/g, " ").toLowerCase() : null} />
           </dl>
-        </Section>
-      </div>
+        </CardBody>
+      </Card>
 
-      <Section
-        title="Price overrides"
-        description="Custom pricing that beats the plan's sticker price. One override per plan max."
-        right={
-          priceOverrides.length === 0 ? (
-            <span className="text-xs" style={{ color: "var(--text-faint)" }}>
-              Uses plan sticker prices
-            </span>
-          ) : null
-        }
-      >
-        {priceOverrides.length > 0 && (
-          <div className="overflow-x-auto" style={{ borderTop: "1px solid var(--border-subtle)" }}>
-            <table className="w-full text-sm">
-              <thead style={{ color: "var(--text-muted)" }}>
-                <tr className="text-left">
-                  <th className="px-4 py-3 font-normal">Plan</th>
-                  <th className="px-4 py-3 text-right font-normal">Monthly</th>
-                  <th className="px-4 py-3 text-right font-normal">Annual</th>
-                  <th className="px-4 py-3 font-normal">Note</th>
-                  <th className="px-4 py-3 font-normal">Expires</th>
-                  <th className="px-4 py-3 font-normal"></th>
-                </tr>
-              </thead>
-              <tbody>
-                {priceOverrides.map((o) => {
-                  const expired = o.expiresAt != null && o.expiresAt.getTime() < Date.now();
-                  return (
-                    <tr key={o.id} style={{ borderTop: "1px solid var(--border-subtle)" }}>
-                      <td className="px-4 py-3">
-                        <div className="font-medium" style={{ color: "var(--text-default)" }}>
-                          {o.plan.name}
-                        </div>
-                        <div className="mt-0.5 font-mono text-[11px]" style={{ color: "var(--text-faint)" }}>
-                          {o.plan.slug}
-                        </div>
-                      </td>
-                      <td className="px-4 py-3 text-right">
-                        {o.priceMonthly != null
-                          ? formatMoney(Number(o.priceMonthly), o.currency)
-                          : <span style={{ color: "var(--text-faint)" }}>—</span>}
-                      </td>
-                      <td className="px-4 py-3 text-right">
-                        {o.priceAnnual != null
-                          ? formatMoney(Number(o.priceAnnual), o.currency)
-                          : <span style={{ color: "var(--text-faint)" }}>—</span>}
-                      </td>
-                      <td className="px-4 py-3 text-xs" style={{ color: "var(--text-muted)" }}>
-                        {o.note ?? <span style={{ color: "var(--text-faint)" }}>—</span>}
-                      </td>
-                      <td className="px-4 py-3 text-xs">
-                        {o.expiresAt == null ? (
-                          <span style={{ color: "var(--text-faint)" }}>Never</span>
-                        ) : (
-                          <span style={{ color: expired ? "var(--danger-fg)" : "var(--text-muted)" }}>
-                            {o.expiresAt.toISOString().slice(0, 10)}
-                            {expired && " (expired)"}
-                          </span>
-                        )}
-                      </td>
-                      <td className="px-4 py-3 text-right">
-                        {canWrite && (
-                          <form action={deletePriceOverride.bind(null, tenant.id, o.id)}>
-                            <button
-                              type="submit"
-                              className="ts-focus rounded-md px-2 py-1 text-xs font-medium"
-                              style={{
-                                background: "var(--danger-surface)",
-                                color: "var(--danger-fg)",
-                                border: "1px solid var(--danger-fg)",
-                              }}
-                            >
-                              Remove
-                            </button>
-                          </form>
-                        )}
-                      </td>
-                    </tr>
-                  );
-                })}
-              </tbody>
-            </table>
+      <Card padding="md">
+        <CardHeader title="Account ownership" />
+        <CardBody>
+          {ownerUser ? (
+            <div className="flex items-center gap-3">
+              <Avatar size="md" name={ownerUser.name ?? ownerUser.email} />
+              <div className="min-w-0">
+                <div className="truncate text-[14px] font-medium" style={{ color: "var(--text-default)" }}>
+                  {ownerUser.name ?? ownerUser.email}
+                </div>
+                <div className="text-[12px]" style={{ color: "var(--text-muted)" }}>
+                  <a href={`mailto:${ownerUser.email}`} className="hover:underline">{ownerUser.email}</a> · OWNER
+                </div>
+              </div>
+            </div>
+          ) : (
+            <div className="text-[12px]" style={{ color: "var(--text-muted)" }}>No OWNER membership on file.</div>
+          )}
+        </CardBody>
+      </Card>
+
+      {/* Plan & subscription summary */}
+      <Card padding="md">
+        <CardHeader title="Plan & subscription" right={<Link href="?tab=billing" className="text-[12px] underline" style={{ color: "var(--accent-primary)" }}>Open billing →</Link>} />
+        <CardBody>
+          <dl className="grid grid-cols-2 gap-3 text-[13px] md:grid-cols-4">
+            <Field label="Plan" value={planName} />
+            <Field label="MRR" value={mrr === 0 ? "—" : `$${mrr.toLocaleString()}`} />
+            <Field label="ARR" value={mrr === 0 ? "—" : `$${(mrr * 12).toLocaleString()}`} />
+            <Field label="Lifetime" value={ltv === 0 ? "—" : `$${ltv.toLocaleString()}`} />
+            <Field label="Trial ends" value={tenant.trialEndsAt?.toLocaleDateString() ?? null} />
+            <Field label="Stripe customer" value={tenant.stripeCustomerId ?? null} />
+            <Field label="Subscription" value={tenant.stripeSubscriptionId ?? null} />
+            <Field label="Source" value={tenant.signupSource.toLowerCase()} />
+          </dl>
+        </CardBody>
+      </Card>
+
+      {/* Key-metric tiles */}
+      <Card padding="md">
+        <CardHeader title="Key metrics" />
+        <CardBody>
+          <div className="grid grid-cols-2 gap-3 md:grid-cols-3 lg:grid-cols-6">
+            <Tile label="Users"           value={userCount.toLocaleString()} />
+            <Tile label="Customers"       value={customerCount.toLocaleString()} />
+            <Tile label="Jobs (YTD)"      value={ytdJobs.toLocaleString()} />
+            <Tile label="Storage"         value={humanSize(storageBytes)} />
+            <Tile label="API events (30d)" value={apiHits.toLocaleString()} />
+            <Tile label="Integrations"    value={integrationsCount.toLocaleString()} />
           </div>
-        )}
+        </CardBody>
+      </Card>
 
-        {canWrite && pricingPlans.length > 0 && (
-          <form
-            action={upsertPriceOverride.bind(null, tenant.id)}
-            className="space-y-4 px-5 pt-5"
-            style={{ borderTop: "1px solid var(--border-subtle)" }}
-          >
-            <div className="grid gap-3 md:grid-cols-3">
-              <SelectField
-                label="Plan"
-                name="planId"
-                defaultValue={pricingPlans[0]?.id ?? ""}
-                options={pricingPlans.map((p) => ({
-                  value: p.id,
-                  label: `${p.name} (${p.slug})`,
-                }))}
-              />
-              <Field label="Override monthly" name="priceMonthly" placeholder="e.g. 49" hint="Blank = use plan's annual price only." />
-              <Field label="Override annual"  name="priceAnnual"  placeholder="e.g. 490" hint="Blank = use plan's monthly price only." />
+      {/* Health score breakdown */}
+      <Card padding="md">
+        <CardHeader title="Health score" right={<Link href="?tab=health" className="text-[12px] underline" style={{ color: "var(--accent-primary)" }}>Drilldown →</Link>} />
+        <CardBody>
+          <div className="flex items-center gap-4">
+            <div className="text-[40px] font-semibold tabular-nums" style={{ color: "var(--text-default)" }}>{healthScore}</div>
+            <div className="flex-1 space-y-1.5">
+              <SubScore label="Login recency"     value={Math.max(0, 100 - (tenant.lastActivityAt ? Math.floor((Date.now() - tenant.lastActivityAt.getTime()) / (1000 * 60 * 60 * 24)) * 3 : 50))} />
+              <SubScore label="Payment health"    value={tenant.status === "PAST_DUE" ? 30 : tenant.status === "ACTIVE" ? 95 : 70} />
+              <SubScore label="Account base"      value={tenant.status === "ACTIVE" ? 90 : tenant.status === "PAST_DUE" ? 40 : tenant.status === "TRIAL" ? 70 : 30} />
             </div>
-            <div className="grid gap-3 md:grid-cols-3">
-              <Field label="Currency"   name="currency" defaultValue="USD" maxLength={3} hint="ISO code." />
-              <Field label="Expires at" name="expiresAt" type="date" hint="Blank = permanent." />
-              <Field label="Note"       name="note" placeholder="e.g. 2024 launch deal" maxLength={400} hint="Internal only. 400 chars max." />
-            </div>
-            <div className="flex items-center justify-between">
-              <p className="text-xs" style={{ color: "var(--text-faint)" }}>
-                Saving on a plan that already has an override replaces it in place.
-              </p>
-              <Button type="submit">Save override</Button>
-            </div>
-          </form>
-        )}
-
-        {!canWrite && priceOverrides.length === 0 && (
-          <p className="px-5 py-8 text-center text-sm" style={{ color: "var(--text-muted)" }}>
-            No overrides. Admins can add one here.
-          </p>
-        )}
-      </Section>
-    </div>
-  );
-}
-
-function AccessTab({
-  tenantId,
-  tenantPlan,
-  entitlements,
-  tenantFlagByKey,
-  canWrite,
-  canImpersonate,
-  impersonate,
-}: {
-  tenantId: string;
-  tenantPlan: string;
-  entitlements: EntitlementMap;
-  tenantFlagByKey: Map<string, TenantFlagRow>;
-  canWrite: boolean;
-  canImpersonate: boolean;
-  impersonate: (formData: FormData) => Promise<void>;
-}) {
-  return (
-    <div className="space-y-6">
-      {canImpersonate && (
-        <Section
-          title="Sign in as this tenant"
-          description="Starts an audited impersonation session. A banner shows inside the workspace until you end it."
-        >
-          <form action={impersonate} className="flex flex-col items-stretch gap-3 md:flex-row md:items-end">
-            <div className="flex-1">
-              <Field
-                label="Reason (logged)"
-                name="reason"
-                placeholder="e.g. Helping owner configure tax rates per ticket #482"
-              />
-            </div>
-            <Button type="submit">Sign in as →</Button>
-          </form>
-        </Section>
-      )}
-
-      <div>
-        <h2 className="mb-3 text-sm font-semibold uppercase tracking-wide" style={{ color: "var(--text-muted)" }}>
-          Feature entitlements
-        </h2>
-        <p className="mb-4 text-xs" style={{ color: "var(--text-muted)" }}>
-          Resolution order: tenant override beats global override beats plan default. Clear an override to fall back to the next layer.
-        </p>
-        <TenantFeaturesPanel
-          tenantId={tenantId}
-          tenantPlan={tenantPlan}
-          entitlements={entitlements}
-          tenantFlagByKey={tenantFlagByKey}
-          canWrite={canWrite}
-        />
-      </div>
-    </div>
-  );
-}
-
-function SettingsTab({
-  tenant,
-  canWrite,
-  saveEnv,
-  saveCohort,
-  resetSandbox,
-  saveTags,
-}: {
-  tenant: {
-    id: string;
-    environment: string;
-    betaCohort: string;
-    sampleDataLoadedAt: Date | null;
-    timezone: string | null;
-    currency: string;
-    phone: string | null;
-    website: string | null;
-    addressLine1: string | null;
-    city: string | null;
-    region: string | null;
-    country: string | null;
-    taxId: string | null;
-    adminTags: string[];
-  };
-  canWrite: boolean;
-  saveEnv: (formData: FormData) => Promise<void>;
-  saveCohort: (formData: FormData) => Promise<void>;
-  resetSandbox: (formData: FormData) => Promise<void>;
-  saveTags: (formData: FormData) => Promise<void>;
-}) {
-  return (
-    <div className="space-y-6">
-      <Section
-        title="Admin tags"
-        description='Internal tags for organizing tenants — never shown to the tenant. Lowercase, kebab-case, e.g. "vip", "at-risk", "enterprise-pilot". Comma- or space-separated.'
-      >
-        <form action={saveTags} className="space-y-3">
-          <div className="flex flex-wrap items-center gap-1.5 mb-3">
-            {tenant.adminTags.length === 0 ? (
-              <span className="text-xs italic" style={{ color: "var(--text-faint)" }}>
-                No tags set yet.
-              </span>
-            ) : tenant.adminTags.map((t) => (
-              <span
-                key={t}
-                className="inline-block rounded-full px-2 py-0.5 text-[11px] font-medium"
-                style={{
-                  background: "var(--accent-surface)",
-                  color: "var(--accent-primary)",
-                  border: "1px solid var(--accent-primary)",
-                }}
-              >
-                {t}
-              </span>
-            ))}
           </div>
-          <Field
-            label="Tags"
-            name="tags"
-            defaultValue={tenant.adminTags.join(", ")}
-            placeholder="vip, beta-pilot, at-risk"
-            hint="Up to 20 tags. Invalid characters dropped silently."
-          />
-          <Button type="submit" disabled={!canWrite}>
-            {canWrite ? "Save tags" : "Requires admin role"}
-          </Button>
-        </form>
-      </Section>
+        </CardBody>
+      </Card>
 
-      <div className="grid gap-4 md:grid-cols-2">
-        <Section title="Environment" description="LIVE = real customer · DEMO = sales/marketing demo · TEST = QA sandbox.">
-          <form action={saveEnv} className="space-y-3">
-            <SelectField
-              label="Environment"
-              name="environment"
-              defaultValue={tenant.environment}
-              options={ENVIRONMENTS.map((e) => ({ value: e, label: e }))}
-            />
-            <Button type="submit" disabled={!canWrite}>
-              {canWrite ? "Save environment" : "Requires admin role"}
-            </Button>
-          </form>
-        </Section>
-
-        <Section title="Release cohort" description="Groups tenants into rollout waves. Feature flags target a whole cohort.">
-          <form action={saveCohort} className="space-y-3">
-            <SelectField
-              label="Cohort"
-              name="betaCohort"
-              defaultValue={tenant.betaCohort}
-              options={COHORT_OPTIONS.map((o) => ({
-                value: o.value,
-                label: o.value === "NONE" ? "GA (general availability)" : o.label,
-              }))}
-            />
-            <Button type="submit" disabled={!canWrite}>
-              {canWrite ? "Save cohort" : "Requires admin role"}
-            </Button>
-          </form>
-        </Section>
-      </div>
-
-      <Section
-        title="Business profile"
-        description="Pulled from tenant settings. Edit in the workspace; surfaced here for support context."
-      >
-        <dl className="grid gap-y-2 text-sm md:grid-cols-2">
-          <DT label="Phone"    value={tenant.phone} />
-          <DT label="Website"  value={tenant.website} />
-          <DT label="Address"  value={[tenant.addressLine1, tenant.city, tenant.region, tenant.country].filter(Boolean).join(", ") || null} />
-          <DT label="Timezone" value={tenant.timezone} />
-          <DT label="Currency" value={tenant.currency} />
-          <DT label="Tax ID"   value={tenant.taxId} />
-        </dl>
-        {[tenant.phone, tenant.website, tenant.addressLine1, tenant.taxId].every((v) => !v) && (
-          <p className="mt-2 text-xs" style={{ color: "var(--text-muted)" }}>
-            No profile data entered yet — owner can add this from workspace settings.
-          </p>
-        )}
-      </Section>
-
-      {tenant.environment !== "LIVE" && (
-        <Section
-          title="Sandbox reset"
-          description="Wipes seeded demo data (customers / products / quotes / orders / invoices) and re-seeds a fresh sample set. Real data is untouched."
-        >
-          <form action={resetSandbox} className="space-y-3">
-            <div
-              className="rounded-md px-3 py-2 text-xs"
-              style={{
-                background: "var(--surface-2)",
-                border: "1px solid var(--border-subtle)",
-                color: "var(--text-muted)",
-              }}
-            >
-              Environment is <b style={{ color: "var(--text-default)" }}>{tenant.environment}</b>. Sandbox reset is blocked on LIVE tenants.
-              {tenant.sampleDataLoadedAt && (
-                <> Sample data last loaded {tenant.sampleDataLoadedAt.toISOString().slice(0, 10)}.</>
-              )}
-            </div>
-            <Button type="submit" variant="danger" disabled={!canWrite}>
-              {canWrite ? "Reset sandbox" : "Requires admin role"}
-            </Button>
-          </form>
-        </Section>
-      )}
-    </div>
-  );
-}
-
-function AdminTab({
-  tenant,
-  canWrite,
-  saveStatus,
-  doArchive,
-  doRestore,
-  openTickets,
-}: {
-  tenant: {
-    id: string;
-    status: string;
-    suspensionReason: string | null;
-    archivedAt: Date | null;
-    scheduledDeletionAt: Date | null;
-    archiveReason: string | null;
-  };
-  canWrite: boolean;
-  saveStatus: (formData: FormData) => Promise<void>;
-  doArchive: (formData: FormData) => Promise<void>;
-  doRestore: (formData: FormData) => Promise<void>;
-  openTickets: Array<{
-    id: string;
-    subject: string;
-    status: string;
-    priority: string;
-    category: string;
-    updatedAt: Date;
-    assignedTo: string | null;
-  }>;
-}) {
-  return (
-    <div className="space-y-6">
-      {openTickets.length > 0 && (
-        <Section
-          title={`Open support tickets (${openTickets.length})`}
-          description="Unresolved tickets from this tenant. Click through to reply."
-        >
-          <ul className="-mx-5 -mb-5">
-            {openTickets.map((t, i) => (
-              <li
-                key={t.id}
-                style={{ borderTop: i === 0 ? "1px solid var(--border-subtle)" : "1px solid var(--border-subtle)" }}
-              >
-                <Link
-                  href={`/platform/support/${t.id}`}
-                  className="flex items-center justify-between px-5 py-3 text-sm transition-colors hover:opacity-90"
-                >
-                  <div className="min-w-0 flex-1">
-                    <div className="truncate font-medium" style={{ color: "var(--text-default)" }}>
-                      {t.subject}
-                    </div>
-                    <div className="mt-0.5 text-xs" style={{ color: "var(--text-muted)" }}>
-                      {t.status.replace(/_/g, " ").toLowerCase()} · {t.category.replace(/_/g, " ").toLowerCase()} ·{" "}
-                      priority {t.priority.toLowerCase()}
-                    </div>
-                  </div>
-                  <span className="text-xs" style={{ color: "var(--text-muted)" }}>
-                    {t.assignedTo ? "assigned" : "unassigned"}
-                  </span>
-                </Link>
+      {/* Recent activity timeline */}
+      <Card padding="none" className="overflow-hidden">
+        <div className="px-4 pt-4 pb-2">
+          <CardHeader title="Recent activity" right={<Link href="?tab=audit" className="text-[12px] underline" style={{ color: "var(--accent-primary)" }}>All audit →</Link>} description={`Last ${Math.min(30, recentEvents.length)} events`} />
+        </div>
+        {recentEvents.length === 0 ? (
+          <CardBody><EmptyState title="No activity yet" description="Audit events scoped to this tenant land here." /></CardBody>
+        ) : (
+          <ul className="divide-y" style={{ borderColor: "var(--border-subtle)" }}>
+            {recentEvents.map((e) => (
+              <li key={e.id} className="flex items-baseline justify-between gap-3 px-4 py-2 text-[12px]">
+                <span className="font-mono" style={{ color: "var(--text-default)" }}>{e.action}</span>
+                <span style={{ color: "var(--text-faint)" }}>{e.createdAt.toLocaleString()}</span>
               </li>
             ))}
           </ul>
-        </Section>
-      )}
+        )}
+      </Card>
 
-      {/* ── Danger zone ─── */}
-      <div
-        className="rounded-xl"
-        style={{
-          background: "var(--surface-1)",
-          border: "1px solid var(--danger-fg)",
-          boxShadow: "var(--shadow-sm)",
-        }}
-      >
-        <div
-          className="flex items-center gap-2 px-5 py-3"
-          style={{ borderBottom: "1px solid var(--danger-fg)", background: "var(--danger-surface)" }}
-        >
-          <span aria-hidden style={{ color: "var(--danger-fg)" }}>⚠</span>
-          <h2 className="text-sm font-semibold uppercase tracking-wide" style={{ color: "var(--danger-fg)" }}>
-            Danger zone
-          </h2>
-        </div>
-        <div className="grid gap-px md:grid-cols-2" style={{ background: "var(--border-subtle)" }}>
-          <div className="space-y-3 p-5" style={{ background: "var(--surface-1)" }}>
-            <div>
-              <h3 className="text-sm font-semibold" style={{ color: "var(--text-default)" }}>
-                Account status
-              </h3>
-              <p className="mt-0.5 text-xs" style={{ color: "var(--text-muted)" }}>
-                Suspending blocks all tenant access with a reason shown to the owner.
-              </p>
-            </div>
-            <form action={saveStatus} className="space-y-3">
-              <SelectField
-                label="Set status"
-                name="status"
-                defaultValue={tenant.status === "ARCHIVED" ? "ACTIVE" : tenant.status}
-                options={TENANT_STATUSES.map((s) => ({ value: s, label: s }))}
-              />
-              <Field
-                label="Suspension reason (shown to owner if SUSPENDED)"
-                name="suspensionReason"
-                defaultValue={tenant.suspensionReason ?? ""}
-                placeholder="e.g. Payment failed 3x — contact billing@flowtora.com"
-              />
-              <Button type="submit" disabled={!canWrite}>
-                {canWrite ? "Save status" : "Requires admin role"}
-              </Button>
-            </form>
-          </div>
-
-          <div className="space-y-3 p-5" style={{ background: "var(--surface-1)" }}>
-            {tenant.status === "ARCHIVED" ? (
-              <>
-                <div>
-                  <h3 className="text-sm font-semibold" style={{ color: "var(--text-default)" }}>
-                    Restore tenant
-                  </h3>
-                  <p className="mt-0.5 text-xs" style={{ color: "var(--text-muted)" }}>
-                    Archived on {tenant.archivedAt?.toISOString().slice(0, 10) ?? "—"}
-                    {tenant.scheduledDeletionAt
-                      ? ` · scheduled for deletion ${tenant.scheduledDeletionAt.toISOString().slice(0, 10)}`
-                      : ""}
-                  </p>
-                </div>
-                {tenant.archiveReason && (
-                  <div
-                    className="rounded-md px-3 py-2 text-xs"
-                    style={{
-                      background: "var(--surface-2)",
-                      border: "1px solid var(--border-subtle)",
-                      color: "var(--text-muted)",
-                    }}
-                  >
-                    <div className="font-medium" style={{ color: "var(--text-default)" }}>Reason archived</div>
-                    <div className="mt-0.5">{tenant.archiveReason}</div>
+      {/* Notes preview */}
+      <Card padding="md">
+        <CardHeader title="Pinned & recent notes" right={<Link href="?tab=notes" className="text-[12px] underline" style={{ color: "var(--accent-primary)" }}>All notes →</Link>} />
+        <CardBody>
+          {recentNotes.length === 0 ? (
+            <div className="text-[12px]" style={{ color: "var(--text-muted)" }}>No notes yet — capture handoff context, sales call summaries, etc.</div>
+          ) : (
+            <ul className="flex flex-col gap-3">
+              {recentNotes.map((n) => (
+                <li key={n.id} className="rounded-md border p-3 text-[12px]"
+                    style={{ borderColor: "var(--border-subtle)", background: n.pinned ? "var(--amber-50)" : "var(--surface-1)" }}>
+                  <div className="mb-1 flex items-center gap-2">
+                    <Avatar size="xs" name={n.author.name ?? n.author.email} />
+                    <span className="font-medium" style={{ color: "var(--text-default)" }}>{n.author.name ?? n.author.email}</span>
+                    <span style={{ color: "var(--text-faint)" }}>· {n.createdAt.toLocaleString()}</span>
+                    {n.pinned && <Badge size="xs" color="warning">Pinned</Badge>}
                   </div>
-                )}
-                <form action={doRestore} className="space-y-3">
-                  <SelectField
-                    label="Restore as"
-                    name="nextStatus"
-                    defaultValue="ACTIVE"
-                    options={[
-                      { value: "ACTIVE",   label: "ACTIVE" },
-                      { value: "TRIAL",    label: "TRIAL" },
-                      { value: "PAST_DUE", label: "PAST_DUE" },
-                    ]}
-                  />
-                  <Button type="submit" disabled={!canWrite}>
-                    {canWrite ? "Restore tenant" : "Requires admin role"}
-                  </Button>
-                </form>
-              </>
-            ) : (
-              <>
-                <div>
-                  <h3 className="text-sm font-semibold" style={{ color: "var(--text-default)" }}>
-                    Archive tenant
-                  </h3>
-                  <p className="mt-0.5 text-xs" style={{ color: "var(--text-muted)" }}>
-                    Soft-delete. Status flips to ARCHIVED, owner access is blocked, data preserved during the grace window.
-                  </p>
-                </div>
-                <form action={doArchive} className="space-y-3">
-                  <SelectField
-                    label="Cancellation reason category"
-                    name="reasonCode"
-                    defaultValue="ADMIN_DECISION"
-                    options={[
-                      { value: "ADMIN_DECISION",         label: "Admin decision (catch-all)" },
-                      { value: "NOT_A_FIT",              label: "Not a fit for our product" },
-                      { value: "TOO_EXPENSIVE",          label: "Too expensive" },
-                      { value: "MISSING_FEATURES",       label: "Missing features" },
-                      { value: "SWITCHED_TO_COMPETITOR", label: "Switched to competitor" },
-                      { value: "BUSINESS_CLOSED",        label: "Business closed / no longer operating" },
-                      { value: "TEMPORARY_PAUSE",        label: "Temporary pause" },
-                      { value: "TECHNICAL_ISSUES",       label: "Technical issues" },
-                      { value: "POOR_SUPPORT",           label: "Poor support experience" },
-                      { value: "OTHER",                  label: "Other" },
-                    ]}
-                  />
-                  <Field
-                    label="Reason (free-form, logged)"
-                    name="reason"
-                    placeholder="e.g. Owner requested closure — ticket #291"
-                  />
-                  <Field
-                    label="Grace period (days before permanent deletion)"
-                    name="graceDays"
-                    defaultValue="30"
-                    placeholder="30"
-                  />
-                  <Button type="submit" variant="danger" disabled={!canWrite}>
-                    {canWrite ? "Archive tenant" : "Requires admin role"}
-                  </Button>
-                </form>
-              </>
-            )}
-          </div>
-        </div>
-      </div>
-    </div>
-  );
-}
-
-function ActivityTab({
-  events,
-  notes,
-  saveNotes,
-}: {
-  events: ActivityEvent[];
-  notes: string | null;
-  saveNotes: (formData: FormData) => Promise<void>;
-}) {
-  return (
-    <div className="space-y-6">
-      <Section
-        title="Internal notes"
-        description="Platform-only — the shop never sees this. Use for context, known issues, billing disputes."
-      >
-        <form action={saveNotes} className="space-y-3">
-          <TextArea
-            label="Notes"
-            name="notes"
-            rows={6}
-            defaultValue={notes ?? ""}
-            placeholder="e.g. Owner requested quarterly billing in March — follow up next cycle."
-          />
-          <Button type="submit">Save notes</Button>
-        </form>
-      </Section>
-
-      <Section title="Activity timeline" description="Audit log from tenant staff and platform staff, latest first.">
-        <TenantActivityTimeline events={events} />
-      </Section>
-    </div>
-  );
-}
-
-// ────────────────────────────────────────────────────────────────
-// SHARED LITTLE BITS
-// ────────────────────────────────────────────────────────────────
-
-function Section({
-  title,
-  description,
-  right,
-  children,
-}: {
-  title: string;
-  description?: string;
-  right?: React.ReactNode;
-  children: React.ReactNode;
-}) {
-  return (
-    <section
-      className="overflow-hidden rounded-xl"
-      style={{
-        background: "var(--surface-1)",
-        border: "1px solid var(--border-subtle)",
-        boxShadow: "var(--shadow-sm)",
-      }}
-    >
-      <header
-        className="flex items-start justify-between gap-3 px-5 py-4"
-        style={{ borderBottom: "1px solid var(--border-subtle)" }}
-      >
-        <div>
-          <h2 className="text-sm font-semibold" style={{ color: "var(--text-default)" }}>
-            {title}
-          </h2>
-          {description && (
-            <p className="mt-0.5 text-xs" style={{ color: "var(--text-muted)" }}>
-              {description}
-            </p>
+                  <div style={{ color: "var(--text-default)" }}>{n.body.slice(0, 280)}{n.body.length > 280 ? "…" : ""}</div>
+                </li>
+              ))}
+            </ul>
           )}
-        </div>
-        {right}
-      </header>
-      <div className="p-5">{children}</div>
-    </section>
-  );
-}
-
-function Banner({
-  tone,
-  title,
-  body,
-}: {
-  tone: "danger" | "warning" | "success" | "neutral";
-  title: string;
-  body: string;
-}) {
-  const palette =
-    tone === "danger"  ? { bg: "var(--danger-surface)",  fg: "var(--danger-fg)",      border: "var(--danger-fg)"      } :
-    tone === "warning" ? { bg: "var(--warning-surface)", fg: "var(--warning-fg)",     border: "var(--warning-fg)"     } :
-    tone === "success" ? { bg: "var(--success-surface)", fg: "var(--success-fg)",     border: "var(--success-fg)"     } :
-                          { bg: "var(--surface-2)",       fg: "var(--text-default)",   border: "var(--border-default)" };
-  return (
-    <div
-      className="rounded-md px-4 py-3 text-sm"
-      style={{ background: palette.bg, border: `1px solid ${palette.border}`, color: palette.fg }}
-    >
-      <div className="font-semibold">{title}</div>
-      <div className="mt-0.5 text-xs" style={{ opacity: 0.85 }}>{body}</div>
+        </CardBody>
+      </Card>
     </div>
   );
 }
 
-function DT({ label, value, mono }: { label: string; value: string | null | undefined; mono?: boolean }) {
+/* ── Helpers ────────────────────────────────────────────── */
+
+function Field({ label, value }: { label: string; value: React.ReactNode | null }) {
   return (
-    <div className="flex flex-wrap items-baseline gap-2">
-      <dt className="w-24 shrink-0 text-xs" style={{ color: "var(--text-muted)" }}>
-        {label}
-      </dt>
-      <dd
-        className={`flex-1 break-all text-sm ${mono ? "font-mono text-xs" : ""}`}
-        style={{ color: value ? "var(--text-default)" : "var(--text-faint)" }}
-      >
-        {value ?? "—"}
+    <div>
+      <dt className="text-[10px] font-semibold uppercase tracking-wide" style={{ color: "var(--text-muted)" }}>{label}</dt>
+      <dd className="mt-0.5" style={{ color: "var(--text-default)" }}>
+        {value == null || value === "" ? <span style={{ color: "var(--text-faint)" }}>—</span> : value}
       </dd>
     </div>
   );
 }
 
-function pctDelta(current: number, prior: number): number | undefined {
-  if (prior <= 0) return current > 0 ? 1 : undefined;
-  return (current - prior) / prior;
-}
-
-// ────────────────────────────────────────────────────────────────
-// Phase 3 — Billing tab panels (dunning / coupon / currency)
-// ────────────────────────────────────────────────────────────────
-
-const DUNNING_LABELS: Record<string, string> = {
-  PAYMENT_FAILED: "Payment failed",
-  REMINDER_1:     "Reminder 1",
-  REMINDER_2:     "Reminder 2",
-  FINAL_NOTICE:   "Final notice",
-  SUSPEND:        "Suspended",
-  RESOLVED:       "Resolved",
-  NONE:           "Healthy",
-};
-
-function DunningPanel({
-  tenant,
-  canWrite,
-}: {
-  tenant: {
-    id: string;
-    dunningStage: string;
-    dunningStartedAt: Date | null;
-    dunningPausedAt: Date | null;
-    dunningLastEventAt: Date | null;
-  };
-  canWrite: boolean;
-}) {
-  const days = tenant.dunningStartedAt
-    ? Math.floor((Date.now() - tenant.dunningStartedAt.getTime()) / 86_400_000)
-    : null;
-  const tone = tenant.dunningPausedAt
-    ? { bg: "var(--surface-2)",       border: "var(--border-subtle)", fg: "var(--text-muted)" }
-    : tenant.dunningStage === "SUSPEND" || tenant.dunningStage === "FINAL_NOTICE"
-    ? { bg: "var(--danger-surface)",  border: "var(--danger-fg)",     fg: "var(--danger-fg)" }
-    : { bg: "var(--warning-surface)", border: "var(--warning-fg)",    fg: "var(--warning-fg)" };
-
+function Tile({ label, value }: { label: string; value: string }) {
   return (
-    <div
-      className="rounded-xl"
-      style={{ background: "var(--surface-1)", border: `1px solid ${tone.border}`, boxShadow: "var(--shadow-sm)" }}
-    >
-      <div
-        className="flex flex-wrap items-center gap-2 px-5 py-3"
-        style={{ background: tone.bg, borderBottom: `1px solid ${tone.border}` }}
-      >
-        <span aria-hidden style={{ color: tone.fg }}>♥</span>
-        <h2 className="text-sm font-semibold uppercase tracking-wide" style={{ color: tone.fg }}>
-          Dunning · {DUNNING_LABELS[tenant.dunningStage] ?? tenant.dunningStage}
-        </h2>
-        {tenant.dunningPausedAt && (
-          <span
-            className="rounded-full px-1.5 py-0.5 text-[10px] font-bold uppercase tracking-wide"
-            style={{ background: "var(--surface-1)", color: tone.fg, border: `1px solid ${tone.fg}` }}
-          >
-            PAUSED
-          </span>
-        )}
-        <span className="ml-auto text-xs" style={{ color: tone.fg }}>
-          {days != null ? `${days} day${days === 1 ? "" : "s"} in funnel` : "just started"}
-        </span>
-      </div>
-      <div className="space-y-3 p-5">
-        <p className="text-sm" style={{ color: "var(--text-muted)" }}>
-          {tenant.dunningPausedAt
-            ? "Paused — automated cron won't advance the stage. Resume to let SLA-based progression resume, or resolve to clear the funnel."
-            : "Hourly cron auto-advances by SLA (24h → 48h → 96h → 168h). Operator overrides land here."}
-        </p>
-        <div className="flex flex-wrap gap-2">
-          {canWrite && tenant.dunningStage !== "SUSPEND" && (
-            <form action={advanceDunning.bind(null, tenant.id)}>
-              <button
-                type="submit"
-                className="ts-focus rounded-md px-3 py-1.5 text-xs font-medium"
-                style={{ background: "var(--warning-fg)", color: "var(--surface-1)" }}
-              >
-                Advance →
-              </button>
-            </form>
-          )}
-          {canWrite && (
-            tenant.dunningPausedAt ? (
-              <form action={resumeDunning.bind(null, tenant.id)}>
-                <button
-                  type="submit"
-                  className="ts-focus rounded-md border px-3 py-1.5 text-xs font-medium"
-                  style={{ borderColor: "var(--border-default)", color: "var(--text-default)", background: "var(--surface-1)" }}
-                >
-                  Resume
-                </button>
-              </form>
-            ) : (
-              <form action={pauseDunning.bind(null, tenant.id)}>
-                <button
-                  type="submit"
-                  className="ts-focus rounded-md border px-3 py-1.5 text-xs font-medium"
-                  style={{ borderColor: "var(--border-default)", color: "var(--text-muted)", background: "var(--surface-1)" }}
-                >
-                  Pause
-                </button>
-              </form>
-            )
-          )}
-          {canWrite && (
-            <form action={resolveDunning.bind(null, tenant.id)}>
-              <button
-                type="submit"
-                className="ts-focus rounded-md px-3 py-1.5 text-xs font-medium"
-                style={{ background: "var(--accent-primary)", color: "var(--accent-on-primary)" }}
-              >
-                Resolve ✓
-              </button>
-            </form>
-          )}
-          <Link
-            href="/platform/billing/dunning"
-            className="ts-focus inline-flex items-center rounded-md border px-3 py-1.5 text-xs font-medium"
-            style={{ borderColor: "var(--border-subtle)", color: "var(--text-muted)", background: "var(--surface-1)" }}
-          >
-            All dunning →
-          </Link>
-        </div>
-      </div>
+    <div className="rounded-md border p-3" style={{ background: "var(--surface-2)", borderColor: "var(--border-subtle)" }}>
+      <div className="text-[10px] font-semibold uppercase tracking-wide" style={{ color: "var(--text-muted)" }}>{label}</div>
+      <div className="mt-0.5 text-[18px] font-semibold tabular-nums" style={{ color: "var(--text-default)" }}>{value}</div>
     </div>
   );
 }
 
-function ActiveCouponPanel({
-  coupon,
-  tenantId,
-  canWrite,
-}: {
-  coupon: {
-    id: string;
-    code: string;
-    status: string;
-    discountType: "PERCENT" | "FIXED";
-    amount: number;
-    currency: string | null;
-    validUntil: Date | null;
-    redeemedCount: number;
-    maxRedemptions: number | null;
-  };
-  tenantId: string;
-  canWrite: boolean;
-}) {
-  const discountStr = coupon.discountType === "PERCENT"
-    ? `${coupon.amount}% off`
-    : `${formatMoney(coupon.amount, coupon.currency ?? "USD")} off`;
-  const expired = coupon.validUntil != null && coupon.validUntil.getTime() < Date.now();
-  const inactive = coupon.status !== "ACTIVE";
+function SubScore({ label, value }: { label: string; value: number }) {
   return (
-    <Section
-      title="Active coupon"
-      description="Applied automatically to the next manual invoice we issue this tenant. Subscription cycle picks it up too when Stripe-mirrored (★ chip on /platform/billing/coupons)."
-      right={
-        canWrite ? (
-          <form action={detachCouponFromTenant.bind(null, tenantId)}>
-            <button
-              type="submit"
-              className="ts-focus rounded-md border px-2 py-1 text-xs font-medium"
-              style={{ borderColor: "var(--border-default)", color: "var(--text-muted)", background: "var(--surface-1)" }}
-            >
-              Detach
-            </button>
-          </form>
-        ) : null
-      }
-    >
-      <div className="flex flex-wrap items-center gap-3 px-5 py-4">
-        <code
-          className="rounded px-2 py-1 text-sm font-semibold"
-          style={{ background: "var(--surface-2)", color: "var(--text-default)", border: "1px solid var(--border-subtle)" }}
-        >
-          {coupon.code}
-        </code>
-        <span className="text-sm font-semibold" style={{ color: "var(--text-default)" }}>
-          {discountStr}
-        </span>
-        {(expired || inactive) && (
-          <span
-            className="rounded-full px-1.5 py-0.5 text-[10px] font-bold uppercase tracking-wide"
-            style={{ background: "var(--danger-surface)", color: "var(--danger-fg)", border: "1px solid var(--danger-fg)" }}
-          >
-            {expired ? "Expired" : coupon.status}
-          </span>
-        )}
-        <span className="text-xs" style={{ color: "var(--text-muted)" }}>
-          {coupon.redeemedCount} redeemed{coupon.maxRedemptions ? ` / ${coupon.maxRedemptions} cap` : ""}
-        </span>
-        {coupon.validUntil && (
-          <span className="ml-auto text-xs" style={{ color: expired ? "var(--danger-fg)" : "var(--text-muted)" }}>
-            {expired ? "Expired" : "Valid until"} {coupon.validUntil.toISOString().slice(0, 10)}
-          </span>
-        )}
-      </div>
-    </Section>
+    <div className="grid grid-cols-[120px_1fr_40px] items-center gap-2 text-[11px]">
+      <span style={{ color: "var(--text-muted)" }}>{label}</span>
+      <ProgressBar value={value} size="sm" tone={value >= 80 ? "success" : value >= 50 ? "warning" : "danger"} />
+      <span className="text-right font-mono tabular-nums" style={{ color: "var(--text-default)" }}>{value}</span>
+    </div>
   );
 }
 
-function CurrencyPanel({
-  tenant,
-  canWrite,
-}: {
-  tenant: { id: string; currency: string };
-  canWrite: boolean;
-}) {
-  return (
-    <Section
-      title="Billing currency"
-      description="Locks NEW invoices issued from /platform/billing/invoices to this currency. Existing invoices stay on whatever currency they were issued under (locking historical math is a feature, not a bug)."
-    >
-      <form action={updateTenantCurrency.bind(null, tenant.id)} className="flex flex-wrap items-end gap-3 px-5 py-4">
-        <SelectField
-          label="Currency"
-          name="currency"
-          defaultValue={tenant.currency}
-          options={SUPPORTED_CURRENCIES.map((c) => ({ value: c, label: c }))}
-        />
-        <Button type="submit" disabled={!canWrite}>
-          {canWrite ? "Save currency" : "Requires admin role"}
-        </Button>
-      </form>
-    </Section>
-  );
+function humanSize(bytes: number): string {
+  if (bytes < 1024) return `${bytes} B`;
+  if (bytes < 1024 ** 2) return `${(bytes / 1024).toFixed(1)} KB`;
+  if (bytes < 1024 ** 3) return `${(bytes / 1024 ** 2).toFixed(1)} MB`;
+  return `${(bytes / 1024 ** 3).toFixed(2)} GB`;
 }

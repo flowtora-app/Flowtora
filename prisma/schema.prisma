@@ -272,6 +272,13 @@ model Tenant {
   // Page 3 follow-up — referral attribution captured at signup time
   // when the user lands via ?ref=<code>. One-to-one with the tenant.
   referral           Referral?
+  // Page 4a — platform-side CRM notes, viewer log, integrations,
+  // IP allowlist/blocklist, and health-score history.
+  platformNotes      TenantNote[]
+  platformViewedBy   TenantViewedBy[]
+  integrations       TenantIntegration[]
+  ipRules            TenantIpRule[]
+  healthSnapshots    TenantHealthSnapshot[]
   customers          Customer[]
   contacts           Contact[]
   interactions       Interaction[]
@@ -421,6 +428,154 @@ enum TenantSource {
   PAID
   PARTNER
   OTHER
+}
+
+// ────────────────────────────────────────────────────────────
+// Page 4a (Tenant Detail) primitives.
+//
+// TenantNote replaces the legacy free-form `Tenant.notes` string —
+// platform-side CRM notes with author attribution, rich-text body,
+// pinning, and "private to me" flag.
+// TenantViewedBy stamps every page view by platform staff so the
+// right-rail "Recently viewed by team" widget can show last 3
+// admins.
+// TenantIntegration enumerates which third-party integrations a
+// tenant has wired up (Stripe / QuickBooks / Slack / etc.) — feeds
+// the Integrations tab. The list of supported integrations lives in
+// code (src/lib/integrations.ts) but the per-tenant connection rows
+// live here.
+// TenantIpRule supports the Security tab's allowlist / blocklist.
+// TenantHealthSnapshot stores per-day score history so the Health
+// Score tab's 12m trend chart has real data instead of a flat line.
+// ────────────────────────────────────────────────────────────
+
+model TenantNote {
+  id       String @id @default(cuid())
+  tenantId String
+  authorId String
+  /** Rich-text body — HTML, sanitised at write time. */
+  body     String
+  /** Pinned notes appear at the top of the Notes tab. */
+  pinned   Boolean @default(false)
+  /** Private notes are visible only to the author. */
+  isPrivate Boolean @default(false)
+
+  createdAt DateTime @default(now())
+  updatedAt DateTime @updatedAt
+
+  tenant Tenant @relation(fields: [tenantId], references: [id], onDelete: Cascade)
+  author User   @relation("TenantNoteAuthor", fields: [authorId], references: [id], onDelete: Cascade)
+
+  @@index([tenantId, pinned, createdAt])
+  @@index([authorId])
+}
+
+model TenantViewedBy {
+  id       String @id @default(cuid())
+  tenantId String
+  userId   String
+
+  // Most-recent timestamp wins; we upsert on (tenantId, userId).
+  viewedAt DateTime @default(now())
+
+  tenant Tenant @relation(fields: [tenantId], references: [id], onDelete: Cascade)
+  user   User   @relation("TenantViewer", fields: [userId], references: [id], onDelete: Cascade)
+
+  @@unique([tenantId, userId])
+  @@index([tenantId, viewedAt])
+}
+
+model TenantIntegration {
+  id       String @id @default(cuid())
+  tenantId String
+  /** Stable provider key — "stripe" / "quickbooks" / "shopify" /
+   *  "slack" / etc. Mapping to display name + logo lives in code. */
+  provider String
+
+  status        TenantIntegrationStatus @default(CONNECTED)
+  /** Free-form sub-feature scope, e.g. "invoicing" + "payments" for
+   *  Stripe. Helps the Integrations tab show what's wired without
+   *  per-provider branching in the UI. */
+  scope         String?
+  /** Last successful sync timestamp — drives the "Last sync 12m ago"
+   *  chip on the Integrations tab. */
+  lastSyncAt    DateTime?
+  /** Counters for the sync stats display. */
+  recordsSynced Int      @default(0)
+  errorCount    Int      @default(0)
+  lastErrorAt   DateTime?
+  lastError     String?
+
+  /** Provider-specific config blob (account ids, scopes, etc.). */
+  config        Json?
+
+  connectedById String?
+  connectedAt   DateTime @default(now())
+  updatedAt     DateTime @updatedAt
+
+  tenant Tenant @relation(fields: [tenantId], references: [id], onDelete: Cascade)
+
+  @@unique([tenantId, provider])
+  @@index([provider, status])
+}
+
+enum TenantIntegrationStatus {
+  CONNECTED
+  ERRORED
+  PAUSED
+  DISCONNECTED
+}
+
+model TenantIpRule {
+  id       String @id @default(cuid())
+  tenantId String
+  /** ALLOW or BLOCK — the only two semantics. */
+  kind     TenantIpRuleKind
+  /** Single IP or CIDR range — e.g. "192.0.2.0/24" or "192.0.2.7". */
+  cidr     String
+  /** Free-form note shown alongside the rule. */
+  note     String?
+  /** Updated on each rate-limit / firewall hit so the Security tab
+   *  can show "last triggered 3h ago". */
+  lastTriggeredAt DateTime?
+  triggeredCount  Int       @default(0)
+
+  createdById String?
+  createdAt   DateTime @default(now())
+  updatedAt   DateTime @updatedAt
+
+  tenant Tenant @relation(fields: [tenantId], references: [id], onDelete: Cascade)
+
+  @@index([tenantId, kind])
+}
+
+enum TenantIpRuleKind {
+  ALLOW
+  BLOCK
+}
+
+model TenantHealthSnapshot {
+  id       String @id @default(cuid())
+  tenantId String
+
+  // Snapshot time + the resolved overall score.
+  computedAt DateTime @default(now())
+  score      Int
+
+  // Sub-scores stored as JSON: { loginFreq: 80, featureBreadth: 70, ... }
+  // so we can evolve the score model without a schema migration.
+  subscores Json?
+
+  /** What triggered this snapshot — "scheduled" (daily cron),
+   *  "manual" (admin clicked Recompute), "event" (driven by a
+   *  meaningful event like payment_failed). */
+  trigger String @default("scheduled")
+  /** Optional human-readable note attached at compute time. */
+  note    String?
+
+  tenant Tenant @relation(fields: [tenantId], references: [id], onDelete: Cascade)
+
+  @@index([tenantId, computedAt])
 }
 
 enum PaymentTerms {
@@ -666,6 +821,11 @@ model User {
   // of Tenant.accountManager — staff member assigned as the CSM
   // for one or more tenants.
   csmTenants          Tenant[] @relation("TenantAccountManager")
+
+  // Page 4a — platform notes authored by this admin + tenant-detail
+  // page views (for the "Recently viewed by team" rail widget).
+  authoredTenantNotes TenantNote[]     @relation("TenantNoteAuthor")
+  tenantViews         TenantViewedBy[] @relation("TenantViewer")
 }
 
 // Platform-side roles. The first three (SUPER_ADMIN, SITE_MANAGER,
