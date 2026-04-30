@@ -4,6 +4,7 @@ import { db } from "@/lib/db";
 import { logAudit } from "@/lib/audit";
 import { sendNotification } from "@/lib/notifications";
 import type { TokenValues } from "@/lib/notifications";
+import { recordTenantCanceled } from "@/server/billing/subscription-events";
 import type { Plan } from "@prisma/client";
 import type Stripe from "stripe";
 
@@ -235,11 +236,21 @@ export async function POST(req: Request) {
       const sub = event.data.object as Stripe.Subscription;
       const tenant = await db.tenant.findFirst({
         where: { stripeSubscriptionId: sub.id },
-        select: { id: true, slug: true, plan: true, pricingPlanId: true },
+        select: { id: true, slug: true, plan: true, pricingPlanId: true, status: true },
       });
       if (tenant) {
+        const wasPaying = tenant.status === "ACTIVE" || tenant.status === "PAST_DUE";
         await db.tenant.update({ where: { id: tenant.id }, data: { status: "CANCELED" } });
         await logAudit({ tenantId: tenant.id, action: "stripe.subscription.canceled" });
+        if (wasPaying) {
+          await recordTenantCanceled({
+            tenantId: tenant.id,
+            lastPlan: tenant.plan,
+            source: "STRIPE",
+            reason: "stripe.subscription.deleted",
+            metadata: { stripeSubscriptionId: sub.id },
+          });
+        }
         await sendBillingToOwners(tenant.id, "billing.subscription_canceled", {
           plan_name: await resolvePlanNameFromIds(tenant.pricingPlanId, tenant.plan),
           canceled_at: formatDate(new Date()),

@@ -1087,53 +1087,103 @@ export type NrrSnapshot = {
   /** % retained from the cohort that existed 30 days ago.
    *  100 = perfectly retained, >100 = expansion, <100 = contraction. */
   pct: number | null;
-  /** MRR contribution today from tenants that existed 30 days ago. */
-  currentFromCohort: number;
-  /** What the same cohort was worth 30 days ago (using current plan
-   *  prices — a fair approximation since plan prices rarely shift). */
+  /** Per-component breakdown in dollars. NRR = (prior + expansion -
+   *  contraction - churn) / prior × 100. */
   priorFromCohort: number;
+  expansion: number;
+  contraction: number;
+  churn: number;
   /** How many tenants the cohort started with. */
   cohortSize: number;
 };
 
-/** Approximate NRR = (current cohort MRR) / (cohort MRR 30d ago) × 100.
- *  Without a subscription-event log we rely on the cohort's CURRENT
- *  status: ACTIVE/PAST_DUE → still paying current plan, anything else
- *  → contracted to $0. */
+/** Exact NRR from the SubscriptionEvent log.
+ *
+ *  Cohort = tenants whose latest SubscriptionEvent on or before
+ *  (now − 30d) left them with a positive `toPriceMonthly` (i.e. they
+ *  were a paying customer 30 days ago).
+ *
+ *  For each cohort tenant we then sum the signed `mrrDelta` of every
+ *  event from (now − 30d) → now:
+ *    • UPGRADED  → expansion
+ *    • DOWNGRADED → contraction
+ *    • CANCELED  → churn (full -lastPrice subtraction)
+ *    • PRICE_CHANGED → expansion or contraction depending on sign
+ *
+ *  NRR = (prior + expansion − contraction − churn) / prior × 100. */
 export async function loadNrr(): Promise<NrrSnapshot> {
-  const plans = await getAllPlans();
-  const priceByEnum = priceByEnumKey(plans);
   const thirtyDaysAgo = new Date(Date.now() - 30 * DAY);
 
-  const cohort = await db.tenant.findMany({
-    where: {
-      createdAt: { lte: thirtyDaysAgo },
-      // 30 days ago, these tenants were paying. Today they may not be.
-      // We include CANCELED and ARCHIVED specifically because they
-      // *were* contributing to MRR 30 days ago and have since churned —
-      // exactly what NRR should capture as contraction.
-      status: { in: ["ACTIVE", "PAST_DUE", "CANCELED", "ARCHIVED"] },
-    },
-    select: { plan: true, status: true },
+  // Step 1 — for every tenant, find their latest event at or before
+  // 30d ago. That event's `toPriceMonthly` tells us their MRR
+  // contribution at the cohort-start instant.
+  const priorEvents = await db.subscriptionEvent.findMany({
+    where: { occurredAt: { lte: thirtyDaysAgo } },
+    orderBy: { occurredAt: "asc" },
+    select: { tenantId: true, toPriceMonthly: true, type: true },
   });
 
-  if (cohort.length === 0) {
-    return { pct: null, currentFromCohort: 0, priorFromCohort: 0, cohortSize: 0 };
+  // Last-write-wins per tenant.
+  const priorPriceByTenant = new Map<string, number>();
+  for (const e of priorEvents) {
+    if (e.type === "CANCELED") {
+      // Cancellation overrides any prior CREATED — they were $0 at
+      // the cohort-start instant unless they REACTIVATED later.
+      priorPriceByTenant.set(e.tenantId, 0);
+    } else {
+      priorPriceByTenant.set(e.tenantId, Number(e.toPriceMonthly ?? 0));
+    }
   }
 
+  // Step 2 — keep only tenants who were paying then.
+  const cohort = new Set<string>();
   let priorFromCohort = 0;
-  let currentFromCohort = 0;
-  for (const t of cohort) {
-    const price = priceByEnum.get(t.plan)?.price ?? 0;
-    priorFromCohort += price;
-    if (t.status === "ACTIVE" || t.status === "PAST_DUE") {
-      currentFromCohort += price;
+  for (const [tenantId, price] of priorPriceByTenant) {
+    if (price > 0) {
+      cohort.add(tenantId);
+      priorFromCohort += price;
+    }
+  }
+
+  if (cohort.size === 0) {
+    return { pct: null, priorFromCohort: 0, expansion: 0, contraction: 0, churn: 0, cohortSize: 0 };
+  }
+
+  // Step 3 — sum signed deltas over the 30-day window for cohort
+  // tenants only. Splits the deltas by event type so we can show
+  // expansion / contraction / churn separately.
+  const windowEvents = await db.subscriptionEvent.findMany({
+    where: {
+      tenantId: { in: Array.from(cohort) },
+      occurredAt: { gt: thirtyDaysAgo },
+    },
+    select: { type: true, mrrDelta: true },
+  });
+
+  let expansion = 0;
+  let contraction = 0;
+  let churn = 0;
+  for (const e of windowEvents) {
+    const delta = Number(e.mrrDelta);
+    if (e.type === "CANCELED") {
+      churn += -delta; // delta is negative on cancel; churn is the magnitude
+    } else if (delta > 0) {
+      expansion += delta;
+    } else if (delta < 0) {
+      contraction += -delta;
     }
   }
 
   const pct = priorFromCohort === 0
     ? null
-    : Math.round((currentFromCohort / priorFromCohort) * 1000) / 10;
+    : Math.round(((priorFromCohort + expansion - contraction - churn) / priorFromCohort) * 1000) / 10;
 
-  return { pct, currentFromCohort, priorFromCohort, cohortSize: cohort.length };
+  return {
+    pct,
+    priorFromCohort,
+    expansion,
+    contraction,
+    churn,
+    cohortSize: cohort.size,
+  };
 }

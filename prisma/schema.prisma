@@ -247,6 +247,7 @@ model Tenant {
   memberships        Membership[]
   invites            Invite[]
   auditLogs          AuditLog[]
+  subscriptionEvents SubscriptionEvent[]
   customers          Customer[]
   contacts           Contact[]
   interactions       Interaction[]
@@ -4923,4 +4924,81 @@ model CustomPlatformRole {
   members User[]
 
   @@index([status])
+}
+
+// ────────────────────────────────────────────────────────────
+// Subscription event log — exact MRR-movement source of truth.
+//
+// Every meaningful subscription change writes one row here:
+//   • CREATED        — tenant signs up on a plan  (mrrDelta = +newPrice)
+//   • UPGRADED       — moves to a higher-priced plan (mrrDelta > 0)
+//   • DOWNGRADED     — moves to a lower-priced plan  (mrrDelta < 0)
+//   • CANCELED       — tenant churns                  (mrrDelta = -oldPrice)
+//   • REACTIVATED    — comes back from CANCELED       (mrrDelta = +newPrice)
+//   • PRICE_CHANGED  — pricing-plan price catalog edit (mrrDelta = priceDiff)
+//
+// `mrrDelta` is the signed monthly impact in dollars; sum it across a
+// time window and you have exact MRR movement. NRR, churn dollar
+// amounts, plan-migration sankey, etc. all read from here instead of
+// reconstructing from the current Tenant.plan.
+// ────────────────────────────────────────────────────────────
+
+model SubscriptionEvent {
+  id       String                @id @default(cuid())
+  tenantId String
+  type     SubscriptionEventType
+
+  // Plan snapshot. Both nullable because CREATED has no `from` plan
+  // and CANCELED has no `to` plan. Storing the enum AND the price at
+  // the moment of the event means historical NRR doesn't shift if we
+  // re-price the catalog later.
+  fromPlan         Plan?
+  toPlan           Plan?
+  fromPriceMonthly Decimal? @db.Decimal(10, 2)
+  toPriceMonthly   Decimal? @db.Decimal(10, 2)
+
+  // Signed monthly recurring impact in dollars. Always equals
+  // (toPriceMonthly ?? 0) - (fromPriceMonthly ?? 0). Stored explicitly
+  // so MRR-movement reports can `SUM(mrrDelta)` without re-deriving
+  // it from the snapshot fields.
+  mrrDelta Decimal @db.Decimal(12, 2)
+
+  // Where the change came from. STRIPE = webhook-driven from the
+  // billing provider; MANUAL = platform staff edited the plan;
+  // SYSTEM = automated (dunning auto-suspend, archive, etc.);
+  // BACKFILL = retro-inserted by the one-time backfill script.
+  source   SubscriptionEventSource @default(SYSTEM)
+
+  // Optional context.
+  actorUserId String?
+  reason      String?
+  metadata    Json?
+
+  occurredAt DateTime @default(now())
+  createdAt  DateTime @default(now())
+
+  tenant Tenant @relation(fields: [tenantId], references: [id], onDelete: Cascade)
+
+  // Range queries by tenant + a "what's the MRR change in this
+  // window?" report both hit (tenantId, occurredAt). The single-
+  // column index covers global "MRR movement" reports.
+  @@index([tenantId, occurredAt])
+  @@index([occurredAt])
+  @@index([type])
+}
+
+enum SubscriptionEventType {
+  CREATED
+  UPGRADED
+  DOWNGRADED
+  CANCELED
+  REACTIVATED
+  PRICE_CHANGED
+}
+
+enum SubscriptionEventSource {
+  STRIPE
+  MANUAL
+  SYSTEM
+  BACKFILL
 }

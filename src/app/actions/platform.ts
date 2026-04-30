@@ -39,6 +39,10 @@ import {
   clearSampleDataForTenant,
   loadSampleDataForTenant,
 } from "@/app/actions/sample-data";
+import {
+  recordTenantPlanChanged,
+  recordTenantCanceled,
+} from "@/server/billing/subscription-events";
 
 const TENANT_STATUSES = ["TRIAL", "ACTIVE", "PAST_DUE", "SUSPENDED", "CANCELED", "ARCHIVED"] as const;
 const PLANS = ["STARTER", "GROWTH", "PRO", "ENTERPRISE"] as const;
@@ -136,6 +140,15 @@ export async function updateTenantPlan(tenantId: string, formData: FormData) {
   }
 
   await db.tenant.update({ where: { id: tenantId }, data: { plan: nextPlan } });
+
+  await recordTenantPlanChanged({
+    tenantId,
+    fromPlan: tenant.plan,
+    toPlan: nextPlan,
+    source: "MANUAL",
+    actorUserId: ctx.userId,
+    metadata: { actorEmail: ctx.email },
+  });
 
   await logPlatformAudit({
     userId: ctx.userId,
@@ -609,7 +622,7 @@ export async function archiveTenant(tenantId: string, formData: FormData) {
 
   const tenant = await db.tenant.findUnique({
     where: { id: tenantId },
-    select: { id: true, status: true, archivedAt: true, name: true },
+    select: { id: true, status: true, archivedAt: true, name: true, plan: true },
   });
   if (!tenant) {
     redirect(`/platform/tenants?error=${encodeURIComponent("Tenant not found")}`);
@@ -640,6 +653,19 @@ export async function archiveTenant(tenantId: string, formData: FormData) {
       suspensionReason: null,
     },
   });
+
+  // Only emit a CANCELED event if the tenant was actually paying. A
+  // TRIAL → ARCHIVED transition has no MRR to subtract.
+  if (tenant.status === "ACTIVE" || tenant.status === "PAST_DUE") {
+    await recordTenantCanceled({
+      tenantId,
+      lastPlan: tenant.plan,
+      source: "MANUAL",
+      actorUserId: ctx.userId,
+      reason: reason ?? reasonCode ?? null,
+      metadata: { actorEmail: ctx.email, graceDays, reasonCode },
+    });
+  }
 
   await logPlatformAudit({
     userId: ctx.userId,
@@ -970,6 +996,13 @@ export async function bulkUpdateTenants(formData: FormData) {
 
   if (parsed.data.action === "ARCHIVE") {
     const scheduledDeletionAt = new Date(Date.now() + DEFAULT_ARCHIVE_GRACE_DAYS * 24 * 60 * 60 * 1000);
+    // Snapshot the tenants we're about to archive so we can emit
+    // CANCELED events with the right `lastPlan`. We need this BEFORE
+    // updateMany flips them all.
+    const snapshots = await db.tenant.findMany({
+      where: { id: { in: ids }, status: { not: "ARCHIVED" } },
+      select: { id: true, status: true, plan: true },
+    });
     const updated = await db.tenant.updateMany({
       where: { id: { in: ids }, status: { not: "ARCHIVED" } },
       data: {
@@ -980,6 +1013,19 @@ export async function bulkUpdateTenants(formData: FormData) {
         scheduledDeletionAt,
       },
     });
+    // Emit one CANCELED event per tenant that was actually paying.
+    for (const snap of snapshots) {
+      if (snap.status === "ACTIVE" || snap.status === "PAST_DUE") {
+        await recordTenantCanceled({
+          tenantId: snap.id,
+          lastPlan: snap.plan,
+          source: "MANUAL",
+          actorUserId: ctx.userId,
+          reason: "ADMIN_DECISION",
+          metadata: { actorEmail: ctx.email, bulk: true },
+        });
+      }
+    }
     await logPlatformAudit({
       userId:     ctx.userId,
       tenantId:   null,

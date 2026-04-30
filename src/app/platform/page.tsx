@@ -301,11 +301,11 @@ async function KpiSecondary({ range }: { range: ResolvedRange }) {
         label="Net revenue retention"
         value={nrr.pct == null ? "—" : `${nrr.pct}%`}
         sub={nrr.cohortSize > 0
-          ? `Cohort of ${nrr.cohortSize} from 30d ago`
+          ? `${nrr.cohortSize} tenants · +$${Math.round(nrr.expansion).toLocaleString()} / −$${Math.round(nrr.contraction + nrr.churn).toLocaleString()}`
           : "No cohort to measure yet"}
         tone={nrr.pct == null ? "default" : nrr.pct >= 100 ? "success" : nrr.pct >= 90 ? "warning" : "danger"}
         href="/platform/billing/analytics"
-        hint="Approximate NRR — cohort MRR today ÷ same cohort 30 days ago × 100. >100% means net expansion."
+        hint="Exact NRR from the SubscriptionEvent log: (prior + expansion − contraction − churn) ÷ prior × 100, computed across the cohort that was paying 30 days ago. >100% means net expansion."
       />
     </div>
   );

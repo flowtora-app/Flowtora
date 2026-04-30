@@ -16,6 +16,7 @@ import {
 } from "@/lib/security";
 import { sendNotification } from "@/lib/notifications";
 import { getPublishedPlanBySlug } from "@/lib/plans";
+import { recordTenantCreated } from "@/server/billing/subscription-events";
 import { LOGIN_ERRORS } from "@/auth";
 
 const PENDING_2FA_COOKIE = "ts_2fa_pending";
@@ -87,6 +88,19 @@ export async function signupAction(formData: FormData) {
     action: "tenant.created",
     entityType: "Tenant",
     entityId: tenant.id,
+  });
+
+  // Phase 1 follow-up — log the subscription event so MRR-movement
+  // reports and exact NRR have a CREATED row at signup. Trial signups
+  // record mrrDelta = 0 so they don't inflate MRR until trial → paid.
+  await recordTenantCreated({
+    tenantId: tenant.id,
+    plan: tenant.plan,
+    isTrial: tenant.status === "TRIAL",
+    source: "SYSTEM",
+    actorUserId: user.id,
+    metadata: { signupSource: "self_serve" },
+    occurredAt: tenant.createdAt,
   });
 
   // Phase 2 — fire off the initial email-verification token. Failures
