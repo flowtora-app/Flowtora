@@ -1,10 +1,12 @@
 // GET /api/platform/tenants/export?format=csv|json|xlsx
 //
 // Streams the current filtered tenants list as a downloadable file.
-// xlsx is currently delivered as CSV with an .xlsx-friendly content
-// type so Excel opens it directly — a future slice can swap in a
-// real xlsx writer (xlsx / exceljs) for multi-sheet output.
+// xlsx uses SheetJS to author a real multi-sheet workbook (Tenants
+// + per-tenant Users sub-sheet) — opens directly in Excel / Sheets /
+// Numbers without the "is this really xlsx?" warning.
 
+import * as XLSX from "xlsx";
+import { db } from "@/lib/db";
 import { requirePlatformStaff, logPlatformAudit } from "@/lib/platform";
 import {
   loadTenantsList,
@@ -74,6 +76,86 @@ export async function GET(req: Request) {
     });
   }
 
+  if (format === "xlsx") {
+    // Build a real multi-sheet workbook: Tenants + Users + Schedule of
+    // exports for traceability. Pull all members for the included
+    // tenants in one query so the Users sheet is real.
+    const tenantIds = rows.map((r) => r.id);
+    const memberships = tenantIds.length === 0 ? [] : await db.membership.findMany({
+      where: { tenantId: { in: tenantIds } },
+      select: {
+        role: true, status: true, createdAt: true,
+        tenant: { select: { id: true, name: true, slug: true } },
+        user: { select: { email: true, name: true, lastLoginAt: true } },
+      },
+    });
+
+    const wb = XLSX.utils.book_new();
+
+    const tenantsAoA = [
+      [
+        "id", "name", "slug", "plan", "status", "country", "industry",
+        "MRR", "users", "jobs (this month)", "health",
+        "created", "last activity", "trial ends",
+        "owner email", "tags", "account manager", "custom domain",
+        "SSO", "MFA", "source", "stripe customer", "storage bytes", "past-due $",
+      ],
+      ...rows.map((r) => [
+        r.id, r.name, r.slug, r.planName, r.status,
+        r.countryName ?? r.country ?? "",
+        r.industry ?? "",
+        r.mrr, r.users, r.jobsThisMonth, r.healthScore,
+        r.createdAt.toISOString(),
+        r.lastActivityAt?.toISOString() ?? "",
+        r.trialEndsAt?.toISOString() ?? "",
+        r.ownerEmail ?? "",
+        r.adminTags.join(" "),
+        r.accountManager?.email ?? "",
+        r.customDomain ?? "",
+        r.ssoEnabled ? (r.ssoProvider ?? "yes") : "no",
+        r.mfaEnforced ? "enforced" : "no",
+        r.signupSource,
+        r.stripeCustomerId ?? "",
+        r.storageBytes,
+        r.pastDueDollars,
+      ]),
+    ];
+    const wsTenants = XLSX.utils.aoa_to_sheet(tenantsAoA);
+    XLSX.utils.book_append_sheet(wb, wsTenants, "Tenants");
+
+    const usersAoA = [
+      ["tenant id", "tenant name", "tenant slug", "user email", "user name", "role", "status", "joined", "last login"],
+      ...memberships.map((m) => [
+        m.tenant.id, m.tenant.name, m.tenant.slug,
+        m.user.email, m.user.name ?? "",
+        m.role, m.status,
+        m.createdAt.toISOString(),
+        m.user.lastLoginAt?.toISOString() ?? "",
+      ]),
+    ];
+    const wsUsers = XLSX.utils.aoa_to_sheet(usersAoA);
+    XLSX.utils.book_append_sheet(wb, wsUsers, "Users");
+
+    const metaAoA = [
+      ["Exported by", ctx.email],
+      ["Exported at", new Date().toISOString()],
+      ["Tenant rows", rows.length],
+      ["Member rows", memberships.length],
+      ["Filter querystring", url.search.replace(/^\?/, "")],
+    ];
+    const wsMeta = XLSX.utils.aoa_to_sheet(metaAoA);
+    XLSX.utils.book_append_sheet(wb, wsMeta, "Export meta");
+
+    const buf = XLSX.write(wb, { type: "buffer", bookType: "xlsx" }) as Buffer;
+    return new Response(new Uint8Array(buf), {
+      status: 200,
+      headers: {
+        "Content-Type": "application/vnd.openxmlformats-officedocument.spreadsheetml.sheet",
+        "Content-Disposition": `attachment; filename="${baseFilename}.xlsx"`,
+      },
+    });
+  }
+
   const cols = [
     "id", "name", "slug", "plan", "status", "country", "industry",
     "mrr", "users", "jobsThisMonth", "healthScore",
@@ -112,20 +194,11 @@ export async function GET(req: Request) {
     ].join(",")),
   ].join("\n");
 
-  // Excel opens .csv files directly as spreadsheets — for the spec's
-  // "xlsx" option we serve the same body with a .xlsx extension and
-  // Excel-friendly content type so the download flow matches user
-  // expectations. Native xlsx authoring is a future slice.
-  const ext = format === "xlsx" ? "xlsx" : "csv";
-  const contentType = format === "xlsx"
-    ? "application/vnd.ms-excel"
-    : "text/csv; charset=utf-8";
-
   return new Response(csv, {
     status: 200,
     headers: {
-      "Content-Type": contentType,
-      "Content-Disposition": `attachment; filename="${baseFilename}.${ext}"`,
+      "Content-Type": "text/csv; charset=utf-8",
+      "Content-Disposition": `attachment; filename="${baseFilename}.csv"`,
     },
   });
 }

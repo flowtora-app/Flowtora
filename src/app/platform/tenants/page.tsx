@@ -23,6 +23,7 @@ import {
 import { TenantsTable } from "./_components/TenantsTable";
 import { TenantsFilterBar } from "./_components/TenantsFilterBar";
 import { TenantsSavedViews } from "./_components/TenantsSavedViews";
+import { NewTenantsPill } from "./_components/NewTenantsPill";
 
 export const dynamic = "force-dynamic";
 
@@ -164,16 +165,21 @@ export default async function PlatformTenantsPage({
             description="All sign & print shop accounts on Flowtora."
             actions={
               <>
-                {ctx.can("tenant.read") && (
-                  <Link href="/platform/tenants?action=new">
+                {ctx.can("staff.invite") && (
+                  <Link href="/platform/tenants/new">
                     <Button size="sm">+ New tenant</Button>
                   </Link>
                 )}
-                <Button size="sm" variant="secondary" disabled title="Manual provisioning wizard reserved for a future slice">
-                  Import CSV
-                </Button>
+                {ctx.can("staff.invite") && (
+                  <Link href="/platform/tenants/import">
+                    <Button size="sm" variant="secondary">Import CSV</Button>
+                  </Link>
+                )}
                 <Link href={`/api/platform/tenants/export?${filterQs}&format=csv`}>
                   <Button size="sm" variant="secondary">Export CSV</Button>
+                </Link>
+                <Link href={`/api/platform/tenants/export?${filterQs}&format=xlsx`}>
+                  <Button size="sm" variant="ghost">Export XLSX</Button>
                 </Link>
                 <Link href={`/api/platform/tenants/export?${filterQs}&format=json`}>
                   <Button size="sm" variant="ghost">Export JSON</Button>
@@ -207,7 +213,7 @@ export default async function PlatformTenantsPage({
                  tone={kpi.pastDueCount > 0 ? "warning" : "default"} />
       </div>
 
-      {/* Tabs */}
+      {/* Tabs + saved views + live "X new tenants" pill */}
       <div className="flex flex-wrap items-center gap-2">
         <div className="flex-1">
           <Tabs
@@ -220,6 +226,7 @@ export default async function PlatformTenantsPage({
             }))}
           />
         </div>
+        <NewTenantsPill initialMostRecentIso={list.rows[0]?.createdAt?.toISOString() ?? new Date().toISOString()} />
         <TenantsSavedViews views={savedViews.map((v) => ({
           id: v.id,
           name: v.name,
