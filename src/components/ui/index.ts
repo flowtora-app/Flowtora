@@ -162,6 +162,24 @@ export type { MarkdownPreviewProps } from "./MarkdownPreview";
 export { ImageLightbox } from "./ImageLightbox";
 export type { ImageLightboxProps, LightboxImage } from "./ImageLightbox";
 
+export { AuditLogRow } from "./AuditLogRow";
+export type { AuditLogRowProps } from "./AuditLogRow";
+
+export { WebhookEventRow } from "./WebhookEventRow";
+export type { WebhookEventRowProps } from "./WebhookEventRow";
+
+export { ActivityFeedItem } from "./ActivityFeedItem";
+export type { ActivityFeedItemProps } from "./ActivityFeedItem";
+
+export { CommentThread } from "./CommentThread";
+export type { CommentThreadProps, Comment as CommentItem } from "./CommentThread";
+
+export { VerticalTimeline, HorizontalTimeline } from "./Timeline";
+export type { VerticalTimelineProps, HorizontalTimelineProps, TimelineEntry, GanttBar } from "./Timeline";
+
+export { DiffIndicator, PullQuote } from "./DiffIndicator";
+export type { DiffIndicatorProps, PullQuoteProps, ChangeKind } from "./DiffIndicator";
+
 export { ToastProvider, useToast } from "./Toast";
 export type { ToastOptions } from "./Toast";
 
