@@ -604,6 +604,12 @@ model User {
 
   // Phase 1 follow-up — custom platform roles authored by this admin.
   customPlatformRolesCreated CustomPlatformRole[] @relation("CustomRoleCreator")
+
+  // Page 2 — Activity Feed: per-staff saved filters + email/Slack
+  // subscriptions. Cascade-delete so cleaning up a user nukes their
+  // private views and any digest schedules they own.
+  platformSavedViews     PlatformSavedView[]
+  activitySubscriptions  ActivitySubscription[]
 }
 
 // Platform-side roles. The first three (SUPER_ADMIN, SITE_MANAGER,
@@ -5001,4 +5007,98 @@ enum SubscriptionEventSource {
   MANUAL
   SYSTEM
   BACKFILL
+}
+
+// ────────────────────────────────────────────────────────────
+// Page 2 — Activity Feed primitives.
+//
+// Two small models support the activity-feed page at /platform/activity:
+//
+//   • PlatformSavedView — a stored filter querystring per staff
+//     member. Owns its own table (separate from the existing
+//     tenant-scoped `SavedView`) so the staff side can share-with-team
+//     without colliding with tenant-side views.
+//
+//   • ActivitySubscription — a saved filter that fires email digests
+//     of matching events on a schedule. Slack delivery is planned but
+//     not wired (no Slack OAuth integration yet); kept on the enum so
+//     the UI can reflect future support.
+// ────────────────────────────────────────────────────────────
+
+model PlatformSavedView {
+  id     String @id @default(cuid())
+  userId String
+
+  // Right now the only kind of saved view we use platform-side is
+  // "activity" (the activity feed). Kept as an open string so future
+  // pages (audit, payments, tenants list) can reuse the same table
+  // without a migration.
+  kind   String  @default("activity")
+  name   String
+  // Raw querystring, exactly the form pasted onto the page URL.
+  // Round-trip preserves multi-select + date-range state without
+  // demanding a structured schema for every filter we add.
+  filters    String
+  // When true, all platform staff see this view in their dropdown.
+  isShared   Boolean @default(false)
+  sortOrder  Int     @default(0)
+
+  createdAt DateTime @default(now())
+  updatedAt DateTime @updatedAt
+
+  user User @relation(fields: [userId], references: [id], onDelete: Cascade)
+
+  @@index([userId, kind, sortOrder])
+  @@index([kind, isShared])
+}
+
+model ActivitySubscription {
+  id     String @id @default(cuid())
+  userId String
+
+  // Display name shown in the Active subscriptions panel + email
+  // subject. e.g. "Big payments daily" or "Suspicious logins".
+  name      String
+  // Filter querystring snapshot at create time. The cron job uses
+  // this to find matching events at delivery time.
+  filters   String
+  // Currently EMAIL only — Slack is reserved for a later slice once
+  // we wire OAuth. Listed in the enum so the create modal can show
+  // a disabled "Slack (coming soon)" option.
+  channel   ActivitySubscriptionChannel @default(EMAIL)
+  // For EMAIL: where to send. Defaults to the creator's email but
+  // can be overridden so a finance subscription can go to a shared
+  // alias (billing@flowtora.com).
+  email     String
+  frequency ActivitySubscriptionFrequency @default(HOURLY)
+
+  // Cron-coordination state. `lastDeliveredAt` so the digest only
+  // includes events created since the previous delivery. `pausedAt`
+  // so a user can pause without deleting.
+  lastDeliveredAt DateTime?
+  pausedAt        DateTime?
+
+  createdAt DateTime @default(now())
+  updatedAt DateTime @updatedAt
+
+  user User @relation(fields: [userId], references: [id], onDelete: Cascade)
+
+  @@index([userId])
+  @@index([pausedAt, lastDeliveredAt])
+}
+
+enum ActivitySubscriptionChannel {
+  EMAIL
+  // Reserved for a future slice — needs Slack OAuth + a per-user
+  // workspace token. Kept here so the UI can render it disabled.
+  SLACK
+}
+
+enum ActivitySubscriptionFrequency {
+  // Live = "as-it-happens", debounced by the cron's poll interval
+  // (currently 5 minutes — anything more frequent overlaps the next
+  // run and risks duplicate delivery).
+  LIVE
+  HOURLY
+  DAILY
 }

@@ -34,6 +34,7 @@ type NavItem = {
 // Single flat list — the user gave us this order, we keep it.
 const NAV_ITEMS: NavItem[] = [
   { href: "/platform",                  label: "Dashboard",         icon: "Dashboard", exact: true },
+  { href: "/platform/activity",         label: "Activity",          icon: "Activity" },
   { href: "/platform/tenants",          label: "Tenants",           icon: "Building" },
   { href: "/platform/billing",          label: "Billing & Revenue", icon: "Revenue" },
   { href: "/platform/users",            label: "Users",             icon: "Customers" },

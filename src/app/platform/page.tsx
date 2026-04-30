@@ -442,7 +442,7 @@ async function RiskAndActivity() {
           <CardHeader
             title="Recent activity"
             description="Last 12 platform events"
-            right={<Link href="/platform/audit" className="text-[12px] font-medium" style={{ color: "var(--accent-primary)" }}>Open feed →</Link>}
+            right={<Link href="/platform/activity" className="text-[12px] font-medium" style={{ color: "var(--accent-primary)" }}>Open feed →</Link>}
           />
         </div>
         <ActivityList items={activity} />
