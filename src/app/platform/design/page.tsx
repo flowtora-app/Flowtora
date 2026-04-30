@@ -34,14 +34,49 @@ import {
 import { DialogTrigger } from "./DialogTrigger";
 import {
   BannerDemos,
+  ColorPickerDemos,
+  ComboboxDemos,
+  CommandPaletteDemo,
   ConfirmTriggers,
+  DatePickerDemos,
   DrawerTriggers,
+  FileUploadDemos,
   FilterBarDemo,
+  ImageLightboxDemo,
+  MentionInputDemo,
+  NotificationCenterDemo,
+  OtpDemos,
   PaginationDemos,
   PillFilterChipsDemos,
+  RichTextToolbarDemo,
+  ScheduleCalendarDemo,
   SearchWithSuggestionsDemo,
+  TagsInputDemos,
+  TenantSwitcherDemo,
+  TimePickerDemo,
   ToastTriggers,
+  UserMenuDemo,
 } from "./ShowcaseTriggers";
+import {
+  ActivityFeedItem,
+  AuditLogRow,
+  CommentThread,
+  DiffIndicator,
+  DiffViewer,
+  HorizontalTimeline,
+  JsonViewer,
+  MarkdownPreview,
+  PullQuote,
+  Table,
+  VerticalTimeline,
+  WebhookEventRow,
+  AreaChartCard,
+  BarChartCard,
+  DonutChartCard,
+  GaugeChart,
+  LineChartCard,
+  type ColumnDef,
+} from "@/components/ui";
 
 // /platform/design — design system showcase.
 //
@@ -662,6 +697,198 @@ export default async function DesignSystemPage() {
         >
           <ToastTriggers />
         </Section>
+
+        {/* ── Slice 5 — Specialized inputs ───────────────────── */}
+
+        <Section
+          title="Combobox · MultiCombobox"
+          description="Spec §0.5.5 — searchable single/multi select with keyboard nav, async load (250ms debounce), Recent section, Create CTA."
+        >
+          <ComboboxDemos />
+        </Section>
+
+        <Section
+          title="Date pickers"
+          description="Spec §0.5.6 — single date, optional time picker, two-month range with preset sidebar."
+        >
+          <DatePickerDemos />
+        </Section>
+
+        <Section
+          title="Time picker"
+          description="Spec §0.5.7 — 12h / 24h spinners, AM/PM toggle, configurable minute step."
+        >
+          <TimePickerDemo />
+        </Section>
+
+        <Section
+          title="File upload"
+          description="Spec §0.5.8 — drop / button / avatar / gallery variants. Idle / uploading / success / error states."
+        >
+          <FileUploadDemos />
+        </Section>
+
+        <Section
+          title="Tags input"
+          description="Spec §0.5.11 — comma/Enter to commit, paste-multi, per-tag validator with red ring, suggestions dropdown."
+        >
+          <TagsInputDemos />
+        </Section>
+
+        <Section
+          title="OTP input"
+          description="Spec §0.5.12 — 6 boxes, auto-advance, paste-spread, error/success states."
+        >
+          <OtpDemos />
+        </Section>
+
+        <Section
+          title="Color picker"
+          description="Spec §0.5.13 — swatch + hex input, SV pad, hue slider, RGB readout, recent row, browser EyeDropper."
+        >
+          <ColorPickerDemos />
+        </Section>
+
+        {/* ── Slice 6 — Tables & charts ─────────────────────── */}
+
+        <Section
+          title="Table"
+          description="Spec §0.5.20 — sticky header, sortable columns, selectable rows with bulk bar, expandable rows, sticky-left, density, striped variant."
+        >
+          <TableDemo />
+        </Section>
+
+        <Section
+          title="Schedule calendar"
+          description="Spec §0.5.39 — month / week / day views with event chips and today indicator. Optional Upcoming agenda."
+        >
+          <ScheduleCalendarDemo />
+        </Section>
+
+        <Section
+          title="Charts"
+          description="Spec §0.5.40 — Line / Area / Bar / Donut / Gauge wrappers around Recharts with the spec's tooltip + axis + legend defaults baked in."
+        >
+          <ChartsDemo />
+        </Section>
+
+        {/* ── Slice 7 — Menus & overlays cont. ──────────────── */}
+
+        <Section
+          title="Notification center"
+          description="Spec §0.5.46 — slide-over right with All / Unread / Mentions tabs, date-grouped items, mark-read + dismiss actions."
+        >
+          <NotificationCenterDemo />
+        </Section>
+
+        <Section
+          title="User menu"
+          description="Spec §0.5.47 — avatar trigger, identity header, item sections with dividers, submenu support, kbd shortcuts, destructive items."
+        >
+          <UserMenuDemo />
+        </Section>
+
+        <Section
+          title="Tenant switcher"
+          description="Spec §0.5.48 — searchable list with Recent + All sections, current tenant indicator, Create-new footer link."
+        >
+          <TenantSwitcherDemo />
+        </Section>
+
+        <Section
+          title="Command palette"
+          description="Spec §0.5.42 — ⌘K / Ctrl+K to open. Recent + Actions when empty; async results grouped by category. ↑↓ to navigate, ↵ to pick."
+        >
+          <CommandPaletteDemo />
+        </Section>
+
+        {/* ── Slice 8 — Rich content ────────────────────────── */}
+
+        <Section
+          title="JSON viewer"
+          description="Spec §0.5.61 — collapsible nested keys, line numbers, search, copy-path / copy-value. Brand-coloured types."
+        >
+          <JsonViewerDemo />
+        </Section>
+
+        <Section
+          title="Diff viewer"
+          description="Spec §0.5.38 — line-level LCS, unified + split variants, hunk collapse, +/− markers."
+        >
+          <DiffViewerDemo />
+        </Section>
+
+        <Section
+          title="Mention input"
+          description="Spec §0.5.55 — @ for mentions, # for tags, / for commands. Caller drives per-trigger search."
+        >
+          <MentionInputDemo />
+        </Section>
+
+        <Section
+          title="Rich-text toolbar"
+          description="Spec §0.5.56 — text style / heading / list / block / insert groups. Caller wires the editor body."
+        >
+          <RichTextToolbarDemo />
+        </Section>
+
+        <Section
+          title="Markdown preview"
+          description="Spec §0.5.57 — in-house parser (no remark/react-markdown dep). Headings, lists, code, links, quotes, images, HR, inline formatting."
+        >
+          <MarkdownPreviewDemo />
+        </Section>
+
+        <Section
+          title="Image lightbox"
+          description="Spec §0.5.58 — full-screen overlay with zoom (+/−), rotate (R), fit/actual (F), download, copy link, ← → keyboard nav."
+        >
+          <ImageLightboxDemo />
+        </Section>
+
+        {/* ── Slice 9 — Specialized rows ────────────────────── */}
+
+        <Section
+          title="Audit-log row"
+          description="Spec §0.5.59 — timestamp + actor + verb badge + resource + status dot + IP + tenant chip + 3-dot."
+        >
+          <AuditLogRowDemo />
+        </Section>
+
+        <Section
+          title="Webhook event row"
+          description="Spec §0.5.60 — timestamp + event type + status pill + attempts + destination + response time + replay/payload actions."
+        >
+          <WebhookEventRowDemo />
+        </Section>
+
+        <Section
+          title="Activity feed item"
+          description="Spec §0.5.53 — actor avatar + verb-led summary + target + timestamp + meta chips + expand-for-detail."
+        >
+          <ActivityFeedDemo />
+        </Section>
+
+        <Section
+          title="Comment thread"
+          description="Spec §0.5.54 — avatar + author + role + timestamp + body + reactions + reply. Indent for nested replies."
+        >
+          <CommentThreadDemo />
+        </Section>
+
+        <Section
+          title="Timeline"
+          description="Spec §0.5.52 — vertical (left rail with dots, expandable detail) and horizontal (Gantt-style for incidents/rollouts)."
+        >
+          <TimelineDemos />
+        </Section>
+
+        <Section
+          title="Diff indicator · Pull quote"
+          description="Spec §0.5.50, §0.5.51 — inline +/− with old↔new tooltip, plus brand-bar pull quote for announcements."
+        >
+          <DiffPullQuoteDemos />
+        </Section>
       </div>
     </ToastProvider>
   );
@@ -829,6 +1056,446 @@ function TypeRow({
       >
         {sample}
       </span>
+    </div>
+  );
+}
+
+/* ───── Static demo helpers (server-rendered) ──────────────── */
+
+interface TenantRow {
+  id: string;
+  name: string;
+  slug: string;
+  plan: string;
+  health: "Healthy" | "Watch" | "Unhealthy";
+  mrr: number;
+  orders: number;
+  signedUp: string;
+}
+
+const SAMPLE_TENANTS: TenantRow[] = [
+  { id: "t1", name: "ACME Signs Co.",     slug: "acme-signs", plan: "Pro",        health: "Healthy",   mrr: 2_499, orders:  47, signedUp: "2024-11-02" },
+  { id: "t2", name: "Apex Print Co.",     slug: "apex-print", plan: "Growth",     health: "Watch",     mrr:   899, orders:  12, signedUp: "2025-02-14" },
+  { id: "t3", name: "Northwind Studio",   slug: "northwind",  plan: "Starter",    health: "Unhealthy", mrr:   149, orders:   3, signedUp: "2025-08-20" },
+  { id: "t4", name: "Lakeside Banner",    slug: "lakeside",   plan: "Trial",      health: "Watch",     mrr:     0, orders:   0, signedUp: "2026-04-12" },
+  { id: "t5", name: "Halcyon Press Ltd.", slug: "halcyon",    plan: "Pro",        health: "Healthy",   mrr: 3_199, orders:  89, signedUp: "2024-06-30" },
+  { id: "t6", name: "Beacon Imaging",     slug: "beacon",     plan: "Enterprise", health: "Healthy",   mrr: 9_400, orders: 211, signedUp: "2023-04-09" },
+];
+
+function TableDemo() {
+  const columns: ColumnDef<TenantRow>[] = [
+    { key: "name",     header: "Tenant",    cell: (r) => (
+      <div className="min-w-0">
+        <div className="truncate font-medium" style={{ color: "var(--text-default)" }}>{r.name}</div>
+        <div className="truncate font-mono text-[10px]" style={{ color: "var(--text-faint)" }}>{r.slug}</div>
+      </div>
+    ), sortable: true, sticky: "left", width: 220 },
+    { key: "plan",     header: "Plan",      cell: (r) => r.plan, sortable: true, width: 120 },
+    { key: "health",   header: "Health",    cell: (r) => (
+      <span style={{
+        color: r.health === "Healthy" ? "var(--emerald-700)" : r.health === "Watch" ? "var(--amber-700)" : "var(--rose-700)",
+      }}>● {r.health}</span>
+    ), sortable: true, width: 120 },
+    { key: "mrr",      header: "MRR",       cell: (r) => "$" + r.mrr.toLocaleString(), kind: "money", sortable: true, width: 100 },
+    { key: "orders",   header: "Orders",    cell: (r) => r.orders, kind: "number", sortable: true, width: 90 },
+    { key: "signedUp", header: "Signed up", cell: (r) => r.signedUp, kind: "date", sortable: true, width: 130 },
+  ];
+  return (
+    <div className="space-y-3">
+      <Table<TenantRow>
+        rows={SAMPLE_TENANTS}
+        columns={columns}
+        sort={{ key: "mrr", dir: "desc" }}
+        density="comfortable"
+      />
+      <div className="text-[11px]" style={{ color: "var(--text-faint)" }}>
+        Static demo — header sort indicators show but click-to-sort is wired in real pages via state.
+      </div>
+    </div>
+  );
+}
+
+/* ── Charts demo ─────────────────────────────────────────── */
+
+const TIME_SERIES = [
+  { day: "Mon", signups: 18, churn: 3 },
+  { day: "Tue", signups: 22, churn: 2 },
+  { day: "Wed", signups: 26, churn: 5 },
+  { day: "Thu", signups: 31, churn: 4 },
+  { day: "Fri", signups: 28, churn: 6 },
+  { day: "Sat", signups: 17, churn: 2 },
+  { day: "Sun", signups: 14, churn: 1 },
+];
+
+const PLAN_MIX = [
+  { name: "Starter",    value: 142 },
+  { name: "Growth",     value:  87 },
+  { name: "Pro",        value:  46 },
+  { name: "Enterprise", value:   9 },
+];
+
+function ChartsDemo() {
+  return (
+    <div className="grid grid-cols-1 gap-4 lg:grid-cols-2">
+      <Card padding="md">
+        <CardHeader title="Line — Signups vs churn" description="Last 7 days" />
+        <CardBody>
+          <LineChartCard
+            data={TIME_SERIES}
+            xKey="day"
+            series={[
+              { dataKey: "signups", name: "Signups" },
+              { dataKey: "churn",   name: "Churn",   color: "var(--rose-500)" },
+            ]}
+            height="sm"
+          />
+        </CardBody>
+      </Card>
+      <Card padding="md">
+        <CardHeader title="Area — Stacked composition" />
+        <CardBody>
+          <AreaChartCard
+            data={TIME_SERIES}
+            xKey="day"
+            series={[
+              { dataKey: "signups", name: "Signups" },
+              { dataKey: "churn",   name: "Churn" },
+            ]}
+            height="sm"
+          />
+        </CardBody>
+      </Card>
+      <Card padding="md">
+        <CardHeader title="Bar — Daily volume" />
+        <CardBody>
+          <BarChartCard
+            data={TIME_SERIES}
+            xKey="day"
+            series={[{ dataKey: "signups", name: "Signups" }]}
+            height="sm"
+          />
+        </CardBody>
+      </Card>
+      <Card padding="md">
+        <CardHeader title="Donut — Plan mix" />
+        <CardBody>
+          <DonutChartCard data={PLAN_MIX} centerLabel="284" height="sm" />
+        </CardBody>
+      </Card>
+      <Card padding="md">
+        <CardHeader title="Gauge — Activation" />
+        <CardBody>
+          <GaugeChart value={68} max={100} label="of 100% target" height="sm" />
+        </CardBody>
+      </Card>
+    </div>
+  );
+}
+
+/* ── JsonViewer ──────────────────────────────────────────── */
+
+const JSON_SAMPLE = {
+  tenant: {
+    id: "t_acme",
+    name: "ACME Signs Co.",
+    plan: "pro",
+    active: true,
+    seats: 12,
+    coupon: null,
+    flags: ["beta-charts", "new-billing"],
+    address: {
+      city: "Cleveland",
+      state: "OH",
+      zip: "44114",
+    },
+  },
+  meta: {
+    createdAt: "2024-11-02T15:42:11Z",
+    lastSeen:  "2026-04-30T09:14:50Z",
+  },
+};
+
+function JsonViewerDemo() {
+  return <JsonViewer data={JSON_SAMPLE} lineNumbers withSearch initialExpandedDepth={3} />;
+}
+
+/* ── DiffViewer ──────────────────────────────────────────── */
+
+const DIFF_OLD = `export function pricePerUnit(qty: number) {
+  if (qty < 10)  return 12.5;
+  if (qty < 100) return 9.0;
+  return 7.0;
+}
+
+const TAX_RATE = 0.08;`;
+
+const DIFF_NEW = `export function pricePerUnit(qty: number, tier: "std" | "vip" = "std") {
+  const base = qty < 10 ? 12.5 : qty < 100 ? 9.0 : 7.0;
+  return tier === "vip" ? base * 0.9 : base;
+}
+
+const TAX_RATE = 0.0825;`;
+
+function DiffViewerDemo() {
+  return (
+    <div className="space-y-4">
+      <DiffViewer original={DIFF_OLD} modified={DIFF_NEW} variant="unified" title="pricing.ts · unified" />
+      <DiffViewer original={DIFF_OLD} modified={DIFF_NEW} variant="split"   title="pricing.ts · split" />
+    </div>
+  );
+}
+
+/* ── MarkdownPreview ─────────────────────────────────────── */
+
+const MD_SAMPLE = [
+  "# Release notes — v3.4",
+  "",
+  "Shipped **2026-04-30**. Highlights below.",
+  "",
+  "## Highlights",
+  "",
+  "- Stripe coupon mirroring is *live* for all tenants.",
+  "- Magic-link sign-in for staff (super-admin only).",
+  "- New `/platform/design` reference page.",
+  "",
+  "## Internals",
+  "",
+  "Inline code: `pricePerUnit(qty, tier)` now accepts a tier argument.",
+  "",
+  "> Heads up: TAX_RATE moved from 8.0% to 8.25%.",
+  "",
+  "[Full changelog](#) · [API docs](#)",
+  "",
+  "---",
+  "",
+  "Thanks to the whole team.",
+].join("\n");
+
+function MarkdownPreviewDemo() {
+  return (
+    <Card padding="md">
+      <MarkdownPreview source={MD_SAMPLE} />
+    </Card>
+  );
+}
+
+/* ── AuditLogRow ─────────────────────────────────────────── */
+
+function AuditLogRowDemo() {
+  const now = Date.now();
+  return (
+    <Card padding="none">
+      <AuditLogRow
+        timestamp={new Date(now - 4 * 60_000)}
+        actor={{ name: "Ada Lovelace", email: "ada@flowtora.com" }}
+        action={<Badge size="xs" color="brand">platform.tenant_suspended</Badge>}
+        resource={<span className="font-mono">tenant:acme-signs</span>}
+        status="success"
+        ip="73.14.108.221"
+        tenant={{ name: "ACME Signs Co.", slug: "acme-signs" }}
+      />
+      <AuditLogRow
+        timestamp={new Date(now - 14 * 60_000)}
+        actor={{ name: "Alan Turing" }}
+        action={<Badge size="xs" color="warning">billing.coupon_issued</Badge>}
+        resource={<span className="font-mono">coupon:LAUNCH2026</span>}
+        status="warning"
+        ip="73.14.108.221"
+        tenant={{ name: "Apex Print Co.", slug: "apex-print" }}
+      />
+      <AuditLogRow
+        timestamp={new Date(now - 22 * 60_000)}
+        actor={{ name: "System" }}
+        action={<Badge size="xs" color="error">webhooks.delivery_failed</Badge>}
+        resource={<span className="font-mono">webhook:wh_42</span>}
+        status="failure"
+        ip="—"
+      />
+    </Card>
+  );
+}
+
+/* ── WebhookEventRow ─────────────────────────────────────── */
+
+function WebhookEventRowDemo() {
+  const now = Date.now();
+  return (
+    <Card padding="none">
+      <WebhookEventRow
+        timestamp={new Date(now - 30_000)}
+        eventType="invoice.paid"
+        statusCode={200}
+        attempts={1}
+        destinationUrl="https://hooks.acme-signs.com/flowtora"
+        responseMs={142}
+      />
+      <WebhookEventRow
+        timestamp={new Date(now - 5 * 60_000)}
+        eventType="order.created"
+        statusCode={429}
+        attempts={3}
+        destinationUrl="https://hooks.apex-print.com/orders"
+        responseMs={680}
+      />
+      <WebhookEventRow
+        timestamp={new Date(now - 11 * 60_000)}
+        eventType="tenant.suspended"
+        statusCode={500}
+        attempts={5}
+        destinationUrl="https://hooks.northwind.dev/in"
+        responseMs={1420}
+      />
+      <WebhookEventRow
+        timestamp={new Date(now - 26 * 60_000)}
+        eventType="coupon.redeemed"
+        statusCode={0}
+        attempts={2}
+        destinationUrl="https://hooks.halcyon-press.com/x"
+        responseMs={null}
+      />
+    </Card>
+  );
+}
+
+/* ── ActivityFeed ────────────────────────────────────────── */
+
+function ActivityFeedDemo() {
+  const now = Date.now();
+  return (
+    <Card padding="none">
+      <ActivityFeedItem
+        actor={{ name: "Ada Lovelace" }}
+        summary={" suspended tenant "}
+        target={<a href="#" style={{ color: "var(--accent-primary)" }}>ACME Signs Co.</a>}
+        timestamp={new Date(now - 4 * 60_000)}
+        metaChips={["IP 73.14.108.221", "via console"]}
+      />
+      <ActivityFeedItem
+        actor={{ name: "Alan Turing" }}
+        summary={" issued a 20% coupon "}
+        target={<span className="font-mono">LAUNCH2026</span>}
+        timestamp={new Date(now - 22 * 60_000)}
+        metaChips={["Apex Print Co."]}
+      />
+      <ActivityFeedItem
+        actor={{ name: "Sarah Connor" }}
+        summary={" updated billing address on "}
+        target={<a href="#" style={{ color: "var(--accent-primary)" }}>Northwind Studio</a>}
+        timestamp={new Date(now - 3 * 3600_000)}
+        density="expanded"
+        preview={
+          <div>
+            <div style={{ color: "var(--rose-700)" }}>− 1700 Lake Ave, Cleveland OH 44114</div>
+            <div style={{ color: "var(--emerald-700)" }}>+ 2100 Euclid Ave, Cleveland OH 44115</div>
+          </div>
+        }
+      />
+    </Card>
+  );
+}
+
+/* ── CommentThread ───────────────────────────────────────── */
+
+function CommentThreadDemo() {
+  const now = Date.now();
+  return (
+    <Card padding="md">
+      <CommentThread
+        comments={[
+          {
+            id: "c1",
+            author: { name: "Ada Lovelace", role: "Super Admin" },
+            body: "Customer reached out about the suspended account — turns out the card on file expired. @alan can you reach out and confirm replacement?",
+            createdAt: new Date(now - 3 * 3600_000),
+            reactions: { "👍": 2, "👀": 1 },
+          },
+          {
+            id: "c2",
+            parentId: "c1",
+            author: { name: "Alan Turing", role: "Support" },
+            body: "On it — sending a magic-link to the billing contact and following up by phone in 30m.",
+            createdAt: new Date(now - 90 * 60_000),
+            reactions: { "🙏": 1 },
+          },
+          {
+            id: "c3",
+            author: { name: "Sarah Connor", role: "Engineering" },
+            body: "Heads up — we shipped the dunning auto-suspend cutover today. If anyone sees similar tickets, ping me.",
+            createdAt: new Date(now - 30 * 60_000),
+          },
+        ]}
+        me={{ name: "You" }}
+      />
+    </Card>
+  );
+}
+
+/* ── Timeline (Vertical + Horizontal) ────────────────────── */
+
+function TimelineDemos() {
+  const today = new Date();
+  const day = (offset: number, h = 9, m = 0) => {
+    const d = new Date(today);
+    d.setDate(d.getDate() + offset);
+    d.setHours(h, m, 0, 0);
+    return d;
+  };
+  return (
+    <div className="grid grid-cols-1 gap-4 lg:grid-cols-2">
+      <Card padding="md">
+        <CardHeader title="Vertical timeline" description="Tenant lifecycle" />
+        <CardBody>
+          <VerticalTimeline
+            showToday
+            entries={[
+              { id: "v1", timestamp: day(-30),  title: "Trial started",       description: "Auto-applied LAUNCH2026 coupon", tone: "accent" },
+              { id: "v2", timestamp: day(-12),  title: "First invoice paid",  description: "$899 · Stripe", tone: "success" },
+              { id: "v3", timestamp: day(-3),   title: "Plan upgraded",       description: "Growth → Pro", tone: "success", milestone: true },
+              { id: "v4", timestamp: day(2),    title: "Renewal scheduled",   description: "$2,499 · annual", tone: "neutral" },
+              { id: "v5", timestamp: day(7),    title: "Auto-suspend if unpaid", tone: "warning" },
+            ]}
+          />
+        </CardBody>
+      </Card>
+      <Card padding="md">
+        <CardHeader title="Horizontal timeline" description="Q2 rollouts (Gantt)" />
+        <CardBody>
+          <HorizontalTimeline
+            showToday
+            bars={[
+              { id: "g1", label: "Magic-link rollout",   start: day(-14), end: day(2),  tone: "accent" },
+              { id: "g2", label: "Coupon mirror",        start: day(-7),  end: day(5),  tone: "success" },
+              { id: "g3", label: "Dunning auto-suspend", start: day(-2),  end: day(10), tone: "warning",
+                markers: [{ at: day(0), tone: "danger", label: "Cutover" }] },
+              { id: "g4", label: "RBAC v2",              start: day(4),   end: day(28), tone: "neutral" },
+            ]}
+          />
+        </CardBody>
+      </Card>
+    </div>
+  );
+}
+
+/* ── DiffIndicator + PullQuote ───────────────────────────── */
+
+function DiffPullQuoteDemos() {
+  return (
+    <div className="space-y-4">
+      <Row label="Compact">
+        <DiffIndicator kind="added"   newValue="seat #4" />
+        <DiffIndicator kind="removed" oldValue="seat #3" />
+        <DiffIndicator kind="changed" oldValue="Growth" newValue="Pro" />
+      </Row>
+      <Row label="Expanded">
+        <DiffIndicator density="expanded" kind="added"   newValue="alex@flowtora.com" />
+        <DiffIndicator density="expanded" kind="removed" oldValue="ada@flowtora.com" />
+        <DiffIndicator density="expanded" kind="changed" oldValue="USD"   newValue="EUR" />
+      </Row>
+      <Card padding="md">
+        <PullQuote attribution={<>— Engineering, <span className="font-mono">2026-04-30</span></>}>
+          Magic-link sign-in is now the default for all platform staff. Password fallback remains for break-glass scenarios only.
+        </PullQuote>
+      </Card>
     </div>
   );
 }
