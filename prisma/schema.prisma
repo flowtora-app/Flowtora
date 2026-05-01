@@ -502,6 +502,31 @@ model TenantNote {
   @@index([authorId])
 }
 
+// Page 9 — platform-side notes about an end-user. Same shape as
+// TenantNote but the subject is a User (the person an admin is
+// investigating) rather than a Tenant. Visible to all platform staff
+// unless `isPrivate` is true; pinned notes float to the top.
+model PlatformUserNote {
+  id        String @id @default(cuid())
+  /** Subject of the note — the user being noted-on. */
+  userId    String
+  /** Author — the platform admin writing the note. */
+  authorId  String
+
+  body      String
+  pinned    Boolean @default(false)
+  isPrivate Boolean @default(false)
+
+  createdAt DateTime @default(now())
+  updatedAt DateTime @updatedAt
+
+  user   User @relation("UserNoteSubject", fields: [userId],   references: [id], onDelete: Cascade)
+  author User @relation("UserNoteAuthor",  fields: [authorId], references: [id], onDelete: Cascade)
+
+  @@index([userId, pinned, createdAt])
+  @@index([authorId])
+}
+
 model TenantViewedBy {
   id       String @id @default(cuid())
   tenantId String
@@ -1002,8 +1027,23 @@ model User {
   // wired into RBAC or routing.
   bio        String?
   timezone   String?           // IANA, e.g. "America/Los_Angeles"
+  // Page 9 — self-reported phone number + verification, primary
+  // language code (BCP-47 like "en-US"), and ISO-2 country. Surfaced
+  // in the Users list filter bar + the user detail Profile tab.
+  phone           String?
+  phoneVerifiedAt DateTime?
+  language        String?
+  country         String?
   // UI preference; AUTO follows OS prefers-color-scheme.
   themePreference ThemePreference @default(AUTO)
+
+  // Page 9 — soft deactivation. When set, sign-in is refused and the
+  // row drops off the default user-directory view. `deactivatedBy`
+  // captures the admin user who flipped the switch; `deactivatedReason`
+  // is a free-form note. Reactivation clears all three.
+  deactivatedAt     DateTime?
+  deactivatedBy     String?
+  deactivatedReason String?
 
   // ── Phase 2 (Auth/Security) ──
   // Bump this on password change or "sign out everywhere". The session
@@ -1091,6 +1131,11 @@ model User {
   // page views (for the "Recently viewed by team" rail widget).
   authoredTenantNotes TenantNote[]     @relation("TenantNoteAuthor")
   tenantViews         TenantViewedBy[] @relation("TenantViewer")
+
+  // Page 9 — platform-side notes about this user (subject side).
+  platformNotes        PlatformUserNote[] @relation("UserNoteSubject")
+  // Notes this admin authored on other users.
+  authoredUserNotes    PlatformUserNote[] @relation("UserNoteAuthor")
 }
 
 // Platform-side roles. The first three (SUPER_ADMIN, SITE_MANAGER,
