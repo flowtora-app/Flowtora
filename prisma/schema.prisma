@@ -31,6 +31,29 @@ model Tenant {
   stripeCustomerId     String?      @unique
   stripeSubscriptionId String?      @unique
 
+  // Page 15 (Subscriptions) — the rest of the subscription state we
+  // need to render the admin subscription list + detail. We don't
+  // model subscriptions as a separate table because the per-tenant
+  // 1:1 cardinality + lack of multi-sub support means a flat shape on
+  // Tenant keeps the joins cheap. If we ever support stacking subs
+  // per workspace, we'll move these onto a Subscription model.
+  /** "MONTHLY" / "ANNUAL". Drives the MRR ÷ ARR rollups. */
+  billingCycle         BillingCycle @default(MONTHLY)
+  /** Current billing period — reset on each renewal. */
+  currentPeriodStart   DateTime?
+  currentPeriodEnd     DateTime?
+  /** When true, the next renewal will cancel instead of charging. */
+  cancelAtPeriodEnd    Boolean      @default(false)
+  /** Optional explicit cancellation date (for "cancel on Jun 30"
+   *  flows that aren't tied to the current period). */
+  cancelScheduledFor   DateTime?
+  /** Optional paused-until date. While set, billing pauses + access
+   *  stays read-only. */
+  pausedUntil          DateTime?
+  /** Stamped on cancel — separate from `archiveReason` so a tenant
+   *  that cancels but stays around in TRIAL doesn't lose context. */
+  cancelReason         String?
+
   // Profile / settings
   logoUrl      String?
   timezone     String  @default("UTC")
@@ -1131,6 +1154,14 @@ enum PlanStatus {
   PUBLISHED
   HIDDEN
   ARCHIVED
+}
+
+// Page 15 (Subscriptions) — billing cycle for a tenant subscription.
+// Annual subs still surface MRR but we compute it as priceAnnual / 12
+// so the rollups stay apples-to-apples.
+enum BillingCycle {
+  MONTHLY
+  ANNUAL
 }
 
 // PlanFeatureValue encodes three shapes — boolean on/off, numeric cap,

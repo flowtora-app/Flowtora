@@ -42,6 +42,7 @@ const NAV_ITEMS: NavItem[] = [
   { href: "/platform/tenants/churn",    label: "Churned & At-Risk", icon: "Attention" },
   { href: "/platform/tenants/impersonation", label: "Impersonation", icon: "Shield" },
   { href: "/platform/billing",          label: "Billing & Revenue", icon: "Revenue" },
+  { href: "/platform/billing/subscriptions", label: "Subscriptions", icon: "Invoices" },
   { href: "/platform/users",            label: "Users",             icon: "Customers" },
   { href: "/platform/access/roles",     label: "Roles & Permissions", icon: "Approvals" },
   { href: "/platform/access/teams",     label: "Teams",             icon: "User" },
