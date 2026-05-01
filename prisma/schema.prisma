@@ -2934,10 +2934,18 @@ model AuditLog {
   userAgent  String?
   createdAt  DateTime @default(now())
 
+  // Page 8 — when an action runs while an impersonation cookie is
+  // active, the action layer stamps this with the active session id
+  // so the Impersonation Sessions detail drawer can pull a
+  // chronological timeline without sifting through every audit row.
+  impersonationSessionId String?
+  impersonationSession ImpersonationSession? @relation("AuditLogImpersonation", fields: [impersonationSessionId], references: [id], onDelete: SetNull)
+
   tenant Tenant? @relation(fields: [tenantId], references: [id], onDelete: SetNull)
 
   @@index([tenantId, createdAt])
   @@index([userId, createdAt])
+  @@index([impersonationSessionId, createdAt])
 }
 
 // Phase 17 Slice C — feature flags.
@@ -3005,8 +3013,98 @@ model ImpersonationSession {
   startedAt      DateTime  @default(now())
   endedAt        DateTime?
 
+  // ── Page 8 (Impersonation Sessions) — extended context ──────
+  // Categorical reason — required when ImpersonationSettings.reasonRequired
+  // is true (which is the default). The free-text `reason` stays for the
+  // "what specifically" detail.
+  categoryCode        ImpersonationCategory @default(OTHER)
+  // Admin's stated expected duration in minutes. Used by the cron to
+  // close sessions that drift well past the estimate, and surfaced in
+  // the History tab so we can spot habitual under-estimators.
+  expectedDurationMin Int?
+  // How the session ended. Null until endedAt is stamped.
+  endedReason         ImpersonationEndReason?
+  // Force-ended by — different admin that pulled the plug for compliance.
+  // Null when the impersonator ended their own session.
+  endedById           String?
+  // Optional approver — set when ImpersonationSettings.approvalRequired.
+  approvedById        String?
+  approvedAt          DateTime?
+  // Captured at session-start for the "Started · IP · UA" history row.
+  ip                  String?
+  userAgent           String?
+  // Cached count of audit-log rows tagged with this session id. Saves
+  // the History tab from a count(*) per row.
+  actionsCount        Int @default(0)
+  // Free-form running notes the admin can append while impersonating.
+  notes               String?
+  // Updated by the audit middleware whenever the impersonator does
+  // anything; cron uses it for the idle-timeout sweep.
+  lastActivityAt      DateTime?
+
+  // Audit-log rows produced under this session. Set via the
+  // impersonationSessionId field on AuditLog when the impersonation
+  // cookie is present.
+  actionLogs AuditLog[] @relation("AuditLogImpersonation")
+
   @@index([platformUserId, endedAt])
   @@index([tenantId, endedAt])
+  @@index([endedAt])
+}
+
+enum ImpersonationCategory {
+  SUPPORT_INVESTIGATION
+  CUSTOMER_REQUESTED_FIX
+  BUG_REPRO
+  ONBOARDING_ASSIST
+  COMPLIANCE_AUDIT
+  OTHER
+}
+
+enum ImpersonationEndReason {
+  /** Admin clicked "End impersonation" themselves. */
+  COMPLETED
+  /** Another admin force-ended via the Active tab. */
+  FORCE_ENDED
+  /** Cron auto-closed because it passed maxDurationMin. */
+  EXPIRED
+  /** Cron auto-closed because lastActivityAt drifted past idleTimeoutMin. */
+  IDLE_TIMEOUT
+}
+
+// Page 8 §Compliance settings — singleton row keyed by id="default".
+// Lazy-seeded by loadImpersonationSettings() so the page reads a
+// guaranteed-populated record.
+model ImpersonationSettings {
+  id String @id @default("default")
+
+  /** Hard cap for any impersonation session. Cron force-ends past this. */
+  maxDurationMin     Int @default(60)
+  /** Idle timeout before auto-end. */
+  idleTimeoutMin     Int @default(15)
+  /** When true, the start-impersonation modal requires the free-text
+   *  reason in addition to the category. Default true (per spec). */
+  reasonRequired     Boolean @default(true)
+  /** When true, the start-impersonation modal blocks until an admin
+   *  in `approverIds` has clicked Approve. */
+  approvalRequired   Boolean @default(false)
+  /** User ids of designated approvers. */
+  approverIds        String[] @default([])
+  /** Banner copy override — null = use the spec default. */
+  bannerCopy         String?
+  /** Days to keep audit-log + session rows for compliance. The cron
+   *  prunes anything older than ended_at + this. */
+  recordingRetentionDays Int @default(90)
+  /** When true, the impersonator's role drops to read-only — every
+   *  mutating action is short-circuited at the action layer. */
+  auditOnlyMode      Boolean @default(false)
+  /** Action keys the impersonator cannot perform even when
+   *  auditOnlyMode is false. Free-form audit-action strings — checked
+   *  before each mutating server action runs. */
+  disabledActions    String[] @default([])
+
+  updatedAt DateTime @updatedAt
+  updatedBy String?
 }
 
 // Phase 17 Slice D — in-app support ticket thread.

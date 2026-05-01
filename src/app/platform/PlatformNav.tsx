@@ -40,6 +40,7 @@ const NAV_ITEMS: NavItem[] = [
   { href: "/platform/tenants/onboarding", label: "Onboarding",      icon: "Target" },
   { href: "/platform/tenants/health",   label: "Health Scores",     icon: "Heartbeat" },
   { href: "/platform/tenants/churn",    label: "Churned & At-Risk", icon: "Attention" },
+  { href: "/platform/tenants/impersonation", label: "Impersonation", icon: "Shield" },
   { href: "/platform/billing",          label: "Billing & Revenue", icon: "Revenue" },
   { href: "/platform/users",            label: "Users",             icon: "Customers" },
   { href: "/platform/industry-config",  label: "Industry Config",   icon: "Target",       preview: true },

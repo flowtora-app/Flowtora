@@ -8,8 +8,9 @@
 // page script can't lift it, `sameSite: "lax"` so it survives a redirect
 // from /platform into /t, Secure in production.
 
-import { cookies } from "next/headers";
+import { cookies, headers } from "next/headers";
 import { db } from "@/lib/db";
+import type { ImpersonationCategory } from "@prisma/client";
 
 export const IMPERSONATION_COOKIE = "ts_imp";
 
@@ -62,25 +63,50 @@ export async function getActiveImpersonation(
 /**
  * Create an ImpersonationSession row and set the cookie. Caller is
  * expected to redirect to the tenant workspace afterward.
+ *
+ * Page 8 — extended to capture categorical reason, expected duration,
+ * and the originating IP/UA so the History tab can render a meaningful
+ * audit row. Defaults are the spec's defaults so legacy callers
+ * (TenantImpersonateButton without category) still work.
  */
 export async function startImpersonationSession(params: {
   platformUserId: string;
   tenantId: string;
   reason: string | null;
+  categoryCode?: ImpersonationCategory;
+  expectedDurationMin?: number | null;
 }): Promise<{ id: string }> {
   // Close any still-open sessions this admin left dangling. Simpler than
   // tracking multiple concurrent impersonations (which would be a separate
   // UX anyway — auditors get one tab, not several).
+  const now = new Date();
   await db.impersonationSession.updateMany({
     where: { platformUserId: params.platformUserId, endedAt: null },
-    data: { endedAt: new Date() },
+    data: { endedAt: now, endedReason: "FORCE_ENDED" },
   });
+
+  // Best-effort IP + UA lookup. Headers are optional in some test
+  // contexts so we shrug off the read failing.
+  let ip: string | null = null;
+  let userAgent: string | null = null;
+  try {
+    const h = await headers();
+    ip = h.get("x-forwarded-for")?.split(",")[0]?.trim() || h.get("x-real-ip") || null;
+    userAgent = h.get("user-agent");
+  } catch {
+    // ignore
+  }
 
   const session = await db.impersonationSession.create({
     data: {
       platformUserId: params.platformUserId,
       tenantId: params.tenantId,
       reason: params.reason,
+      categoryCode: params.categoryCode ?? "OTHER",
+      expectedDurationMin: params.expectedDurationMin ?? null,
+      ip,
+      userAgent,
+      lastActivityAt: now,
     },
     select: { id: true },
   });
@@ -118,7 +144,7 @@ export async function stopImpersonationSession(currentUserId: string | null): Pr
         platformUserId: currentUserId,
         endedAt: null,
       },
-      data: { endedAt: new Date() },
+      data: { endedAt: new Date(), endedReason: "COMPLETED" },
     });
   }
   jar.delete(IMPERSONATION_COOKIE);

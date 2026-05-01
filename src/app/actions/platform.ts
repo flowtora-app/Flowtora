@@ -209,8 +209,18 @@ export async function updateTenantNotes(tenantId: string, formData: FormData) {
 // Slice B — Impersonation
 // ────────────────────────────────────────────────────────────
 
+// Page 8 §Impersonation flow — modal collects categorical reason +
+// freetext + expected duration. We accept all three but keep them all
+// optional so the legacy quick-impersonate flow (just `reason`) still
+// works when the row-menu surface didn't show the dropdowns.
+const IMPERSONATION_CATEGORIES = [
+  "SUPPORT_INVESTIGATION", "CUSTOMER_REQUESTED_FIX", "BUG_REPRO",
+  "ONBOARDING_ASSIST", "COMPLIANCE_AUDIT", "OTHER",
+] as const;
 const impersonationStartSchema = z.object({
   reason: z.string().max(500).optional().or(z.literal("")),
+  categoryCode: z.enum(IMPERSONATION_CATEGORIES).optional(),
+  expectedDurationMin: z.coerce.number().int().min(1).max(480).optional(),
 });
 
 export async function startImpersonation(tenantId: string, formData: FormData) {
@@ -219,6 +229,18 @@ export async function startImpersonation(tenantId: string, formData: FormData) {
   const ctx = await requirePlatformAdmin();
   const parsed = impersonationStartSchema.safeParse(Object.fromEntries(formData.entries()));
   const reason = parsed.success ? parsed.data.reason?.trim() || null : null;
+  const categoryCode = parsed.success ? parsed.data.categoryCode : undefined;
+  const expectedDurationMin = parsed.success ? parsed.data.expectedDurationMin ?? null : null;
+
+  // Page 8 — honour the global "reason required" setting. We only
+  // hard-block if both the categorical and freetext reasons are missing.
+  const settings = await db.impersonationSettings.findUnique({
+    where: { id: "default" },
+    select: { reasonRequired: true },
+  });
+  if ((settings?.reasonRequired ?? true) && !reason && !categoryCode) {
+    redirect(`/platform/tenants/${tenantId}?error=${encodeURIComponent("Reason required for impersonation")}`);
+  }
 
   const tenant = await db.tenant.findUnique({
     where: { id: tenantId },
@@ -237,6 +259,8 @@ export async function startImpersonation(tenantId: string, formData: FormData) {
     platformUserId: ctx.userId,
     tenantId: tenant.id,
     reason,
+    categoryCode,
+    expectedDurationMin,
   });
 
   await logPlatformAudit({
@@ -245,7 +269,11 @@ export async function startImpersonation(tenantId: string, formData: FormData) {
     action: "platform.impersonation_started",
     entityType: "ImpersonationSession",
     entityId: session.id,
-    metadata: { actor: ctx.email, reason, tenantName: tenant.name },
+    metadata: {
+      actor: ctx.email, reason, tenantName: tenant.name,
+      categoryCode: categoryCode ?? "OTHER",
+      expectedDurationMin,
+    },
   });
 
   redirect(`/t/${tenant.slug}/dashboard`);

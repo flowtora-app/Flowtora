@@ -179,6 +179,29 @@ export async function logPlatformAudit(params: {
   metadata?: Record<string, unknown>;
 }) {
   try {
+    // Page 8 — when an active impersonation cookie is present, tag
+    // the audit row + bump the session's lastActivityAt so the
+    // History tab can render a coherent timeline and the
+    // idle-timeout cron sees fresh activity.
+    let impersonationSessionId: string | null = null;
+    try {
+      const { getActiveImpersonation } = await import("@/lib/impersonation");
+      const active = await getActiveImpersonation(params.userId);
+      if (active) {
+        impersonationSessionId = active.id;
+        // Best-effort — don't let an audit-row write fail because the
+        // session-touch update raced with a force-end.
+        await db.impersonationSession
+          .update({
+            where: { id: active.id },
+            data: { lastActivityAt: new Date(), actionsCount: { increment: 1 } },
+          })
+          .catch(() => undefined);
+      }
+    } catch {
+      // ignore — impersonation tagging is best-effort.
+    }
+
     await db.auditLog.create({
       data: {
         tenantId: params.tenantId ?? null,
@@ -187,6 +210,7 @@ export async function logPlatformAudit(params: {
         entityType: params.entityType,
         entityId: params.entityId,
         metadata: params.metadata as never,
+        impersonationSessionId,
       },
     });
   } catch {
