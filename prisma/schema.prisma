@@ -239,6 +239,22 @@ model Tenant {
   // Signup attribution. Captured at create time from referral codes,
   // utm_source, or set manually by platform staff after a sales call.
   signupSource     TenantSource @default(ORGANIC)
+
+  // ── Page 5 (Onboarding Pipeline) ──────────────────────────────
+  // Manual stage override — when set, takes precedence over the
+  // computed stage in /platform/tenants/onboarding. Cleared by
+  // setting back to null.
+  onboardingStageOverride String?
+  // Stamped when an admin clicks "Mark stuck" on the kanban card
+  // or list row. The stage classifier uses it as a signal for the
+  // "stuck tenant" filter independent of the days-in-stage rule.
+  onboardingMarkedStuckAt DateTime?
+  // Stamped when an admin / cron enrolls the tenant in the
+  // onboarding-nudge drip. The cron walks rows where this is set
+  // and `lastOnboardingNudgeAt` is more than the cadence apart.
+  onboardingNudgeEnrolledAt DateTime?
+  lastOnboardingNudgeAt     DateTime?
+
   // Trial nudge tracking — stamped when the "ends in Xd" banner is first
   // acknowledged or dismissed so we don't hammer owners with the same
   // warning. Billing alert tracking does the same for PAST_DUE.
@@ -552,6 +568,38 @@ model TenantIpRule {
 enum TenantIpRuleKind {
   ALLOW
   BLOCK
+}
+
+// ────────────────────────────────────────────────────────────
+// Page 5 (Onboarding Pipeline) — funnel configuration singleton.
+//
+// Single-row table, identified by the literal "default" id. Stores
+// the WIP limit per stage + the stuck-threshold-days knob from the
+// "Edit funnel definition" modal. The 10 stages themselves stay in
+// code (src/server/platform/onboarding-pipeline.ts) — making them
+// fully user-defined would mean a stage-predicate engine, which is
+// reserved for a future slice. The WIP / stuck knobs are a useful
+// 80/20 today.
+// ────────────────────────────────────────────────────────────
+
+model OnboardingFunnelSettings {
+  id String @id @default("default")
+  // JSON map: { [stageId]: number } — null = no limit on that stage.
+  wipLimits Json?
+  // Days at the same stage before yellow / red treatment kicks in.
+  stuckThresholdDays Int @default(7)
+  stuckCriticalDays  Int @default(14)
+  // How many days of nudge cadence in the drip when an admin
+  // enrolls a tenant via "Send nudge campaign". The cron walks the
+  // table at this cadence; tenants with `onboardingNudgeEnrolledAt`
+  // set get a nudge email every N days until their stage advances.
+  nudgeCadenceDays   Int @default(3)
+  // Optional override of the email subject for the drip.
+  nudgeSubject       String?
+  nudgeBody          String?
+
+  updatedAt DateTime @updatedAt
+  updatedBy String?
 }
 
 model TenantHealthSnapshot {
