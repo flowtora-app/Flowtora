@@ -1419,13 +1419,69 @@ model Invite {
   @@index([tenantId, email])
 }
 
-// NextAuth adapter tables
+// NextAuth adapter tables — base columns are required by the adapter.
+// Page 13 (Sessions & Devices) extends with optional context fields
+// stamped at sign-in time (or whenever a request hits the session-touch
+// middleware): IP, user-agent, geo lookup, MFA method used, and a
+// `forceMfaPromptAt` lever so admins can require a re-prompt without
+// invalidating the session outright.
 model Session {
   id           String   @id @default(cuid())
   sessionToken String   @unique
   userId       String
   expires      DateTime
-  user         User     @relation(fields: [userId], references: [id], onDelete: Cascade)
+
+  // Page 13 — extended context. All optional so legacy rows + JWT-
+  // strategy paths that bypass DB sessions don't break.
+  startedAt        DateTime  @default(now())
+  lastActiveAt     DateTime?
+  ipAddress        String?
+  userAgent        String?
+  /** Two-letter ISO country, populated by the auth-touch middleware
+   *  from request headers. */
+  country          String?
+  city             String?
+  /** Coarse device classification: "desktop" / "mobile" / "tablet" /
+   *  "bot" / null. Derived once at write time so the table can filter
+   *  without re-parsing UA strings every render. */
+  deviceType       String?
+  /** Browser name + version, OS name + version — both parsed from UA. */
+  browserName      String?
+  browserVersion   String?
+  osName           String?
+  osVersion        String?
+  /** "totp" / "webauthn" / "sms" / null when no factor used. */
+  mfaMethod        String?
+  /** When set, every request must complete MFA again before being
+   *  honored. Cleared on next successful re-prompt. */
+  forceMfaPromptAt DateTime?
+
+  user User @relation(fields: [userId], references: [id], onDelete: Cascade)
+
+  @@index([userId, lastActiveAt])
+  @@index([ipAddress])
+  @@index([country])
+}
+
+// Page 13 — Platform-side IP blocklist. When an admin clicks "Block
+// IP" on a suspicious session, we mint one of these rows. The auth
+// middleware refuses sign-ins from blocked IPs / CIDRs.
+//
+// Distinct from TenantIpRule (per-tenant allow/block) — this list is
+// platform-wide and applies to staff sessions only.
+model PlatformIpBlock {
+  id          String   @id @default(cuid())
+  /** Single IP or CIDR — e.g. "192.0.2.0/24" or "203.0.113.7". */
+  cidr        String   @unique
+  reason      String?
+  expiresAt   DateTime?
+  triggeredCount Int   @default(0)
+  lastTriggeredAt DateTime?
+
+  createdAt DateTime @default(now())
+  createdBy String
+
+  @@index([expiresAt])
 }
 
 model Account {
