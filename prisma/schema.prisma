@@ -212,7 +212,20 @@ model Tenant {
   // when an admin archives the tenant. Drives the "why are tenants
   // leaving?" analytics on /platform/tenants.
   archiveReasonCode   ArchiveReasonCode?
+  // Page 7 — when archiveReasonCode = SWITCHED_TO_COMPETITOR, captures
+  // which competitor the tenant moved to. Plain text — drives the
+  // "Switched to" tooltip in the Churned tab.
+  archiveCompetitorName String?
   scheduledDeletionAt DateTime?
+
+  // Page 7 (Churned & At-Risk) — at-risk alerts can be muted for a
+  // bounded window via "Suppress alert". The tenant stays out of the
+  // at-risk list until this date passes, then re-enters automatically.
+  atRiskSuppressedUntil DateTime?
+  // Stamped when a previously CANCELED tenant comes back (status
+  // moves out of CANCELED). Drives the "% won back" KPI without
+  // walking the full SubscriptionEvent log.
+  wonBackAt DateTime?
 
   // Platform-side tags for organizing tenants — internal only; tenants
   // never see these. Free-form lowercase strings, e.g. "vip", "beta",
@@ -296,6 +309,8 @@ model Tenant {
   ipRules            TenantIpRule[]
   healthSnapshots    TenantHealthSnapshot[]
   healthAdjustments  TenantHealthAdjustment[]
+  retentionAttempts  RetentionAttempt[]
+  winbackEnrollments WinbackEnrollment[]
   customers          Customer[]
   contacts           Contact[]
   interactions       Interaction[]
@@ -708,6 +723,123 @@ model TenantHealthAdjustment {
   @@index([expiresAt])
 }
 
+// ────────────────────────────────────────────────────────────
+// Page 7 — Churned & At-Risk.
+//
+// RetentionAttempt logs every save action a CSM takes against an
+// at-risk tenant: applying a discount, scheduling a save call,
+// marking engaged, or suppressing the alert. The action's payload is
+// kept in the dedicated columns (couponId / scheduledFor / etc.) so
+// reporting can pivot without parsing JSON.
+//
+// WinbackCampaign + WinbackEnrollment back the third tab — a
+// lightweight "send X email to every churned tenant who matches
+// filter Y, track opens/replies, count won-back". Email send happens
+// on the daily cron; one row per (campaign, tenant) so we can
+// dedupe and show per-tenant outcome.
+// ────────────────────────────────────────────────────────────
+
+model RetentionAttempt {
+  id        String               @id @default(cuid())
+  tenantId  String
+  kind      RetentionAttemptKind
+
+  /** Coupon applied for OFFER kind — null otherwise. */
+  couponId      String?
+  /** When the call is scheduled (SCHEDULE_CALL only). */
+  scheduledFor  DateTime?
+  /** When the at-risk alert is suppressed until (SUPPRESS_ALERT only).
+   *  Mirrored onto Tenant.atRiskSuppressedUntil for fast filtering. */
+  suppressUntil DateTime?
+  /** Free-form follow-up note. */
+  notes         String?
+
+  createdAt DateTime @default(now())
+  createdBy String
+
+  tenant    Tenant @relation(fields: [tenantId], references: [id], onDelete: Cascade)
+
+  @@index([tenantId, createdAt])
+  @@index([kind, createdAt])
+}
+
+enum RetentionAttemptKind {
+  /** Discount coupon applied as a save offer. */
+  OFFER
+  /** Save-call scheduled with the tenant owner. */
+  SCHEDULE_CALL
+  /** "Tenant is engaged again" — clears the at-risk treatment for
+   *  one full review cycle. */
+  MARK_ENGAGED
+  /** Mute the at-risk alert for X days. */
+  SUPPRESS_ALERT
+  /** Win-back email sent (separate from MARKETING campaign — for
+   *  one-off email-the-owner sends from the row menu). */
+  WINBACK_EMAIL
+}
+
+model WinbackCampaign {
+  id          String                @id @default(cuid())
+  name        String
+  status      WinbackCampaignStatus @default(DRAFT)
+  /** Free-form filter JSON — interpreted by the cron + the bulk-enrol
+   *  action when audience size is computed. Today: { reasonCodes?,
+   *  cancelledSinceDays? }. */
+  audienceFilter Json?
+
+  /** Email subject + plain-text body. Body is rendered into a <pre>
+   *  block in the same path the onboarding nudges use. */
+  emailSubject String?
+  emailBody    String?
+
+  /** Cached aggregates — recomputed when stats are read by the page,
+   *  written incrementally by the cron + per-action wires. */
+  audienceSize  Int @default(0)
+  emailsSent    Int @default(0)
+  emailsOpened  Int @default(0)
+  replies       Int @default(0)
+  wonBackCount  Int @default(0)
+
+  startedAt DateTime?
+  pausedAt  DateTime?
+  endedAt   DateTime?
+
+  createdAt DateTime @default(now())
+  createdBy String?
+  updatedAt DateTime @updatedAt
+
+  enrollments WinbackEnrollment[]
+
+  @@index([status, createdAt])
+}
+
+enum WinbackCampaignStatus {
+  DRAFT
+  ACTIVE
+  PAUSED
+  ENDED
+}
+
+model WinbackEnrollment {
+  id         String   @id @default(cuid())
+  campaignId String
+  tenantId   String
+
+  enrolledAt DateTime  @default(now())
+  emailedAt  DateTime?
+  openedAt   DateTime?
+  repliedAt  DateTime?
+  wonBack    Boolean   @default(false)
+  wonBackAt  DateTime?
+
+  campaign WinbackCampaign @relation(fields: [campaignId], references: [id], onDelete: Cascade)
+  tenant   Tenant          @relation(fields: [tenantId],   references: [id], onDelete: Cascade)
+
+  @@unique([campaignId, tenantId])
+  @@index([campaignId])
+  @@index([tenantId])
+}
+
 enum PaymentTerms {
   DUE_ON_RECEIPT
   NET_15
@@ -767,6 +899,9 @@ enum ArchiveReasonCode {
   TEMPORARY_PAUSE
   TECHNICAL_ISSUES
   POOR_SUPPORT
+  // Page 7 (Churned & At-Risk) — added so the cancellation reason
+  // donut can split out usability complaints from feature-gap complaints.
+  DIFFICULT_TO_USE
   ADMIN_DECISION
   OTHER
 }

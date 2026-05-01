@@ -28,6 +28,10 @@
     {
       "path": "/api/cron/health-recompute",
       "schedule": "0 6 * * *"
+    },
+    {
+      "path": "/api/cron/winback-campaigns",
+      "schedule": "0 15 * * *"
     }
   ]
 }
