@@ -295,6 +295,7 @@ model Tenant {
   integrations       TenantIntegration[]
   ipRules            TenantIpRule[]
   healthSnapshots    TenantHealthSnapshot[]
+  healthAdjustments  TenantHealthAdjustment[]
   customers          Customer[]
   contacts           Contact[]
   interactions       Interaction[]
@@ -614,6 +615,19 @@ model TenantHealthSnapshot {
   // so we can evolve the score model without a schema migration.
   subscores Json?
 
+  // Page 6 — version of the HealthScoringModel that produced this
+  // snapshot. Lets the trend chart show "model v3 from this date" so
+  // historical scores aren't silently re-interpreted under a newer
+  // weighting. Nullable so legacy snapshots stay readable.
+  modelVersion Int?
+  // Whether this snapshot came from the active model or a shadow
+  // candidate run side-by-side for A/B comparison. Default = active.
+  shadow Boolean @default(false)
+  // Flat sum of any active TenantHealthAdjustment.delta at compute
+  // time — kept on the snapshot so we can answer "what was the
+  // CSM-applied bump that day?" without replaying adjustments.
+  adjustmentDelta Int @default(0)
+
   /** What triggered this snapshot — "scheduled" (daily cron),
    *  "manual" (admin clicked Recompute), "event" (driven by a
    *  meaningful event like payment_failed). */
@@ -624,6 +638,74 @@ model TenantHealthSnapshot {
   tenant Tenant @relation(fields: [tenantId], references: [id], onDelete: Cascade)
 
   @@index([tenantId, computedAt])
+  @@index([computedAt])
+}
+
+// ────────────────────────────────────────────────────────────
+// Page 6 — Tenant Health Scores.
+//
+// HealthScoringModel keeps the weighted-factor model versioned so
+// every TenantHealthSnapshot can attribute its score to a specific
+// model. One row at a time has isActive=true (the live model that
+// runs in the daily cron); one optional row has isShadow=true (the
+// A/B candidate). Editing a model produces a new row — old rows are
+// kept for historical attribution.
+//
+// TenantHealthAdjustment is the CSM-only manual override: a +/-
+// delta with a reason (e.g. "+15: just signed a 3-yr deal, ignore
+// jobs growth dip during ramp"). Adjustments expire if expiresAt is
+// set — the daily cron re-evaluates at compute time.
+// ────────────────────────────────────────────────────────────
+
+model HealthScoringModel {
+  id          String   @id @default(cuid())
+  /** Monotonically-increasing version number. Treated as a label, not
+   *  a sort key (use createdAt for that). */
+  version     Int      @unique
+  name        String
+  description String?
+
+  /** JSON map: { [factorKey]: number } — weights summing to 100.
+   *  Factor key catalogue lives in src/server/platform/health-scoring.ts
+   *  so factor definitions can evolve without schema changes. */
+  weights     Json
+  /** Optional human-readable formula explanation shown in the UI. */
+  formula     String?
+
+  /** Exactly one row should have isActive=true at any time. */
+  isActive    Boolean  @default(false)
+  /** Optional shadow / A/B candidate. Score computed in parallel
+   *  with the active model but not used for the primary score. */
+  isShadow    Boolean  @default(false)
+
+  createdAt   DateTime @default(now())
+  createdBy   String?
+  activatedAt DateTime?
+  archivedAt  DateTime?
+
+  @@index([isActive])
+  @@index([isShadow])
+}
+
+model TenantHealthAdjustment {
+  id        String   @id @default(cuid())
+  tenantId  String
+
+  /** +/- delta clamped at +/- 50 in the action layer. */
+  delta     Int
+  reason    String
+
+  /** Optional expiry — auto-clears after this date. */
+  expiresAt DateTime?
+
+  createdAt DateTime @default(now())
+  /** User id of the CSM / admin who applied the adjustment. */
+  createdBy String
+
+  tenant Tenant @relation(fields: [tenantId], references: [id], onDelete: Cascade)
+
+  @@index([tenantId])
+  @@index([expiresAt])
 }
 
 enum PaymentTerms {
