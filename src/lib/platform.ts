@@ -177,6 +177,14 @@ export async function logPlatformAudit(params: {
   entityType?: string;
   entityId?: string;
   metadata?: Record<string, unknown>;
+  // ── Page 14 (Audit Log) — optional forensics fields ─────────
+  severity?: "INFO" | "WARNING" | "CRITICAL";
+  success?: boolean;
+  source?: "WEB" | "API" | "CLI" | "SYSTEM";
+  correlationId?: string;
+  requestId?: string;
+  sessionId?: string;
+  mfaUsed?: boolean;
 }) {
   try {
     // Page 8 — when an active impersonation cookie is present, tag
@@ -202,6 +210,39 @@ export async function logPlatformAudit(params: {
       // ignore — impersonation tagging is best-effort.
     }
 
+    // Page 14 — hash chain. We pull the most-recent row's hash and
+    // use it as prevHash, then compute SHA-256 over the new row's
+    // canonical fields. Best-effort: if the read or hash fails, we
+    // still write the row (with null hash) so audit logging can't
+    // be DoS'd.
+    let prevHash: string | null = null;
+    let hash: string | null = null;
+    try {
+      const { createHash } = await import("node:crypto");
+      const last = await db.auditLog.findFirst({
+        orderBy: { createdAt: "desc" },
+        select: { hash: true },
+      });
+      prevHash = last?.hash ?? null;
+      const createdAt = new Date();
+      const canonical = JSON.stringify({
+        action: params.action,
+        userId: params.userId,
+        tenantId: params.tenantId ?? null,
+        entityType: params.entityType ?? null,
+        entityId: params.entityId ?? null,
+        createdAt: createdAt.toISOString(),
+        prevHash,
+        metadata: params.metadata ?? null,
+        severity: params.severity ?? "INFO",
+        success: params.success ?? true,
+        source: params.source ?? "WEB",
+      });
+      hash = createHash("sha256").update(canonical).digest("hex");
+    } catch {
+      // fall through — chain is best-effort.
+    }
+
     await db.auditLog.create({
       data: {
         tenantId: params.tenantId ?? null,
@@ -211,6 +252,15 @@ export async function logPlatformAudit(params: {
         entityId: params.entityId,
         metadata: params.metadata as never,
         impersonationSessionId,
+        severity: params.severity ?? "INFO",
+        success: params.success ?? true,
+        source: params.source ?? "WEB",
+        correlationId: params.correlationId ?? null,
+        requestId: params.requestId ?? null,
+        sessionId: params.sessionId ?? null,
+        mfaUsed: params.mfaUsed ?? null,
+        prevHash,
+        hash,
       },
     });
   } catch {

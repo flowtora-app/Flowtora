@@ -3206,11 +3206,129 @@ model AuditLog {
   impersonationSessionId String?
   impersonationSession ImpersonationSession? @relation("AuditLogImpersonation", fields: [impersonationSessionId], references: [id], onDelete: SetNull)
 
+  // ── Page 14 (Audit Log) — extended forensics columns ──────────
+  /** "INFO" / "WARNING" / "CRITICAL". Critical = destructive or
+   *  permission changes; warning = failed write attempts; info =
+   *  everything else. */
+  severity     AuditSeverity @default(INFO)
+  /** Whether the underlying action succeeded. Failed writes still
+   *  emit an audit row so brute-force attempts are visible. */
+  success      Boolean       @default(true)
+  /** "WEB" / "API" / "CLI" / "SYSTEM". */
+  source       AuditSource   @default(WEB)
+  /** Correlates a chain of related events (multi-step flow,
+   *  background-job fanout, retry storm). Free-form opaque cuid the
+   *  caller chooses. */
+  correlationId String?
+  /** Per-request id for tracing through the request log. */
+  requestId    String?
+  /** NextAuth session id (or platform-staff session-version stamp). */
+  sessionId    String?
+  /** Whether MFA was active when the action ran. */
+  mfaUsed      Boolean?
+
+  // ── Tamper-evidence chain ─────────────────────────────────────
+  /** SHA-256 over (id, action, entityType, entityId, userId, tenantId,
+   *  createdAt, prevHash, metadata) — populated at insert by
+   *  logPlatformAudit. Not enforced at the DB level (would require a
+   *  trigger); the verify endpoint replays the chain. */
+  hash      String?
+  /** Hash of the immediately-preceding row (or null for the first).
+   *  Lets the verifier detect insertion + edit + delete tampering. */
+  prevHash  String?
+
   tenant Tenant? @relation(fields: [tenantId], references: [id], onDelete: SetNull)
 
   @@index([tenantId, createdAt])
   @@index([userId, createdAt])
   @@index([impersonationSessionId, createdAt])
+  @@index([severity, createdAt])
+  @@index([correlationId])
+  @@index([action, createdAt])
+}
+
+enum AuditSeverity {
+  INFO
+  WARNING
+  CRITICAL
+}
+
+enum AuditSource {
+  WEB
+  API
+  CLI
+  SYSTEM
+}
+
+// Page 14 §Webhook subscription. Platform-side subscribers that
+// receive an HMAC-signed POST for each matching audit row. The
+// per-row delivery happens on a 5-minute cron — we don't fire
+// inline because audit logging must stay fast + non-blocking.
+model AuditWebhookSubscription {
+  id            String   @id @default(cuid())
+  name          String
+  url           String
+  /** Signing secret — HMAC-SHA256 over the raw payload. Never
+   *  surfaced again after creation; admins must revoke + recreate
+   *  to rotate. */
+  secret        String
+  /** Comma-separated action keys (e.g. "tenant.archived,user.banned")
+   *  or "*" to receive everything. */
+  actionFilter  String   @default("*")
+  /** Minimum severity to include — INFO ships everything. */
+  minSeverity   AuditSeverity @default(INFO)
+  active        Boolean  @default(true)
+
+  /** Aggregates updated by the delivery cron. */
+  totalDelivered    Int       @default(0)
+  totalFailed       Int       @default(0)
+  lastDeliveredAt   DateTime?
+  lastFailureAt     DateTime?
+  lastFailureReason String?
+
+  createdAt DateTime @default(now())
+  createdBy String
+
+  deliveries AuditWebhookDelivery[]
+
+  @@index([active])
+}
+
+model AuditWebhookDelivery {
+  id             String   @id @default(cuid())
+  subscriptionId String
+  auditId        String
+  /** HTTP status returned by the destination. */
+  responseStatus Int?
+  /** First 512 chars of the response body — useful for debugging. */
+  responseBody   String?
+  /** When the request was attempted. */
+  attemptedAt    DateTime @default(now())
+  succeeded      Boolean  @default(false)
+  /** Number of retries already burned. */
+  attempt        Int      @default(1)
+
+  subscription AuditWebhookSubscription @relation(fields: [subscriptionId], references: [id], onDelete: Cascade)
+
+  @@index([subscriptionId, attemptedAt])
+  @@index([auditId])
+}
+
+// Page 14 §Retention configuration. Singleton + per-event overrides.
+// Stored as JSON because adding a new audit-action key shouldn't
+// require a schema migration.
+model AuditRetentionPolicy {
+  id           String   @id @default("default")
+  /** Default retention in days. 7 years = 2555 days. */
+  defaultDays  Int      @default(2555)
+  /** JSON map: { [actionKey]: number } — per-event overrides. */
+  overrides    Json?
+  /** When true, the retention cron is paused entirely — used during
+   *  legal holds. */
+  legalHold    Boolean  @default(false)
+
+  updatedAt DateTime @updatedAt
+  updatedBy String?
 }
 
 // Phase 17 Slice C — feature flags.

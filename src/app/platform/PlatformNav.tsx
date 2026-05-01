@@ -47,6 +47,7 @@ const NAV_ITEMS: NavItem[] = [
   { href: "/platform/access/teams",     label: "Teams",             icon: "User" },
   { href: "/platform/access/invitations", label: "Invitations",     icon: "Megaphone" },
   { href: "/platform/access/sessions",  label: "Sessions & Devices", icon: "Monitor" },
+  { href: "/platform/access/audit",     label: "Audit Log",         icon: "FileText" },
   { href: "/platform/industry-config",  label: "Industry Config",   icon: "Target",       preview: true },
   { href: "/platform/cms",              label: "CMS",               icon: "FileText",     preview: true },
   { href: "/platform/marketing",        label: "Marketing",         icon: "Megaphone" },

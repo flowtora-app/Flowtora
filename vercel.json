@@ -40,6 +40,14 @@
     {
       "path": "/api/cron/platform-invites-expire",
       "schedule": "0 5 * * *"
+    },
+    {
+      "path": "/api/cron/audit-retention",
+      "schedule": "30 3 * * *"
+    },
+    {
+      "path": "/api/cron/audit-webhooks-deliver",
+      "schedule": "*/5 * * * *"
     }
   ]
 }
