@@ -502,6 +502,98 @@ model TenantNote {
   @@index([authorId])
 }
 
+// ────────────────────────────────────────────────────────────
+// Page 11 — Platform Teams.
+//
+// Internal admin teams (Engineering, Support, Sales, Finance, CSM)
+// with on-call rotations and team-level role inheritance. A team
+// can carry multiple CustomPlatformRole assignments — every member
+// of the team picks up the union of those role permission lists in
+// addition to whatever their direct role grants.
+// ────────────────────────────────────────────────────────────
+
+model PlatformTeam {
+  id           String  @id @default(cuid())
+  name         String  @unique
+  /** Slug-style key. Used for @-mentions + URL params. */
+  key          String  @unique
+  description  String?
+  /** Hex (no #) — drives the colour chip + on-call calendar tint. */
+  color        String?
+  /** External integration handles. */
+  slackChannel String?
+  emailDistro  String?
+
+  /** Notify-channel toggles for the on-call escalation policy. */
+  notifySlack      Boolean @default(true)
+  notifyPagerDuty  Boolean @default(false)
+  notifySms        Boolean @default(false)
+
+  /** Custom platform-role keys applied to every member. Stored as
+   *  string[] (not a relation) so dropping a role doesn't fail the
+   *  cascade — we filter unknown keys at read time. */
+  inheritedRoleKeys String[] @default([])
+
+  createdAt DateTime @default(now())
+  updatedAt DateTime @updatedAt
+  archivedAt DateTime?
+
+  members PlatformTeamMember[]
+  shifts  OnCallShift[]
+
+  @@index([archivedAt])
+}
+
+model PlatformTeamMember {
+  id       String              @id @default(cuid())
+  teamId   String
+  userId   String
+  role     PlatformTeamMemberRole @default(MEMBER)
+  joinedAt DateTime            @default(now())
+
+  team PlatformTeam @relation(fields: [teamId], references: [id], onDelete: Cascade)
+  user User         @relation(fields: [userId], references: [id], onDelete: Cascade)
+
+  @@unique([teamId, userId])
+  @@index([userId])
+}
+
+enum PlatformTeamMemberRole {
+  LEAD
+  MEMBER
+}
+
+/** A single block in an on-call rotation. Levels stack — when paging
+ *  for an incident, the bot escalates Primary → Secondary → Tertiary
+ *  in sequence with each step's wait window. Override blocks (a swap
+ *  for a one-off vacation cover) carry isOverride=true so the calendar
+ *  view can render them in a different shade. */
+model OnCallShift {
+  id        String          @id @default(cuid())
+  teamId    String
+  userId    String
+  level     OnCallLevel     @default(PRIMARY)
+  startsAt  DateTime
+  endsAt    DateTime
+  isOverride Boolean        @default(false)
+  notes     String?
+
+  createdAt DateTime @default(now())
+  createdBy String?
+
+  team PlatformTeam @relation(fields: [teamId], references: [id], onDelete: Cascade)
+  user User         @relation(fields: [userId], references: [id], onDelete: Cascade)
+
+  @@index([teamId, startsAt])
+  @@index([userId, startsAt])
+}
+
+enum OnCallLevel {
+  PRIMARY
+  SECONDARY
+  TERTIARY
+}
+
 // Page 9 — platform-side notes about an end-user. Same shape as
 // TenantNote but the subject is a User (the person an admin is
 // investigating) rather than a Tenant. Visible to all platform staff
@@ -1136,6 +1228,10 @@ model User {
   platformNotes        PlatformUserNote[] @relation("UserNoteSubject")
   // Notes this admin authored on other users.
   authoredUserNotes    PlatformUserNote[] @relation("UserNoteAuthor")
+
+  // Page 11 — platform team memberships + on-call shifts.
+  teamMemberships      PlatformTeamMember[]
+  onCallShifts         OnCallShift[]
 }
 
 // Platform-side roles. The first three (SUPER_ADMIN, SITE_MANAGER,
