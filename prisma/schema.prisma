@@ -594,6 +594,71 @@ enum OnCallLevel {
   TERTIARY
 }
 
+// ────────────────────────────────────────────────────────────
+// Page 12 — Platform-admin invitations.
+//
+// Distinct from `Invite` (tenant-side workspace invitations). This
+// flow mints an invite token + sends an email with the accept link;
+// the recipient's User row is created on accept, picking up the
+// chosen built-in role + optional custom role + team memberships.
+//
+// Status flow:
+//   SENT  → OPENED  → ACCEPTED
+//   SENT  → EXPIRED  (cron auto-flip when expiresAt < now)
+//   SENT  → REVOKED  (admin clicked Revoke)
+//
+// Per-row trail: openedAt + acceptedAt + acceptedById + revokedAt +
+// revokedById + lastResentAt + resendCount.
+// ────────────────────────────────────────────────────────────
+
+model PlatformInvite {
+  id    String @id @default(cuid())
+  email String
+
+  /** Built-in baseline role to grant on accept. */
+  platformRole PlatformRole
+  /** Optional custom platform role to layer on top. */
+  customRoleId String?
+  customRole   CustomPlatformRole? @relation(fields: [customRoleId], references: [id], onDelete: SetNull)
+  /** Optional teams to add the new admin to on accept. PlatformTeam
+   *  ids — validated at accept time and silently dropped if archived. */
+  teamIds      String[] @default([])
+
+  customMessage String?
+  mfaRequired   Boolean @default(true)
+
+  /** URL-safe token. Treated as a secret; never logged. */
+  token         String   @unique
+  expiresAt     DateTime
+
+  status        PlatformInviteStatus @default(SENT)
+  openedAt      DateTime?
+  acceptedAt    DateTime?
+  /** User.id of the new admin once they accepted. */
+  acceptedById  String?
+  revokedAt     DateTime?
+  /** User.id of the admin who revoked. */
+  revokedById   String?
+  lastResentAt  DateTime?
+  resendCount   Int       @default(0)
+
+  invitedById String
+  invitedBy   User     @relation("PlatformInviteAuthor", fields: [invitedById], references: [id], onDelete: Restrict)
+  createdAt   DateTime @default(now())
+  updatedAt   DateTime @updatedAt
+
+  @@index([status, createdAt])
+  @@index([email])
+}
+
+enum PlatformInviteStatus {
+  SENT
+  OPENED
+  ACCEPTED
+  EXPIRED
+  REVOKED
+}
+
 // Page 9 — platform-side notes about an end-user. Same shape as
 // TenantNote but the subject is a User (the person an admin is
 // investigating) rather than a Tenant. Visible to all platform staff
@@ -1232,6 +1297,9 @@ model User {
   // Page 11 — platform team memberships + on-call shifts.
   teamMemberships      PlatformTeamMember[]
   onCallShifts         OnCallShift[]
+
+  // Page 12 — platform-admin invitations authored by this admin.
+  platformInvitesAuthored PlatformInvite[] @relation("PlatformInviteAuthor")
 }
 
 // Platform-side roles. The first three (SUPER_ADMIN, SITE_MANAGER,
@@ -5653,6 +5721,8 @@ model CustomPlatformRole {
   // Reverse side of User.customPlatformRole — lets us count members
   // and detach them on archive without a second query.
   members User[]
+  // Page 12 — invites that pre-assign this custom role on accept.
+  pendingInvites PlatformInvite[]
 
   @@index([status])
 }
