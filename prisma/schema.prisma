@@ -5714,6 +5714,13 @@ enum CouponStatus {
   ARCHIVED  // hidden from active lists, kept for audit history
 }
 
+// Page 20 — how long the discount sticks once redeemed.
+enum CouponDuration {
+  ONCE       // one-time discount on next invoice
+  REPEATING  // applies for N months (durationMonths)
+  FOREVER    // applies indefinitely while subscription is active
+}
+
 model Coupon {
   id             String             @id @default(cuid())
   // Customer-visible code, normalized to upper-case at creation. Unique
@@ -5728,6 +5735,9 @@ model Coupon {
   stripeCouponId String?            @unique
   stripeSyncedAt DateTime?
   description    String?            // internal note — never shown to tenant
+  // Page 20 — separate human-friendly internal name distinct from the
+  // public code. e.g. code "LAUNCH26", name "Q2 launch promo".
+  name           String?
   discountType   CouponDiscountType
   // Percent (1-100) when type=PERCENT, minor units (cents) when type=FIXED.
   amount         Int
@@ -5737,9 +5747,28 @@ model Coupon {
   // Plan slugs this coupon applies to. Empty = applies to any plan.
   // Stored as lowercase slugs to match PricingPlan.slug.
   appliesToPlans String[]           @default([])
+  // Page 20 — applicable tenant scope. Empty = applies to any tenant.
+  appliesToTenantIds String[]       @default([])
   // null = unlimited.
   maxRedemptions Int?
+  // Page 20 — per-customer cap (in addition to global maxRedemptions).
+  maxRedemptionsPerCustomer Int?
   redeemedCount  Int                @default(0)
+  // Page 20 — duration of the discount once redeemed.
+  duration         CouponDuration   @default(ONCE)
+  /** Months the discount repeats; only used when duration=REPEATING. */
+  durationMonths   Int?
+  // Page 20 — eligibility gates. minSubscriptionAmount in minor units of
+  // the invoice currency. firstTimeOnly = first redemption per tenant.
+  // newTenantsOnlyDays = only tenants signed up within this many days.
+  minSubscriptionAmount Int?
+  firstTimeOnly         Boolean @default(false)
+  newTenantsOnlyDays    Int?
+  // Page 20 — stackable with other coupons on the same invoice.
+  stackable             Boolean @default(false)
+  // Page 20 — surface on /pricing as a public discount banner. Only
+  // honored if status=ACTIVE and code is marketing-eligible.
+  showOnPricingPage     Boolean @default(false)
   validFrom      DateTime           @default(now())
   validUntil     DateTime?
   status         CouponStatus       @default(ACTIVE)
@@ -5752,9 +5781,61 @@ model Coupon {
   // Reverse side of Tenant.activeCoupon — lets us list "tenants
   // currently sitting on this coupon" without a separate query.
   activeForTenants Tenant[]            @relation("TenantActiveCoupon")
+  // Page 20 — back-relation for promotions referencing this coupon.
+  promotions       Promotion[]
 
   @@index([status, validUntil])
   @@index([createdById])
+}
+
+// ─────────────────────────────────────────────────────────────────
+// Page 20 — Promotions.
+//
+// A Promotion bundles a Coupon (the redemption mechanic) with the
+// marketing surfaces around it: landing-page URL, email-template kind,
+// audience description, run window, and a goal/metric line for the
+// admin to track success against. Promotions are reporting metadata —
+// they don't change how a Coupon is redeemed.
+// ─────────────────────────────────────────────────────────────────
+
+enum PromotionStatus {
+  DRAFT      // not yet started
+  SCHEDULED  // start date in future
+  ACTIVE     // running now
+  ENDED      // past end date or manually ended
+  ARCHIVED   // hidden from the active list
+}
+
+model Promotion {
+  id          String          @id @default(cuid())
+  /** Internal name e.g. "Q2 launch", "Black Friday 2026". */
+  name        String
+  /** Marketing description / objective shown in the admin list. */
+  description String?
+  /** The coupon this promotion drives. Multiple promotions can share a
+   *  coupon (e.g. test variants of the same code) but most map 1:1. */
+  couponId    String
+  coupon      Coupon          @relation(fields: [couponId], references: [id], onDelete: Cascade)
+  /** Marketing landing URL the email/ads point at. Free-form so it can
+   *  be any /pricing/q2 or external site. */
+  landingUrl  String?
+  /** Notification template kind to send (matches NotificationTemplate.kind). */
+  emailTemplateKind String?
+  /** Free-form audience description: "Trial tenants ≥ 14 days old",
+   *  "All US sign shops", etc. Reporting only. */
+  audience    String?
+  /** Goal line: "500 redemptions, 10% conversion lift". */
+  goal        String?
+  /** Window. Either side may be null for open-ended runs. */
+  startsAt    DateTime?
+  endsAt      DateTime?
+  status      PromotionStatus @default(DRAFT)
+  createdById String
+  createdAt   DateTime        @default(now())
+  updatedAt   DateTime        @updatedAt
+
+  @@index([status, startsAt])
+  @@index([couponId])
 }
 
 model CouponRedemption {

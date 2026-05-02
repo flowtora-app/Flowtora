@@ -117,7 +117,7 @@ async function seedInvoices(adminId: string) {
     status: "DRAFT" | "SENT" | "PAID" | "REFUNDED";
     issuedDaysAgo: number;
     line: { description: string; qty: number; unit: number };
-    paymentStatus: "succeeded" | "failed" | "refunded";
+    paymentStatus: "succeeded" | "failed" | "refunded" | "pending";
     note: string;
   }) {
     const number = await nextInvoiceNumber();

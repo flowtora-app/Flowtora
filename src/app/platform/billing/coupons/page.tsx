@@ -14,6 +14,8 @@ import {
   detachCouponFromTenant,
 } from "@/app/actions/platform-billing";
 import type { Coupon, CouponStatus } from "@prisma/client";
+import { PromotionsTab } from "./_components/PromotionsTab";
+import { PerformanceTab } from "./_components/PerformanceTab";
 
 // /platform/billing/coupons — mint, list, archive, apply.
 //
@@ -38,7 +40,11 @@ type SP = {
   error?: string;
   status?: string;
   q?: string;
+  tab?: string;
 };
+
+type TabKey = "coupons" | "promotions" | "performance";
+const TAB_KEYS: TabKey[] = ["coupons", "promotions", "performance"];
 
 const MESSAGES: Record<string, string> = {
   created:        "Coupon minted.",
@@ -59,6 +65,60 @@ export default async function CouponsPage({
   const sp = await searchParams;
   const canWrite = ctx.can("billing.coupon");
 
+  const tab: TabKey = (TAB_KEYS as readonly string[]).includes((sp.tab ?? "") as string)
+    ? (sp.tab as TabKey)
+    : "coupons";
+
+  return (
+    <div className="space-y-6">
+      <Header />
+      {sp.ok    ? <Toast tone="ok"    msg={MESSAGES[sp.ok] ?? "Done"} /> : null}
+      {sp.error ? <Toast tone="error" msg={sp.error} /> : null}
+      <TabBar active={tab} />
+
+      {tab === "coupons" && (
+        await renderCouponsTab(sp, canWrite)
+      )}
+      {tab === "promotions" && (
+        await renderPromotionsTab(canWrite)
+      )}
+      {tab === "performance" && (
+        await renderPerformanceTab()
+      )}
+    </div>
+  );
+}
+
+function TabBar({ active }: { active: TabKey }) {
+  const items: { key: TabKey; label: string }[] = [
+    { key: "coupons",     label: "Coupons" },
+    { key: "promotions",  label: "Promotions" },
+    { key: "performance", label: "Code Performance" },
+  ];
+  return (
+    <div className="flex items-center gap-0 border-b" style={{ borderColor: "var(--border-subtle)" }}>
+      {items.map((it) => {
+        const isActive = it.key === active;
+        return (
+          <Link
+            key={it.key}
+            href={it.key === "coupons" ? "/platform/billing/coupons" : `/platform/billing/coupons?tab=${it.key}`}
+            className="ts-focus relative px-4 py-2 text-[13px] font-medium"
+            style={{
+              color: isActive ? "var(--text-default)" : "var(--text-muted)",
+              borderBottom: isActive ? "2px solid var(--accent-primary)" : "2px solid transparent",
+              marginBottom: "-1px",
+            }}
+          >
+            {it.label}
+          </Link>
+        );
+      })}
+    </div>
+  );
+}
+
+async function renderCouponsTab(sp: SP, canWrite: boolean) {
   const statusFilter: StatusFilter = (STATUS_FILTERS as readonly string[]).includes((sp.status ?? "ALL").toUpperCase())
     ? ((sp.status ?? "ALL").toUpperCase() as StatusFilter)
     : "ALL";
@@ -70,6 +130,7 @@ export default async function CouponsPage({
       ...(q ? { OR: [
         { code: { contains: q, mode: "insensitive" } },
         { description: { contains: q, mode: "insensitive" } },
+        { name: { contains: q, mode: "insensitive" } },
       ] } : {}),
     },
     orderBy: [{ status: "asc" }, { createdAt: "desc" }],
@@ -80,16 +141,18 @@ export default async function CouponsPage({
     },
   });
 
-  const [activeCount, draftCount, archivedCount, expiringCount, redemptionTotal, applied] = await Promise.all([
+  const since30 = new Date(Date.now() - 30 * 86_400_000);
+  const [activeCount, draftCount, archivedCount, expiringCount, redemptionsThisPeriod, redemptionTotal, applied, discountAgg] = await Promise.all([
     db.coupon.count({ where: { status: "ACTIVE" } }),
     db.coupon.count({ where: { status: "DRAFT" } }),
     db.coupon.count({ where: { status: "ARCHIVED" } }),
     db.coupon.count({
       where: {
         status: "ACTIVE",
-        validUntil: { not: null, lt: new Date(Date.now() + 30 * 24 * 60 * 60 * 1000) },
+        validUntil: { not: null, lt: new Date(Date.now() + 30 * 86_400_000) },
       },
     }),
+    db.couponRedemption.count({ where: { createdAt: { gte: since30 } } }),
     db.couponRedemption.count(),
     db.tenant.findMany({
       where: { activeCouponId: { not: null } },
@@ -98,6 +161,10 @@ export default async function CouponsPage({
         activeCoupon: { select: { code: true, discountType: true, amount: true, currency: true } },
       },
       take: 50,
+    }),
+    db.couponRedemption.aggregate({
+      where: { createdAt: { gte: since30 } },
+      _sum: { appliedAmount: true },
     }),
   ]);
 
@@ -108,18 +175,19 @@ export default async function CouponsPage({
     take: 500,
   });
 
-  return (
-    <div className="space-y-6">
-      <Header />
-      {sp.ok    ? <Toast tone="ok"    msg={MESSAGES[sp.ok] ?? "Done"} /> : null}
-      {sp.error ? <Toast tone="error" msg={sp.error} /> : null}
+  const totalDiscounted30d = discountAgg._sum.appliedAmount ?? 0;
 
-      <div className="grid grid-cols-2 gap-3 md:grid-cols-5">
-        <Kpi label="Active"            value={String(activeCount)} />
-        <Kpi label="Drafts"            value={String(draftCount)} />
-        <Kpi label="Archived"          value={String(archivedCount)} />
-        <Kpi label="Expiring 30d"      value={String(expiringCount)} tone={expiringCount > 0 ? "warn" : "default"} />
-        <Kpi label="Total redemptions" value={String(redemptionTotal)} />
+  return (
+    <>
+      <div className="grid grid-cols-2 gap-3 md:grid-cols-6">
+        <Kpi label="Active"             value={String(activeCount)} />
+        <Kpi label="Redemptions · 30d"  value={String(redemptionsThisPeriod)} />
+        <Kpi label="$ discounted · 30d" value={totalDiscounted30d > 0
+          ? formatMoney(totalDiscounted30d, "USD")
+          : "—"} />
+        <Kpi label="Drafts"             value={String(draftCount)} />
+        <Kpi label="Archived"           value={String(archivedCount)} />
+        <Kpi label="Expiring 30d"       value={String(expiringCount)} tone={expiringCount > 0 ? "warn" : "default"} />
       </div>
 
       <MintForm disabled={!canWrite} />
@@ -130,6 +198,7 @@ export default async function CouponsPage({
         q={q}
         canWrite={canWrite}
         tenantsForApply={tenantsForApply}
+        totalRedemptions={redemptionTotal}
       />
 
       {applied.length > 0 && (
@@ -138,8 +207,113 @@ export default async function CouponsPage({
           canWrite={canWrite}
         />
       )}
-    </div>
+    </>
   );
+}
+
+async function renderPromotionsTab(canWrite: boolean) {
+  const [promotions, coupons] = await Promise.all([
+    db.promotion.findMany({
+      orderBy: [{ status: "asc" }, { startsAt: "desc" }, { createdAt: "desc" }],
+      take: 200,
+      include: {
+        coupon: { select: { code: true, discountType: true, amount: true, currency: true } },
+      },
+    }),
+    db.coupon.findMany({
+      where: { status: { in: ["ACTIVE", "DRAFT"] } },
+      select: { id: true, code: true },
+      orderBy: { code: "asc" },
+    }),
+  ]);
+
+  // Resolve total redemptions per coupon for "results" column.
+  const couponIds = Array.from(new Set(promotions.map((p) => p.couponId)));
+  const redemptionAgg = couponIds.length === 0 ? [] : await db.couponRedemption.groupBy({
+    by: ["couponId"],
+    where: { couponId: { in: couponIds } },
+    _count: { _all: true },
+    _sum: { appliedAmount: true },
+  });
+  const aggByCoupon = new Map(redemptionAgg.map((r) => [r.couponId, r]));
+
+  return (
+    <PromotionsTab
+      promotions={promotions.map((p) => {
+        const agg = aggByCoupon.get(p.couponId);
+        return {
+          id: p.id, name: p.name, description: p.description,
+          status: p.status, startsAt: p.startsAt, endsAt: p.endsAt,
+          landingUrl: p.landingUrl, audience: p.audience, goal: p.goal,
+          emailTemplateKind: p.emailTemplateKind,
+          coupon: { id: p.couponId, code: p.coupon.code,
+                    discountType: p.coupon.discountType,
+                    amount: p.coupon.amount,
+                    currency: p.coupon.currency },
+          redemptionCount: agg?._count._all ?? 0,
+          totalDiscounted: agg?._sum.appliedAmount ?? 0,
+        };
+      })}
+      couponOptions={coupons}
+      canWrite={canWrite}
+    />
+  );
+}
+
+async function renderPerformanceTab() {
+  // Group by coupon, aggregate redemptions, $ discounted, distinct tenants.
+  const [aggCount, aggSum, coupons] = await Promise.all([
+    db.couponRedemption.groupBy({
+      by: ["couponId"],
+      _count: { _all: true },
+    }),
+    db.couponRedemption.groupBy({
+      by: ["couponId"],
+      _sum: { appliedAmount: true },
+    }),
+    db.coupon.findMany({
+      orderBy: { code: "asc" },
+      select: {
+        id: true, code: true, name: true, status: true,
+        discountType: true, amount: true, currency: true,
+        maxRedemptions: true, validUntil: true, createdAt: true,
+      },
+    }),
+  ]);
+
+  // Distinct tenants per coupon — small enough to query per-coupon for now.
+  const distinctMap = new Map<string, number>();
+  for (const c of coupons) {
+    const distinct = await db.couponRedemption.findMany({
+      where: { couponId: c.id },
+      distinct: ["tenantId"],
+      select: { tenantId: true },
+    });
+    distinctMap.set(c.id, distinct.length);
+  }
+
+  const countMap = new Map(aggCount.map((a) => [a.couponId, a._count._all]));
+  const sumMap = new Map(aggSum.map((a) => [a.couponId, a._sum.appliedAmount ?? 0]));
+
+  const rows = coupons
+    .map((c) => ({
+      id: c.id,
+      code: c.code,
+      name: c.name,
+      status: c.status,
+      discountType: c.discountType,
+      amount: c.amount,
+      currency: c.currency,
+      cap: c.maxRedemptions,
+      validUntil: c.validUntil,
+      createdAt: c.createdAt,
+      redemptions: countMap.get(c.id) ?? 0,
+      discountedTotal: sumMap.get(c.id) ?? 0,
+      uniqueTenants: distinctMap.get(c.id) ?? 0,
+    }))
+    .sort((a, b) => b.redemptions - a.redemptions || b.discountedTotal - a.discountedTotal);
+
+  return <PerformanceTab rows={rows} />;
 }
 
 /* ────────────────────────────────────────────────────────────── */
@@ -236,6 +410,15 @@ function MintForm({ disabled }: { disabled: boolean }) {
             style={{ background: "var(--surface-1)", borderColor: "var(--border-subtle)", color: "var(--text-default)" }}
           />
         </Field>
+        <Field label="Internal name" hint="Friendly label distinct from the code">
+          <input
+            type="text" name="name" disabled={disabled}
+            placeholder="Q2 launch promo"
+            maxLength={120}
+            className="ts-focus w-full rounded-md border px-3 py-2 text-[13px]"
+            style={{ background: "var(--surface-1)", borderColor: "var(--border-subtle)", color: "var(--text-default)" }}
+          />
+        </Field>
         <Field label="Type" required>
           <select
             name="discountType" required disabled={disabled}
@@ -290,6 +473,13 @@ function MintForm({ disabled }: { disabled: boolean }) {
             style={{ background: "var(--surface-1)", borderColor: "var(--border-subtle)", color: "var(--text-default)" }}
           />
         </Field>
+        <Field label="Valid from" hint="Blank = effective immediately">
+          <input
+            type="date" name="validFrom" disabled={disabled}
+            className="ts-focus w-full rounded-md border px-3 py-2 text-[13px]"
+            style={{ background: "var(--surface-1)", borderColor: "var(--border-subtle)", color: "var(--text-default)" }}
+          />
+        </Field>
         <Field label="Valid until" hint="Blank = no expiry">
           <input
             type="date" name="validUntil" disabled={disabled}
@@ -297,6 +487,83 @@ function MintForm({ disabled }: { disabled: boolean }) {
             style={{ background: "var(--surface-1)", borderColor: "var(--border-subtle)", color: "var(--text-default)" }}
           />
         </Field>
+        <Field label="Duration" required>
+          <select
+            name="duration" defaultValue="ONCE" disabled={disabled}
+            className="ts-focus w-full rounded-md border px-3 py-2 text-[13px]"
+            style={{ background: "var(--surface-1)", borderColor: "var(--border-subtle)", color: "var(--text-default)" }}
+          >
+            <option value="ONCE">Once — next invoice only</option>
+            <option value="REPEATING">Repeating — N months</option>
+            <option value="FOREVER">Forever — while active</option>
+          </select>
+        </Field>
+        <Field label="Duration months" hint="Only used when duration = Repeating">
+          <input
+            type="number" name="durationMonths" min={1} max={60} disabled={disabled}
+            placeholder="3"
+            className="ts-focus w-full rounded-md border px-3 py-2 text-[13px]"
+            style={{ background: "var(--surface-1)", borderColor: "var(--border-subtle)", color: "var(--text-default)" }}
+          />
+        </Field>
+
+        <div className="md:col-span-4">
+          <details>
+            <summary
+              className="cursor-pointer text-[12px] font-medium"
+              style={{ color: "var(--accent-primary)" }}
+            >
+              Advanced (eligibility + visibility)
+            </summary>
+            <div className="mt-3 grid grid-cols-2 gap-3 md:grid-cols-4">
+              <Field label="Per-customer cap" hint="Blank = no per-customer limit">
+                <input
+                  type="number" name="maxRedemptionsPerCustomer" min={1} disabled={disabled}
+                  placeholder="1"
+                  className="ts-focus w-full rounded-md border px-3 py-2 text-[13px]"
+                  style={{ background: "var(--surface-1)", borderColor: "var(--border-subtle)", color: "var(--text-default)" }}
+                />
+              </Field>
+              <Field label="Min subscription amount" hint="Minor units (cents). Blank = no minimum">
+                <input
+                  type="number" name="minSubscriptionAmount" min={0} disabled={disabled}
+                  placeholder="5000"
+                  className="ts-focus w-full rounded-md border px-3 py-2 text-[13px]"
+                  style={{ background: "var(--surface-1)", borderColor: "var(--border-subtle)", color: "var(--text-default)" }}
+                />
+              </Field>
+              <Field label="New tenants only (days)" hint="Tenants signed up in last N days">
+                <input
+                  type="number" name="newTenantsOnlyDays" min={1} max={365} disabled={disabled}
+                  placeholder="30"
+                  className="ts-focus w-full rounded-md border px-3 py-2 text-[13px]"
+                  style={{ background: "var(--surface-1)", borderColor: "var(--border-subtle)", color: "var(--text-default)" }}
+                />
+              </Field>
+              <Field label="Applies to tenants" hint="Comma-separated tenant IDs; blank = any">
+                <input
+                  type="text" name="appliesToTenantIds" disabled={disabled}
+                  placeholder="cm... , cm..."
+                  className="ts-focus w-full rounded-md border px-3 py-2 text-[13px]"
+                  style={{ background: "var(--surface-1)", borderColor: "var(--border-subtle)", color: "var(--text-default)" }}
+                />
+              </Field>
+              <label className="md:col-span-2 flex items-center gap-2 text-[12px]" style={{ color: "var(--text-default)" }}>
+                <input type="checkbox" name="firstTimeOnly" disabled={disabled} />
+                <span>First-time customers only</span>
+              </label>
+              <label className="md:col-span-2 flex items-center gap-2 text-[12px]" style={{ color: "var(--text-default)" }}>
+                <input type="checkbox" name="stackable" disabled={disabled} />
+                <span>Stackable with other coupons</span>
+              </label>
+              <label className="md:col-span-2 flex items-center gap-2 text-[12px]" style={{ color: "var(--text-default)" }}>
+                <input type="checkbox" name="showOnPricingPage" disabled={disabled} />
+                <span>Show on the public /pricing page (marketing-eligible only)</span>
+              </label>
+            </div>
+          </details>
+        </div>
+
         <div className="md:col-span-4 flex items-end justify-between gap-3">
           <div className="text-[11px]" style={{ color: "var(--text-muted)" }}>
             New coupons default to <strong>ACTIVE</strong> and start working immediately.
@@ -327,13 +594,17 @@ function CouponsTable({
   q,
   canWrite,
   tenantsForApply,
+  totalRedemptions,
 }: {
   coupons: CouponWithCounts[];
   statusFilter: StatusFilter;
   q: string;
   canWrite: boolean;
   tenantsForApply: { id: string; name: string; slug: string }[];
+  totalRedemptions: number;
 }) {
+  void totalRedemptions; // surfaced via per-row count; preserved for future totals row
+
   return (
     <section className="rounded-lg border" style={{ background: "var(--surface-1)", borderColor: "var(--border-subtle)" }}>
       <div className="flex flex-wrap items-center justify-between gap-3 border-b px-4 py-3" style={{ borderColor: "var(--border-subtle)" }}>

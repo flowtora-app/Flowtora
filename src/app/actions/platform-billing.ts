@@ -38,12 +38,24 @@ const CODE_RX = /^[A-Z0-9][A-Z0-9_-]{2,31}$/;
 
 const couponCreateSchema = z.object({
   code: z.string().trim().toUpperCase().regex(CODE_RX, "Code must be 3-32 chars: letters, numbers, dash or underscore"),
+  name: z.string().trim().max(120).optional().or(z.literal("")),
   description: z.string().trim().max(500).optional().or(z.literal("")),
   discountType: z.enum(["PERCENT", "FIXED"]),
   amount: z.coerce.number().int().min(1),
   currency: z.string().trim().toUpperCase().optional().or(z.literal("")),
   appliesToPlans: z.string().optional(),  // comma-separated slugs, blank = any
+  appliesToTenantIds: z.string().optional(), // comma-separated tenant IDs, blank = any
   maxRedemptions: z.coerce.number().int().min(1).optional(),
+  maxRedemptionsPerCustomer: z.coerce.number().int().min(1).optional(),
+  // Page 20 — duration mechanics.
+  duration: z.enum(["ONCE", "REPEATING", "FOREVER"]).default("ONCE"),
+  durationMonths: z.coerce.number().int().min(1).max(60).optional(),
+  minSubscriptionAmount: z.coerce.number().int().min(0).optional(),
+  firstTimeOnly: z.union([z.literal("on"), z.literal("")]).optional(),
+  newTenantsOnlyDays: z.coerce.number().int().min(1).max(365).optional(),
+  stackable: z.union([z.literal("on"), z.literal("")]).optional(),
+  showOnPricingPage: z.union([z.literal("on"), z.literal("")]).optional(),
+  validFrom: z.string().optional().or(z.literal("")),
   validUntil: z.string().optional().or(z.literal("")),
   status: z.enum(["DRAFT", "ACTIVE"]).default("ACTIVE"),
 });
@@ -85,16 +97,43 @@ export async function createCoupon(formData: FormData) {
     .split(",")
     .map((s) => s.trim().toLowerCase())
     .filter(Boolean);
+  const tenantIds = (d.appliesToTenantIds ?? "")
+    .split(",")
+    .map((s) => s.trim())
+    .filter(Boolean);
+
+  // Page 20 — REPEATING duration must have durationMonths.
+  if (d.duration === "REPEATING" && (!d.durationMonths || d.durationMonths < 1)) {
+    redirect(`/platform/billing/coupons?error=${encodeURIComponent("Repeating duration needs a month count")}`);
+  }
+
+  const validFrom = d.validFrom && d.validFrom.trim() !== ""
+    ? new Date(d.validFrom)
+    : new Date();
+  if (Number.isNaN(validFrom.getTime())) {
+    redirect(`/platform/billing/coupons?error=${encodeURIComponent("Invalid start date")}`);
+  }
 
   const created = await db.coupon.create({
     data: {
       code: d.code,
+      name: d.name?.trim() || null,
       description: d.description?.trim() || null,
       discountType: d.discountType,
       amount: d.amount,
       currency: d.discountType === "PERCENT" ? null : (d.currency ?? null),
       appliesToPlans: planSlugs,
+      appliesToTenantIds: tenantIds,
       maxRedemptions: d.maxRedemptions ?? null,
+      maxRedemptionsPerCustomer: d.maxRedemptionsPerCustomer ?? null,
+      duration: d.duration,
+      durationMonths: d.duration === "REPEATING" ? (d.durationMonths ?? null) : null,
+      minSubscriptionAmount: d.minSubscriptionAmount ?? null,
+      firstTimeOnly: d.firstTimeOnly === "on",
+      newTenantsOnlyDays: d.newTenantsOnlyDays ?? null,
+      stackable: d.stackable === "on",
+      showOnPricingPage: d.showOnPricingPage === "on",
+      validFrom,
       validUntil,
       status: d.status,
       createdById: ctx.userId,
