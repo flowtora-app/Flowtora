@@ -44,6 +44,7 @@ const NAV_ITEMS: NavItem[] = [
   { href: "/platform/billing",          label: "Subscriptions",     icon: "Revenue" },
   { href: "/platform/billing/invoices", label: "Invoices",          icon: "Invoices" },
   { href: "/platform/billing/payments", label: "Payments",          icon: "Payments" },
+  { href: "/platform/billing/refunds",  label: "Refunds & Disputes", icon: "Scale" },
   { href: "/platform/users",            label: "Users",             icon: "Customers" },
   { href: "/platform/access/roles",     label: "Roles & Permissions", icon: "Approvals" },
   { href: "/platform/access/teams",     label: "Teams",             icon: "User" },

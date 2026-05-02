@@ -403,6 +403,9 @@ model Tenant {
   // (which is the shop → end-customer invoicing surface).
   platformInvoices    PlatformBillingInvoice[]
   couponRedemptions   CouponRedemption[]
+  // Page 18 — Refunds & Disputes back-relations.
+  platformPaymentRefunds PlatformPaymentRefund[]
+  platformDisputes       PlatformDispute[]
 }
 
 // ────────────────────────────────────────────────────────────
@@ -5811,6 +5814,9 @@ model PlatformBillingInvoice {
   redemptions CouponRedemption[]
   payments    PlatformInvoicePayment[]
   creditNotes PlatformCreditNote[]
+  /** Page 18 — refunds + disputes initiated against this invoice. */
+  paymentRefunds PlatformPaymentRefund[]
+  disputes       PlatformDispute[]
 
   @@index([tenantId, status])
   @@index([status, issuedAt])
@@ -5853,9 +5859,152 @@ model PlatformInvoicePayment {
   refundedAt  DateTime?
 
   invoice PlatformBillingInvoice @relation(fields: [invoiceId], references: [id], onDelete: Cascade)
+  refunds PlatformPaymentRefund[]
+  dispute PlatformDispute?
 
   @@index([invoiceId, attemptedAt])
   @@index([status, attemptedAt])
+}
+
+// ────────────────────────────────────────────────────────────
+// Page 18 — Refunds & Disputes.
+//
+// PlatformPaymentRefund captures every refund a platform admin
+// initiates against a PlatformInvoicePayment. Distinct from the
+// tenant-side `Refund` model (which lives at the workspace level —
+// tenants refunding *their* customers).
+//
+// PlatformDispute tracks chargebacks — gateway-initiated disputes
+// against our platform charges. Evidence flows through the dispute
+// detail page; the gateway-side resolution is captured via the
+// status enum + resolvedAt.
+//
+// ChargebackEvidenceTemplate stores reusable evidence drafts — body
+// uses {tenant}, {amount}, {date} placeholders that the submit-
+// evidence form interpolates against the live dispute.
+// ────────────────────────────────────────────────────────────
+
+enum PlatformRefundReason {
+  CUSTOMER_REQUEST
+  FRAUD
+  DUPLICATE
+  SUBSCRIPTION_MISTAKE
+  SERVICE_ISSUE
+  OTHER
+}
+
+enum PlatformRefundStatus {
+  PENDING
+  SUCCEEDED
+  FAILED
+}
+
+model PlatformPaymentRefund {
+  id        String @id @default(cuid())
+  paymentId String
+  invoiceId String
+  tenantId  String
+
+  /** Minor units of the payment currency. */
+  amount        Int
+  reason        PlatformRefundReason
+  /** Free-form note expanding on the reason — internal only when
+   *  customerNote is null. */
+  reasonNote    String?
+  internalNote  String?
+  customerNote  String?
+
+  /** When true, refund is issued as an internal credit (CN-N row)
+   *  instead of pushed back to the gateway. */
+  asCredit     Boolean @default(false)
+  /** When asCredit=true, points at the minted PlatformCreditNote.
+   *  Captured here so reporting can reconcile both sides. */
+  creditNoteId String?
+
+  status        PlatformRefundStatus @default(PENDING)
+  failureReason String?
+  /** Stripe / gateway refund id once settled. */
+  gatewayRefundId String?
+
+  initiatedAt DateTime  @default(now())
+  completedAt DateTime?
+  initiatedBy String
+
+  payment PlatformInvoicePayment @relation(fields: [paymentId], references: [id], onDelete: Cascade)
+  invoice PlatformBillingInvoice @relation(fields: [invoiceId], references: [id], onDelete: Cascade)
+  tenant  Tenant                 @relation(fields: [tenantId], references: [id], onDelete: Cascade)
+
+  @@index([tenantId, initiatedAt])
+  @@index([status, initiatedAt])
+  @@index([paymentId])
+}
+
+enum PlatformDisputeStatus {
+  NEEDS_RESPONSE
+  UNDER_REVIEW
+  WON
+  LOST
+}
+
+model PlatformDispute {
+  id String @id @default(cuid())
+  /** One dispute per platform payment (the gateway model is 1:1). */
+  paymentId String  @unique
+  invoiceId String
+  tenantId  String
+
+  /** Gateway-side dispute id. */
+  gatewayDisputeId String? @unique
+  /** Disputed amount (minor units). */
+  amount     Int
+  /** Gateway-supplied code — varies. */
+  reasonCode String?
+  /** Display reason — friendlier than the code. */
+  reason     String
+
+  status PlatformDisputeStatus @default(NEEDS_RESPONSE)
+
+  /** Gateway's submission deadline. */
+  evidenceDueAt    DateTime?
+  /** Free-form evidence text the admin assembled. */
+  evidenceText     String?
+  /** When evidence was actually submitted to the gateway. */
+  submittedEvidenceAt DateTime?
+  /** When the admin clicked "Accept dispute" — concedes the loss. */
+  acceptedAt DateTime?
+  acceptedBy String?
+  /** When the gateway resolved (won or lost). */
+  resolvedAt DateTime?
+
+  /** Snapshot of customer history captured at submission. JSON
+   *  shape: { tenantStatus, lastLoginAt, mrr, lifetimeValue, ... }. */
+  contextSnapshot Json?
+
+  createdAt DateTime @default(now())
+  updatedAt DateTime @updatedAt
+
+  payment PlatformInvoicePayment @relation(fields: [paymentId], references: [id], onDelete: Cascade)
+  invoice PlatformBillingInvoice @relation(fields: [invoiceId], references: [id], onDelete: Cascade)
+  tenant  Tenant                 @relation(fields: [tenantId], references: [id], onDelete: Cascade)
+
+  @@index([status, evidenceDueAt])
+  @@index([tenantId, createdAt])
+}
+
+/** Page 18 §Chargeback Evidence Library — reusable evidence
+ *  drafts. Body supports {tenant}, {amount}, {date} placeholders;
+ *  the submit-evidence form interpolates them at use time. */
+model ChargebackEvidenceTemplate {
+  id          String  @id @default(cuid())
+  name        String
+  description String?
+  body        String
+
+  createdAt DateTime @default(now())
+  createdBy String
+  updatedAt DateTime @updatedAt
+
+  @@index([name])
 }
 
 // Page 16 — credit note. Issued against an invoice (full or partial)
