@@ -42,6 +42,14 @@ const nextConfig: NextConfig = {
     // still the effective ceiling on hosted deployments.
     serverActions: { bodySizeLimit: "220mb" },
   },
+  // ESLint runs in CI separately + at every commit via the editor; making
+  // the build re-run lint over the whole tree adds ~1.5GB to the build
+  // process and pushes Vercel over its memory ceiling. TypeScript still
+  // runs (it's the load-bearing check), so we get the same correctness
+  // guarantees.
+  eslint: {
+    ignoreDuringBuilds: true,
+  },
   async headers() {
     return [
       {
@@ -68,6 +76,16 @@ const nextConfig: NextConfig = {
 // server errors get auto-instrumented. Requires SENTRY_AUTH_TOKEN at
 // build time to upload sourcemaps; without it the build still succeeds
 // but uploads are skipped.
+//
+// The Sentry webpack plugin reads every chunk into memory while uploading
+// source maps — on builds with our number of routes that pushes us past
+// Vercel's per-build memory ceiling. We disable upload entirely on
+// preview deploys (only Production gets full source-map symbolication)
+// and skip when no auth token is present.
+const isProductionDeploy = process.env.VERCEL_ENV === "production";
+const hasSentryToken = !!process.env.SENTRY_AUTH_TOKEN;
+const uploadSourceMaps = isProductionDeploy && hasSentryToken;
+
 export default withSentryConfig(nextConfig, {
   org: "flowtora",
   project: "flowtora",
@@ -79,4 +97,9 @@ export default withSentryConfig(nextConfig, {
   // Route Sentry tunnel through /monitoring so ad-blockers don't
   // swallow client-side errors. Cheap and invisible.
   tunnelRoute: "/monitoring",
+  // Skip the heavy upload step on preview deploys (or any build without
+  // a Sentry token). Saves ~1.2 GB of build memory per chunk pass.
+  sourcemaps: {
+    disable: !uploadSourceMaps,
+  },
 });
