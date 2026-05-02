@@ -94,20 +94,20 @@ export function RowMenu({
                 style={{ color: "var(--text-default)" }}>
             Open in tenant detail
           </Link>
-          <Link href={`/platform/billing/subscriptions/${row.tenantId}`} role="menuitem"
+          <Link href={`/platform/billing/${row.tenantId}`} role="menuitem"
                 className="block px-3 py-2 text-[12px] hover:bg-[var(--surface-2)]"
                 style={{ color: "var(--text-default)" }}>
             Subscription detail
           </Link>
           {canEdit && (
-            <Link href={`/platform/billing/subscriptions/${row.tenantId}#change-plan`} role="menuitem"
+            <Link href={`/platform/billing/${row.tenantId}#change-plan`} role="menuitem"
                   className="block px-3 py-2 text-[12px] hover:bg-[var(--surface-2)]"
                   style={{ color: "var(--text-default)" }}>
               Change plan
             </Link>
           )}
           {canCoupon && (
-            <Link href={`/platform/billing/subscriptions/${row.tenantId}#coupon`} role="menuitem"
+            <Link href={`/platform/billing/${row.tenantId}#coupon`} role="menuitem"
                   className="block px-3 py-2 text-[12px] hover:bg-[var(--surface-2)]"
                   style={{ color: "var(--text-default)" }}>
               Apply coupon

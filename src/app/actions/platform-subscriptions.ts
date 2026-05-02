@@ -76,8 +76,8 @@ export async function changeSubscriptionPlan(formData: FormData) {
     },
     severity: "WARNING",
   });
-  revalidatePath("/platform/billing/subscriptions");
-  revalidatePath(`/platform/billing/subscriptions/${t.id}`);
+  revalidatePath("/platform/billing");
+  revalidatePath(`/platform/billing/${t.id}`);
   return { ok: true } as const;
 }
 
@@ -117,7 +117,7 @@ export async function applyCouponToSubscription(formData: FormData) {
     entityId: parsed.data.tenantId,
     metadata: { actor: ctx.email, couponId: parsed.data.couponId ?? null },
   });
-  revalidatePath(`/platform/billing/subscriptions/${parsed.data.tenantId}`);
+  revalidatePath(`/platform/billing/${parsed.data.tenantId}`);
   return { ok: true } as const;
 }
 
@@ -153,7 +153,7 @@ export async function pauseSubscription(formData: FormData) {
     metadata: { actor: ctx.email, pausedUntil: until.toISOString(), reason: parsed.data.reason },
     severity: "WARNING",
   });
-  revalidatePath(`/platform/billing/subscriptions/${parsed.data.tenantId}`);
+  revalidatePath(`/platform/billing/${parsed.data.tenantId}`);
   return { ok: true } as const;
 }
 
@@ -179,7 +179,7 @@ export async function resumeSubscription(formData: FormData) {
     entityId: parsed.data.tenantId,
     metadata: { actor: ctx.email },
   });
-  revalidatePath(`/platform/billing/subscriptions/${parsed.data.tenantId}`);
+  revalidatePath(`/platform/billing/${parsed.data.tenantId}`);
   return { ok: true } as const;
 }
 
@@ -243,8 +243,8 @@ export async function cancelSubscription(formData: FormData) {
     metadata: { actor: ctx.email, when: parsed.data.when, reason: parsed.data.reason },
     severity: "CRITICAL",
   });
-  revalidatePath("/platform/billing/subscriptions");
-  revalidatePath(`/platform/billing/subscriptions/${t.id}`);
+  revalidatePath("/platform/billing");
+  revalidatePath(`/platform/billing/${t.id}`);
   return { ok: true } as const;
 }
 
@@ -281,8 +281,8 @@ export async function reactivateSubscription(formData: FormData) {
     metadata: { actor: ctx.email, prevStatus: t.status },
     severity: "WARNING",
   });
-  revalidatePath("/platform/billing/subscriptions");
-  revalidatePath(`/platform/billing/subscriptions/${t.id}`);
+  revalidatePath("/platform/billing");
+  revalidatePath(`/platform/billing/${t.id}`);
   return { ok: true } as const;
 }
 
@@ -400,6 +400,6 @@ export async function addOneOffCharge(formData: FormData) {
     metadata: { actor: ctx.email, total, currency, description: parsed.data.description },
     severity: "WARNING",
   });
-  revalidatePath(`/platform/billing/subscriptions/${t.id}`);
+  revalidatePath(`/platform/billing/${t.id}`);
   return { ok: true, invoiceId: invoice.id } as const;
 }

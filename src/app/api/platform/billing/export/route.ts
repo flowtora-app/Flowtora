@@ -1,4 +1,4 @@
-// GET /api/platform/billing/subscriptions/export
+// GET /api/platform/billing/export
 //
 // CSV export of the subscriptions list honoring filters.
 

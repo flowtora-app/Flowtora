@@ -31,7 +31,7 @@ export function SubscriptionsFiltersBar({
       }
       u.delete("page");
       const q = u.toString();
-      router.replace(q ? `/platform/billing/subscriptions?${q}` : "/platform/billing/subscriptions");
+      router.replace(q ? `/platform/billing?${q}` : "/platform/billing");
     },
     [router, sp],
   );
@@ -112,7 +112,7 @@ export function SubscriptionsFiltersBar({
         </Select>
       </div>
       {hasAny && (
-        <Button size="sm" variant="ghost" onClick={() => router.replace("/platform/billing/subscriptions")}>
+        <Button size="sm" variant="ghost" onClick={() => router.replace("/platform/billing")}>
           Clear
         </Button>
       )}

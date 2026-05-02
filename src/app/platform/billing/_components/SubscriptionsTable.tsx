@@ -34,7 +34,7 @@ export function SubscriptionsTable({
   const goToPage = (n: number) => {
     const u = new URLSearchParams(sp.toString());
     u.set("page", String(n));
-    router.replace(`/platform/billing/subscriptions?${u.toString()}`);
+    router.replace(`/platform/billing?${u.toString()}`);
   };
   const totalPages = Math.max(1, Math.ceil(filteredTotal / pageSize));
 
@@ -85,7 +85,7 @@ export function SubscriptionsTable({
                 <td className="px-3 py-2">
                   <div className="flex items-center gap-2">
                     <Avatar size="xs" name={r.tenantName} src={r.logoUrl ?? undefined} />
-                    <Link href={`/platform/billing/subscriptions/${r.tenantId}`}
+                    <Link href={`/platform/billing/${r.tenantId}`}
                           className="font-semibold hover:underline"
                           style={{ color: "var(--text-default)" }}>
                       {r.tenantName}

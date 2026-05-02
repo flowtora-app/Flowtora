@@ -51,7 +51,7 @@ export default async function SubscriptionDetailPage({
   const canInvoice = ctx.can("billing.invoice");
 
   const tabHref = (id2: Tab) =>
-    `/platform/billing/subscriptions/${id}${id2 === "overview" ? "" : `?tab=${id2}`}`;
+    `/platform/billing/${id}${id2 === "overview" ? "" : `?tab=${id2}`}`;
 
   // Plan + coupon options for the action cards.
   const [plans, coupons] = await Promise.all([
@@ -73,7 +73,7 @@ export default async function SubscriptionDetailPage({
         <Breadcrumb items={[
           { label: "Platform", href: "/platform" },
           { label: "Billing" },
-          { label: "Subscriptions", href: "/platform/billing/subscriptions" },
+          { label: "Subscriptions", href: "/platform/billing" },
           { label: detail.tenantName },
         ]} />
         <div className="mt-3">
