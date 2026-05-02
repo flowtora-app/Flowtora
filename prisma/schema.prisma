@@ -7040,9 +7040,146 @@ model Affiliate {
   createdAt DateTime @default(now())
   updatedAt DateTime @updatedAt
 
-  referrals Referral[]
+  referrals       Referral[]
+  // Page 24 — Payouts.
+  payoutMethods   PartnerPayoutMethod[]
+  payouts         PartnerPayout[]
+  commissionLines PartnerCommissionLine[]
 
   @@index([status])
+}
+
+// ─────────────────────────────────────────────────────────────────
+// Page 24 — Payouts.
+//
+// Generalised payouts to partners (today: affiliates; the model is
+// designed so resellers / marketplace sellers slot in later without a
+// schema rewrite — partner identity == Affiliate FK for now).
+//
+// PartnerPayoutMethod stores how a partner gets paid (Stripe Connect /
+// ACH / PayPal / Wise / Wire) plus the detail blob the integration
+// needs. PartnerPayout is one money movement (period, total, status).
+// PartnerCommissionLine is the per-payment commission earned, with
+// holds/deductions tracked so the statement reconciles cleanly.
+//
+// Honest deferrals: actual payment-rail SDK calls (Stripe Connect
+// transfer, PayPal payout, Wise transfer) ship as schema-only — saving
+// a payout marks it PENDING; flipping to PAID still has to be a manual
+// click until the SDK is wired. Same for Stripe Connect onboarding.
+// ─────────────────────────────────────────────────────────────────
+
+enum PartnerPayoutMethodType {
+  STRIPE_CONNECT
+  ACH
+  PAYPAL
+  WISE
+  WIRE
+}
+
+enum PartnerPayoutStatus {
+  PENDING       // queued — waiting on next payout run
+  IN_TRANSIT    // dispatched to the rail
+  PAID          // settled
+  FAILED        // rail bounced — needs admin attention
+  CANCELED      // admin canceled before dispatch
+}
+
+enum PartnerCommissionLineKind {
+  COMMISSION    // earned commission on an attributed payment
+  HOLD          // funds held back (e.g. fraud risk window)
+  DEDUCTION     // refund clawback / chargeback / adjustment
+  BONUS         // one-off bonus / spiff
+}
+
+model PartnerPayoutMethod {
+  id          String                   @id @default(cuid())
+  affiliateId String
+  type        PartnerPayoutMethodType
+  /** Display label, e.g. "Chase business checking", "PayPal — alex@flowtora.com". */
+  label       String
+  /** Account snippet for the UI — last 4 / email / external IBAN.
+   *  Never the full account number — that lives at the rail. */
+  accountSnippet String?
+  /** Rail-specific external id (Stripe Connect account, PayPal payer id, etc.). */
+  externalAccountId String?
+  /** Provider-side status (configured / verified / needs_action). */
+  status      String?
+  /** When true, this is the partner's primary method. */
+  isPrimary   Boolean                  @default(false)
+  notes       String?
+  createdById String
+  createdAt   DateTime                 @default(now())
+  updatedAt   DateTime                 @updatedAt
+
+  affiliate   Affiliate @relation(fields: [affiliateId], references: [id], onDelete: Cascade)
+  payouts     PartnerPayout[]
+
+  @@index([affiliateId, isPrimary])
+}
+
+model PartnerPayout {
+  id          String              @id @default(cuid())
+  affiliateId String
+  /** Method this payout was dispatched through. Null = method removed
+   *  after dispatch (rare; we keep the row anyway for history). */
+  methodId    String?
+  /** Period covered, e.g. "2026-04" or "2026-Q2" — free-form. */
+  period      String
+  /** Total amount in minor units (USD). */
+  amount      Int
+  currency    String              @default("USD")
+  status      PartnerPayoutStatus @default(PENDING)
+  /** When the payout was scheduled to run / actually run / settled. */
+  scheduledAt DateTime
+  dispatchedAt DateTime?
+  settledAt    DateTime?
+  /** External id once the rail accepts it. */
+  externalRef  String?
+  /** Free-form failure message when status=FAILED. */
+  failureReason String?
+  /** PDF statement URL for this payout. */
+  statementUrl String?
+  notes        String?
+  createdById  String
+  createdAt    DateTime            @default(now())
+  updatedAt    DateTime            @updatedAt
+
+  affiliate Affiliate            @relation(fields: [affiliateId], references: [id], onDelete: Cascade)
+  method    PartnerPayoutMethod? @relation(fields: [methodId],    references: [id], onDelete: SetNull)
+  lines     PartnerCommissionLine[]
+
+  @@unique([affiliateId, period])
+  @@index([status, scheduledAt])
+  @@index([affiliateId, status])
+}
+
+model PartnerCommissionLine {
+  id          String                   @id @default(cuid())
+  affiliateId String
+  /** Pinned to a payout when it ships; null while still accruing. */
+  payoutId    String?
+  /** What kind of line — commission / hold / deduction / bonus. */
+  kind        PartnerCommissionLineKind
+  /** Free-form description shown on the statement. */
+  description String
+  /** Source payment that generated this commission (when kind=COMMISSION). */
+  sourcePaymentId String?
+  /** Tenant the commission was attributed against. */
+  tenantId    String?
+  /** Earned-amount in minor units (positive). For DEDUCTION rows we
+   *  still store positive amounts; the kind enum signals the sign. */
+  amount      Int
+  /** Period the line is associated with — used to bucket into payouts. */
+  period      String
+  /** When the line was generated. */
+  earnedAt    DateTime                  @default(now())
+  notes       String?
+
+  affiliate Affiliate     @relation(fields: [affiliateId], references: [id], onDelete: Cascade)
+  payout    PartnerPayout? @relation(fields: [payoutId], references: [id], onDelete: SetNull)
+
+  @@index([affiliateId, period])
+  @@index([payoutId])
 }
 
 model Referral {

@@ -60,6 +60,7 @@ const NAV_ITEMS: NavItem[] = [
   { href: "/platform/billing/tax",      label: "Tax & Compliance",  icon: "FileText" },
   { href: "/platform/billing/analytics", label: "Revenue Analytics",  icon: "Globe" },
   { href: "/platform/billing/dunning",  label: "Dunning",            icon: "Attention" },
+  { href: "/platform/billing/payouts",  label: "Payouts",            icon: "Vendors" },
 ];
 
 export interface PlatformNavProps {
