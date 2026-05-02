@@ -156,13 +156,22 @@ export function PlatformNav({
       )}
 
     <aside
-      className={`flex flex-col ${open ? "ts-platform-nav--open" : ""}`}
+      // ── Responsive shape ──────────────────────────────────────────
+      // Desktop (≥ lg): sticky sidebar in normal flow, always visible.
+      // Mobile (< lg):
+      //   • closed: `hidden` so it doesn't double up with the mobile
+      //     top bar's logo + take layout space.
+      //   • open: `fixed` overlay anchored to the left edge, sliding
+      //     above page content. Backdrop renders separately above.
+      className={[
+        "flex-col",
+        open ? "fixed inset-y-0 left-0 flex" : "hidden",
+        "lg:sticky lg:top-0 lg:flex",
+      ].join(" ")}
       style={{
         width: 248,
         background: "var(--surface-1)",
         borderRight: "1px solid var(--border-subtle)",
-        position: "sticky",
-        top: 0,
         height: "100vh",
         zIndex: 60,
       }}
