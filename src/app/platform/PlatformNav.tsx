@@ -57,6 +57,7 @@ const NAV_ITEMS: NavItem[] = [
   { href: "/platform/billing/refunds",  label: "Refunds & Disputes", icon: "Scale" },
   { href: "/platform/plans",            label: "Plans & Pricing",   icon: "Package" },
   { href: "/platform/billing/coupons",  label: "Coupons & Promotions", icon: "Sparkles" },
+  { href: "/platform/billing/tax",      label: "Tax & Compliance",  icon: "FileText" },
 ];
 
 export interface PlatformNavProps {

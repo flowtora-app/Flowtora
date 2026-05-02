@@ -406,6 +406,8 @@ model Tenant {
   // Page 18 — Refunds & Disputes back-relations.
   platformPaymentRefunds PlatformPaymentRefund[]
   platformDisputes       PlatformDispute[]
+  // Page 21 — Tax & Compliance.
+  taxExemptions          TaxExemption[]
 }
 
 // ────────────────────────────────────────────────────────────
@@ -6161,6 +6163,164 @@ model PlatformBillingInvoiceItem {
   invoice PlatformBillingInvoice @relation(fields: [invoiceId], references: [id], onDelete: Cascade)
 
   @@index([invoiceId, position])
+}
+
+// ─────────────────────────────────────────────────────────────────
+// Page 21 — Tax & Compliance.
+//
+// PlatformTaxConfig is a singleton row (id="default") capturing the
+// active provider + global flags. TaxRate is the per-jurisdiction
+// manual rate table (used when provider=NONE, or as an override).
+// TaxExemption ties a Tenant to a verified exemption certificate
+// (B2B, government, education, etc). TaxFiling tracks per-period
+// filings the operator owes a jurisdiction.
+//
+// Honest deferrals: provider integrations (Stripe Tax / Avalara /
+// TaxJar) ship as schema-only — no real API call until the SDK is
+// wired. Certificate uploads point at a URL — the storage layer is
+// already plumbed via `lib/storage` and used by other surfaces.
+// ─────────────────────────────────────────────────────────────────
+
+enum TaxProvider {
+  NONE      // manual rate table only
+  STRIPE
+  AVALARA
+  TAXJAR
+}
+
+enum TaxBehavior {
+  EXCLUSIVE  // tax added on top of price
+  INCLUSIVE  // tax baked into price
+}
+
+enum TaxRoundingRule {
+  ROUND_HALF_UP    // standard rounding
+  ROUND_DOWN       // truncate fractional cents
+  ROUND_BANKERS    // banker's rounding (half-to-even)
+}
+
+enum TaxExemptionType {
+  RESALE          // resale certificate (B2B reseller)
+  GOVERNMENT      // gov / municipal entity
+  NONPROFIT       // 501(c)(3) or international equivalent
+  EDUCATION       // educational institution
+  REVERSE_CHARGE  // EU B2B reverse-charge
+  OTHER
+}
+
+enum TaxFilingStatus {
+  DRAFT
+  SUBMITTED
+  ACCEPTED
+  AMENDED
+  REJECTED
+}
+
+model PlatformTaxConfig {
+  id                  String          @id @default("default")
+  provider            TaxProvider     @default(NONE)
+  /** Provider connection state — e.g. "connected", "needs_oauth",
+   *  "error: invalid_key". Free-form; provider integrations write here. */
+  providerStatus      String?
+  providerLastSyncAt  DateTime?
+  /** Default behavior for new plans/invoices that don't set their own. */
+  defaultBehavior     TaxBehavior     @default(EXCLUSIVE)
+  defaultRounding     TaxRoundingRule @default(ROUND_HALF_UP)
+  /** EU One-Stop-Shop registration ID. Null = not registered. */
+  euOssRegistration   String?
+  /** UK Making Tax Digital registration ID. */
+  ukMtdRegistration   String?
+  /** Australia GST registration. */
+  auGstRegistration   String?
+  /** When true, B2B EU customers with a valid VAT number get
+   *  reverse-charge treatment automatically. */
+  reverseChargeEU     Boolean         @default(true)
+  /** Default tax codes by product type, JSON shape:
+   *  { "subscription": "txcd_10000000", "metered": "txcd_10103001", ... } */
+  defaultTaxCodes     Json?
+  updatedAt           DateTime        @updatedAt
+  updatedBy           String?
+}
+
+model TaxRate {
+  id            String   @id @default(cuid())
+  /** ISO-3166 alpha-2 country code, e.g. "US", "GB", "AU". */
+  country       String
+  /** ISO-3166-2 region code (state/province), e.g. "US-CA". Null = country-wide. */
+  region        String?
+  /** Display label, e.g. "California state sales tax". */
+  label         String
+  /** Decimal rate, e.g. 0.0875 = 8.75%. */
+  rate          Decimal  @db.Decimal(6, 4)
+  /** Nexus threshold in minor units (USD by default). 0 = always taxable. */
+  nexusThreshold Int     @default(0)
+  /** Filing tax ID for this jurisdiction, if registered. */
+  taxId         String?
+  effectiveAt   DateTime @default(now())
+  /** When this rate was superseded (if ever). Lookup uses validity window. */
+  expiresAt     DateTime?
+  /** Optional Stripe Tax / Avalara mapping for syncing. */
+  externalId    String?
+  notes         String?
+  createdById   String
+  createdAt     DateTime @default(now())
+  updatedAt     DateTime @updatedAt
+
+  @@unique([country, region, effectiveAt])
+  @@index([country, region])
+}
+
+model TaxExemption {
+  id              String           @id @default(cuid())
+  tenantId        String
+  exemptionType   TaxExemptionType
+  /** Tenant-supplied tax ID / certificate number. */
+  taxId           String?
+  /** Jurisdictions this exemption applies to. Empty = all. */
+  jurisdictions   String[]         @default([])
+  /** Certificate URL (S3/cloud storage). Null = no doc on file. */
+  certificateUrl  String?
+  certificateName String?
+  /** When platform staff verified the cert. Null = unverified. */
+  verifiedAt      DateTime?
+  verifiedBy      String?
+  /** Cert expiry. Null = no expiry. */
+  expiresAt       DateTime?
+  notes           String?
+  createdById     String
+  createdAt       DateTime         @default(now())
+  updatedAt       DateTime         @updatedAt
+
+  tenant Tenant @relation(fields: [tenantId], references: [id], onDelete: Cascade)
+
+  @@index([tenantId, verifiedAt])
+}
+
+model TaxFiling {
+  id          String          @id @default(cuid())
+  /** Jurisdiction key, e.g. "US-CA", "GB", "EU-OSS". */
+  jurisdiction String
+  /** Filing period — month/quarter/year. Free-form for now ("2026-Q1", "2026-03"). */
+  period      String
+  /** Total taxable sales reported (minor units, USD). */
+  taxableSales Int            @default(0)
+  /** Total tax collected for the period. */
+  taxCollected Int            @default(0)
+  /** When the filing was submitted to the jurisdiction. */
+  dueAt       DateTime
+  submittedAt DateTime?
+  /** Filing reference number from the jurisdiction once accepted. */
+  externalRef String?
+  /** Uploaded filing PDF, if any. */
+  pdfUrl      String?
+  status      TaxFilingStatus @default(DRAFT)
+  notes       String?
+  createdById String
+  createdAt   DateTime        @default(now())
+  updatedAt   DateTime        @updatedAt
+
+  @@unique([jurisdiction, period])
+  @@index([status, dueAt])
 }
 
 // ─────────────────────────────────────────────────────────────────────
