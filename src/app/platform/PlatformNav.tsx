@@ -7,13 +7,14 @@ import { cn } from "@/lib/cn";
 import { Logomark, Wordmark } from "@/components/brand/BrandMark";
 import { Icon, type IconName } from "@/components/shell/icons";
 
-// Platform admin sidebar — flat 21-item layout in domain order.
+// Platform admin sidebar — only spec-aligned pages.
 //
-// Single visual list (no group headers) because the order itself is
-// the cognitive scaffold. Some items are hubs that link to existing
-// surfaces (Marketing, Security, Infrastructure, Legal, Communications);
-// others are previews — the route loads but the page explains the
-// section is on the roadmap.
+// We surface exactly the surfaces that have been built page-by-page
+// against docs/flowtora-admin-spec.md (Pages 1-19 today). Items not
+// yet aligned with the spec — Marketing, Analytics, Support, Settings,
+// Security, Infrastructure, Legal, Communications, the previews, etc.
+// — are intentionally NOT linked here so the nav stays an honest map
+// of what's shipped. They'll be re-added as each spec page lands.
 //
 // Active state matches by prefix so nested routes keep the parent link
 // highlighted. Dashboard matches exactly because "/platform" is the
@@ -27,48 +28,34 @@ type NavItem = {
   // Preview = feature is stubbed and lives on the roadmap. The route
   // still loads for platform staff but the nav renders a small badge
   // so no one is surprised when the page explains it isn't wired up.
-  // See docs/transformation-plan.md §Phase 1.
   preview?: boolean;
 };
 
-// Single flat list — the user gave us this order, we keep it.
+// Single flat list, ordered to match the spec page order.
 const NAV_ITEMS: NavItem[] = [
+  // Pages 1-3 — observability
   { href: "/platform",                  label: "Dashboard",         icon: "Dashboard", exact: true },
   { href: "/platform/activity",         label: "Activity",          icon: "Activity" },
   { href: "/platform/reports",          label: "Reports",           icon: "Globe" },
+  // Pages 4-8 — tenants
   { href: "/platform/tenants",          label: "Tenants",           icon: "Building" },
   { href: "/platform/tenants/onboarding", label: "Onboarding",      icon: "Target" },
   { href: "/platform/tenants/health",   label: "Health Scores",     icon: "Heartbeat" },
   { href: "/platform/tenants/churn",    label: "Churned & At-Risk", icon: "Attention" },
   { href: "/platform/tenants/impersonation", label: "Impersonation", icon: "Shield" },
-  { href: "/platform/billing",          label: "Subscriptions",     icon: "Revenue" },
-  { href: "/platform/billing/invoices", label: "Invoices",          icon: "Invoices" },
-  { href: "/platform/billing/payments", label: "Payments",          icon: "Payments" },
-  { href: "/platform/billing/refunds",  label: "Refunds & Disputes", icon: "Scale" },
-  { href: "/platform/plans",            label: "Plans & Pricing",   icon: "Package" },
+  // Pages 9-14 — access & audit
   { href: "/platform/users",            label: "Users",             icon: "Customers" },
   { href: "/platform/access/roles",     label: "Roles & Permissions", icon: "Approvals" },
   { href: "/platform/access/teams",     label: "Teams",             icon: "User" },
   { href: "/platform/access/invitations", label: "Invitations",     icon: "Megaphone" },
   { href: "/platform/access/sessions",  label: "Sessions & Devices", icon: "Monitor" },
   { href: "/platform/access/audit",     label: "Audit Log",         icon: "FileText" },
-  { href: "/platform/industry-config",  label: "Industry Config",   icon: "Target",       preview: true },
-  { href: "/platform/cms",              label: "CMS",               icon: "FileText",     preview: true },
-  { href: "/platform/marketing",        label: "Marketing",         icon: "Megaphone" },
-  { href: "/platform/analytics",        label: "Analytics",         icon: "Globe" },
-  { href: "/platform/support",          label: "Support",           icon: "Support" },
-  { href: "/platform/integrations",     label: "Integrations",      icon: "Activity",     preview: true },
-  { href: "/platform/settings",         label: "Settings",          icon: "Settings" },
-  { href: "/platform/security",         label: "Security",          icon: "Shield" },
-  { href: "/platform/infrastructure",   label: "Infrastructure",    icon: "Heartbeat" },
-  { href: "/platform/mobile-apps",      label: "Mobile Apps",       icon: "Monitor",      preview: true },
-  { href: "/platform/legal",            label: "Legal",             icon: "Scale" },
-  { href: "/platform/communications",   label: "Communications",    icon: "MessageSquare" },
-  { href: "/platform/marketplace",      label: "Marketplace",       icon: "Package",      preview: true },
-  { href: "/platform/training",         label: "Training",          icon: "Bookmark",     preview: true },
-  { href: "/platform/ai-automation",    label: "AI & Automation",   icon: "Sparkles",     preview: true },
-  { href: "/platform/resellers",        label: "Resellers",         icon: "Vendors",      preview: true },
-  { href: "/platform/profile",          label: "Profile",           icon: "User" },
+  // Pages 15-19 — billing
+  { href: "/platform/billing",          label: "Subscriptions",     icon: "Revenue" },
+  { href: "/platform/billing/invoices", label: "Invoices",          icon: "Invoices" },
+  { href: "/platform/billing/payments", label: "Payments",          icon: "Payments" },
+  { href: "/platform/billing/refunds",  label: "Refunds & Disputes", icon: "Scale" },
+  { href: "/platform/plans",            label: "Plans & Pricing",   icon: "Package" },
 ];
 
 export interface PlatformNavProps {
