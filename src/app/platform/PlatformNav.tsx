@@ -106,10 +106,14 @@ export function PlatformNav({
 
   return (
     <>
-      {/* Mobile top bar — only visible below `lg`. The desktop sidebar
-          renders its own brand row inside the aside. */}
+      {/* Mobile-only top bar with the hamburger. We deliberately drop
+          the brand row here — the drawer (when opened) carries its
+          own Flowtora wordmark, so duplicating it next to the
+          hamburger added noise the user immediately flagged. The
+          bar stays for layout safety: the hamburger sits in flow
+          rather than floating above content. */}
       <header
-        className="ts-platform-mobile-bar lg:hidden"
+        className="lg:hidden"
         style={{
           position: "sticky",
           top: 0,
@@ -118,7 +122,7 @@ export function PlatformNav({
           borderBottom: "1px solid var(--border-subtle)",
         }}
       >
-        <div className="flex items-center gap-2 px-3 py-2">
+        <div className="flex items-center px-3 py-2">
           <button
             type="button"
             onClick={() => setOpen(true)}
@@ -128,14 +132,6 @@ export function PlatformNav({
           >
             ☰
           </button>
-          <Link
-            href="/select-tenant"
-            aria-label="Flowtora home"
-            className="ts-focus inline-flex items-center gap-2"
-          >
-            <Logomark size={24} />
-            <Wordmark style={{ fontSize: 14, letterSpacing: "-0.01em" }} />
-          </Link>
         </div>
       </header>
 
