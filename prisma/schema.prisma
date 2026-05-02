@@ -408,6 +408,8 @@ model Tenant {
   platformDisputes       PlatformDispute[]
   // Page 21 — Tax & Compliance.
   taxExemptions          TaxExemption[]
+  // Page 23 — Dunning queue entries for this tenant's failed payments.
+  dunningEvents          DunningEvent[]
 }
 
 // ────────────────────────────────────────────────────────────
@@ -5938,6 +5940,8 @@ model PlatformBillingInvoice {
   /** Page 18 — refunds + disputes initiated against this invoice. */
   paymentRefunds PlatformPaymentRefund[]
   disputes       PlatformDispute[]
+  // Page 23 — dunning event queued against a failed payment on this invoice.
+  dunningEvents  DunningEvent[]
 
   @@index([tenantId, status])
   @@index([status, issuedAt])
@@ -5982,6 +5986,8 @@ model PlatformInvoicePayment {
   invoice PlatformBillingInvoice @relation(fields: [invoiceId], references: [id], onDelete: Cascade)
   refunds PlatformPaymentRefund[]
   dispute PlatformDispute?
+  // Page 23 — Dunning event queued against this failed payment (1:1).
+  dunningEvent DunningEvent?
 
   @@index([invoiceId, attemptedAt])
   @@index([status, attemptedAt])
@@ -6321,6 +6327,141 @@ model TaxFiling {
 
   @@unique([jurisdiction, period])
   @@index([status, dueAt])
+}
+
+// ─────────────────────────────────────────────────────────────────────
+// Page 23 — Dunning & Failed Payments.
+//
+// DunningSequence is the recovery cadence the operator authors
+// (e.g. "Default", "Enterprise", "Annual"). Each sequence has ordered
+// DunningSequenceStage rows defining what to do at each step (send
+// email, retry payment, etc.). DunningConfig is a singleton holding
+// global behavior (default sequence, max retries, auto-cancel, Stripe
+// Smart Retries toggle). DunningEvent ties a failed
+// PlatformInvoicePayment to a sequence + scheduled stage so the queue
+// has something to pick up.
+//
+// Honest deferrals: Stripe Smart Retries SDK isn't wired yet; "retry
+// now" stamps a pending payment row but doesn't re-charge until the
+// integration lands. Email open tracking + A/B testing both depend on
+// the analytics-event pipeline that's also pending.
+// ─────────────────────────────────────────────────────────────────────
+
+enum DunningStageAction {
+  SEND_EMAIL          // send the configured notification template
+  SEND_SMS            // SMS via the future SMS pipeline
+  IN_APP_BANNER       // surface a banner in the workspace
+  RETRY_PAYMENT       // attempt the failed charge again
+  NOTIFY_CSM          // ping the customer-success owner
+  SURRENDER           // mark the invoice uncollectible + exit
+}
+
+enum DunningEventStatus {
+  IN_PROGRESS  // queued, working through the sequence
+  PAUSED       // admin paused — no auto-advance
+  RECOVERED    // payment succeeded, sequence completed
+  SURRENDERED  // sequence ended without recovery
+}
+
+/** Author-time sequence: the cadence template. */
+model DunningSequence {
+  id          String   @id @default(cuid())
+  /** Internal name, e.g. "Default monthly", "Annual high-touch". */
+  name        String
+  description String?
+  /** Optional plan filter — null = sequence is the default for any plan. */
+  planSlug    String?
+  /** Stripe Smart Retries — when true, we delegate retry timing to Stripe
+   *  on top of (or in place of) our own schedule. Honest deferral: no
+   *  SDK call yet; this is a UI flag we'll honor when the integration lands. */
+  smartRetries Boolean @default(false)
+  active      Boolean  @default(true)
+  createdById String
+  createdAt   DateTime @default(now())
+  updatedAt   DateTime @updatedAt
+
+  stages      DunningSequenceStage[]
+  events      DunningEvent[]
+
+  @@index([planSlug, active])
+}
+
+model DunningSequenceStage {
+  id          String             @id @default(cuid())
+  sequenceId  String
+  /** Ordering within the sequence (1-indexed). */
+  position    Int
+  /** Days after the previous stage (or initial fail) to fire this stage. */
+  triggerDays Int
+  action      DunningStageAction
+  /** When action=SEND_EMAIL/SMS, the NotificationTemplate.kind to send. */
+  templateKind String?
+  /** Free-form label for the visual editor. */
+  label       String?
+  /** Branching rules as JSON — { onSoftDecline: "retry", onHardDecline: "skip" }. */
+  branching   Json?
+  notes       String?
+  createdAt   DateTime           @default(now())
+  updatedAt   DateTime           @updatedAt
+
+  sequence    DunningSequence    @relation(fields: [sequenceId], references: [id], onDelete: Cascade)
+
+  @@unique([sequenceId, position])
+  @@index([sequenceId, position])
+}
+
+/** Singleton — global dunning settings. */
+model DunningConfig {
+  id                  String  @id @default("default")
+  /** Default sequence id used when a per-plan match doesn't exist. */
+  defaultSequenceId   String?
+  maxRetries          Int     @default(4)
+  /** After this many days of no recovery, auto-cancel the subscription. */
+  autoCancelAfterDays Int     @default(30)
+  /** When true, every retry email CCs billing@<tenant_domain>. */
+  ccBillingEmail      Boolean @default(true)
+  /** Cap retries per day to avoid bank-fee penalties (0 = no cap). */
+  maxRetriesPerDay    Int     @default(2)
+  /** Stripe Smart Retries platform-wide kill switch. */
+  smartRetriesEnabled Boolean @default(false)
+  updatedAt           DateTime @updatedAt
+  updatedBy           String?
+}
+
+/** One row per (failed payment, sequence) — the queue entry. */
+model DunningEvent {
+  id          String             @id @default(cuid())
+  /** Failed payment that kicked off this run. */
+  paymentId   String             @unique
+  /** Tenant for fast filtering. */
+  tenantId    String
+  /** Invoice for navigation. */
+  invoiceId   String
+  sequenceId  String
+  /** Position into the sequence's stages array — 0 = entry, advances on each fire. */
+  currentStage Int               @default(0)
+  /** When the next stage is scheduled to fire. Null when paused/done. */
+  nextActionAt DateTime?
+  /** Last time something ran on this entry. */
+  lastActionAt DateTime?
+  /** Free-form note shown on the queue row (e.g. "soft decline; auto-retry"). */
+  lastOutcome  String?
+  /** Number of retry attempts so far (capped by config.maxRetries). */
+  retriesAttempted Int           @default(0)
+  status      DunningEventStatus @default(IN_PROGRESS)
+  recoveredAt DateTime?
+  surrenderedAt DateTime?
+  createdAt   DateTime           @default(now())
+  updatedAt   DateTime           @updatedAt
+
+  payment     PlatformInvoicePayment @relation(fields: [paymentId], references: [id], onDelete: Cascade)
+  sequence    DunningSequence        @relation(fields: [sequenceId], references: [id], onDelete: Restrict)
+  tenant      Tenant                 @relation(fields: [tenantId], references: [id], onDelete: Cascade)
+  invoice     PlatformBillingInvoice @relation(fields: [invoiceId], references: [id], onDelete: Cascade)
+
+  @@index([status, nextActionAt])
+  @@index([tenantId, status])
+  @@index([invoiceId])
 }
 
 // ─────────────────────────────────────────────────────────────────────
