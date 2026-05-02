@@ -5742,6 +5742,22 @@ enum PlatformInvoiceStatus {
   PAID
   VOIDED
   REFUNDED
+  // Page 16 (Invoices) additions:
+  // OPEN is the post-issuance, pre-payment state — currently SENT
+  // already covers it but we keep both for spec parity. Existing
+  // SENT rows are treated as OPEN by the list filter. UNCOLLECTIBLE
+  // is the "we gave up trying to collect" terminal state — separate
+  // from VOIDED so accounting reports can distinguish them.
+  OPEN
+  UNCOLLECTIBLE
+}
+
+// Page 16 — origin of an invoice. SUBSCRIPTION rows are auto-issued
+// by the dunning / renewal pipeline; MANUAL rows are admin-issued
+// (a one-off charge or migration fee).
+enum PlatformInvoiceSource {
+  SUBSCRIPTION
+  MANUAL
 }
 
 model PlatformBillingInvoice {
@@ -5761,9 +5777,22 @@ model PlatformBillingInvoice {
   total       Int                   @default(0)
   amountPaid  Int                   @default(0)
   notes       String?
+  // Page 16 — customer-visible vs internal note split. `notes` is the
+  // legacy single-field; `internalNotes` is the platform-only side
+  // shown on the admin detail page but never on the customer PDF.
+  internalNotes String?
   // Free-form due note rendered on the customer view ("Net 30",
   // "Wire instructions in PDF", etc.). Not parsed.
   termsText   String?
+  /** Page 16 — origin. SUBSCRIPTION (auto-issued) or MANUAL (admin
+   *  issued via the new-invoice composer). Defaults to MANUAL since
+   *  the legacy createPlatformInvoice flow is admin-issued. */
+  source      PlatformInvoiceSource @default(MANUAL)
+  /** Tax breakdown by jurisdiction. Shape: array of
+   *  { jurisdiction: string; rate: number; amount: number }. */
+  taxBreakdown Json?
+  /** Reason captured when voided / marked uncollectible. */
+  voidReason  String?
   // Coupon applied as part of issuance — captured here for redenor
   // history even if the coupon is later archived.
   couponId    String?
@@ -5780,9 +5809,74 @@ model PlatformBillingInvoice {
   createdBy   User                         @relation("PlatformInvoiceCreator", fields: [createdById], references: [id], onDelete: Restrict)
   items       PlatformBillingInvoiceItem[]
   redemptions CouponRedemption[]
+  payments    PlatformInvoicePayment[]
+  creditNotes PlatformCreditNote[]
 
   @@index([tenantId, status])
   @@index([status, issuedAt])
+}
+
+// Page 16 — payment attempts against a platform invoice. One row per
+// attempt (success or failure) so the detail page can render a full
+// timeline including the gateway's response code, fee, and net.
+//
+// We don't write these rows yet (no Stripe integration in the test
+// stack), but the model is ready so the detail UI can read against
+// real data once the webhook handlers are wired.
+model PlatformInvoicePayment {
+  id        String   @id @default(cuid())
+  invoiceId String
+  /** "stripe" / "manual" / "wire" / "ach" / etc. */
+  gateway   String
+  /** Gateway-side id when applicable. */
+  gatewayPaymentId String?
+  /** "succeeded" / "failed" / "pending" / "refunded" / "partial_refund" */
+  status    String
+  /** Payment method snippet — "Visa •• 4242", "ACH BoA", etc. */
+  method    String?
+  /** Minor units of the invoice currency. */
+  amount    Int
+  /** Gateway fee (always positive, in minor units). */
+  fee       Int      @default(0)
+  /** Net = amount - fee. Stored to avoid recomputation in reports. */
+  net       Int      @default(0)
+  /** Decline / failure reason — short code like "card_declined". */
+  failureCode   String?
+  /** Free-text gateway message. */
+  failureReason String?
+  /** Risk metadata (AVS, CVV, 3DS, etc.) as JSON. */
+  riskMetadata  Json?
+  /** Raw gateway response body — capped at 4 KB at write time. */
+  rawResponse   String?
+
+  attemptedAt DateTime @default(now())
+  refundedAt  DateTime?
+
+  invoice PlatformBillingInvoice @relation(fields: [invoiceId], references: [id], onDelete: Cascade)
+
+  @@index([invoiceId, attemptedAt])
+  @@index([status, attemptedAt])
+}
+
+// Page 16 — credit note. Issued against an invoice (full or partial)
+// to correct an overcharge. We don't actually push the credit to the
+// gateway today; the row is captured here so accounting + the detail
+// timeline have it.
+model PlatformCreditNote {
+  id        String   @id @default(cuid())
+  invoiceId String
+  /** Human-readable number e.g. "CN-1042". */
+  number    String   @unique
+  /** Minor units of the invoice currency. */
+  amount    Int
+  reason    String
+  notes     String?
+  issuedAt  DateTime @default(now())
+  issuedBy  String
+
+  invoice PlatformBillingInvoice @relation(fields: [invoiceId], references: [id], onDelete: Cascade)
+
+  @@index([invoiceId])
 }
 
 model PlatformBillingInvoiceItem {
