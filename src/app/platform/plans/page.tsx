@@ -1,7 +1,7 @@
 import Link from "next/link";
 import { db } from "@/lib/db";
 import { requirePlatformStaff } from "@/lib/platform";
-import { createPricingPlan } from "@/app/actions/pricing-plans";
+import { createPricingPlan, movePlanUp, movePlanDown } from "@/app/actions/pricing-plans";
 import { formatMoney } from "@/lib/format";
 import { PlansRevenueBand, type PlansKpi } from "@/components/platform/PlansRevenueBand";
 
@@ -24,6 +24,13 @@ import { PlansRevenueBand, type PlansKpi } from "@/components/platform/PlansReve
 export const dynamic = "force-dynamic";
 
 type SP = { ok?: string; error?: string };
+
+const OK_LABELS: Record<string, string> = {
+  archived: "Plan archived.",
+  deleted: "Plan deleted.",
+  reordered: "Plan reordered.",
+  "no-move": "Already at the edge — nothing to swap with.",
+};
 
 const STATUS_ORDER: Record<string, number> = {
   PUBLISHED: 0,
@@ -129,24 +136,48 @@ export default async function PlatformPlansPage({
             and the rows tenants pay against. Edits flush the marketing cache on save.
           </p>
         </div>
-        {ctx.canWrite && (
-          <form action={createPricingPlan}>
-            <button
-              type="submit"
-              className="ts-focus rounded-md px-4 py-2 text-sm font-medium"
-              style={{ background: "var(--accent-primary)", color: "var(--accent-fg)" }}
-            >
-              + New plan
-            </button>
-          </form>
-        )}
+        <div className="flex flex-wrap items-center gap-2">
+          <Link
+            href="/pricing"
+            target="_blank"
+            rel="noopener"
+            className="ts-focus rounded-md px-3 py-2 text-sm font-medium"
+            style={{
+              background: "var(--surface-1)",
+              color: "var(--text-default)",
+              border: "1px solid var(--border-default)",
+            }}
+          >
+            Preview public pricing ↗
+          </Link>
+          <Link
+            href="/platform/plans/changelog"
+            className="ts-focus rounded-md px-3 py-2 text-sm font-medium"
+            style={{
+              background: "var(--surface-1)",
+              color: "var(--text-default)",
+              border: "1px solid var(--border-default)",
+            }}
+          >
+            Pricing changelog
+          </Link>
+          {ctx.canWrite && (
+            <form action={createPricingPlan}>
+              <button
+                type="submit"
+                className="ts-focus rounded-md px-4 py-2 text-sm font-medium"
+                style={{ background: "var(--accent-primary)", color: "var(--accent-fg)" }}
+              >
+                + New plan
+              </button>
+            </form>
+          )}
+        </div>
       </div>
 
       {/* ── Banners ──────────────────────────────────────────── */}
       {sp.ok && (
-        <Banner tone="ok">
-          {sp.ok === "archived" ? "Plan archived." : sp.ok === "deleted" ? "Plan deleted." : "Saved."}
-        </Banner>
+        <Banner tone="ok">{OK_LABELS[sp.ok] ?? "Saved."}</Banner>
       )}
       {sp.error && <Banner tone="error">{sp.error}</Banner>}
 
@@ -226,6 +257,7 @@ export default async function PlatformPlansPage({
                   <th className="px-5 py-3 text-right font-medium">Tenants</th>
                   <th className="px-5 py-3 text-right font-medium">MRR</th>
                   <th className="px-5 py-3 text-right font-medium">Features</th>
+                  <th className="px-5 py-3 text-center font-medium">Reorder</th>
                   <th className="px-5 py-3 font-medium"></th>
                 </tr>
               </thead>
@@ -321,6 +353,30 @@ export default async function PlatformPlansPage({
                       >
                         {p._count.featureValues}
                       </td>
+                      <td className="px-5 py-3 text-center">
+                        {ctx.canWrite ? (
+                          <div className="inline-flex items-center gap-1">
+                            <form action={movePlanUp.bind(null, p.id)}>
+                              <button type="submit"
+                                      title={`Move ${p.name} up`}
+                                      className="ts-focus inline-flex h-6 w-6 items-center justify-center rounded-md hover:bg-[var(--surface-2)]"
+                                      style={{ color: "var(--text-muted)", border: "1px solid var(--border-subtle)" }}>
+                                ↑
+                              </button>
+                            </form>
+                            <form action={movePlanDown.bind(null, p.id)}>
+                              <button type="submit"
+                                      title={`Move ${p.name} down`}
+                                      className="ts-focus inline-flex h-6 w-6 items-center justify-center rounded-md hover:bg-[var(--surface-2)]"
+                                      style={{ color: "var(--text-muted)", border: "1px solid var(--border-subtle)" }}>
+                                ↓
+                              </button>
+                            </form>
+                          </div>
+                        ) : (
+                          <span style={{ color: "var(--text-faint)" }}>—</span>
+                        )}
+                      </td>
                       <td className="px-5 py-3 text-right">
                         <Link
                           href={`/platform/plans/${p.id}`}
@@ -342,7 +398,7 @@ export default async function PlatformPlansPage({
                   <td className="px-5 py-3 text-right text-sm font-semibold tabular-nums" style={{ color: "var(--text-default)" }}>
                     {formatMoney(mrrTotal, "USD")}
                   </td>
-                  <td colSpan={2} />
+                  <td colSpan={3} />
                 </tr>
               </tfoot>
             </table>

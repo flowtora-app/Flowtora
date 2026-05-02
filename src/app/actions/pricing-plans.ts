@@ -727,3 +727,118 @@ export async function deletePlan(planId: string) {
   flushPricingCaches();
   redirect(`/platform/plans?ok=deleted`);
 }
+
+// ─────────────────────────────────────────────────────────────
+// Page 19 — Lifecycle & tax tab.
+//
+// Trial settings, migration rules (upgrade/downgrade behavior +
+// default cycle), tax behavior (inclusive/exclusive + Stripe Tax
+// code). All saved as one batch since the editor groups them.
+// ─────────────────────────────────────────────────────────────
+
+const lifecycleSchema = z.object({
+  trialDays: z.coerce.number().int().min(0).max(365).optional(),
+  trialRequiresCard: z.union([z.literal("on"), z.literal("")]).optional(),
+  trialCtaLabel: z.string().max(80).optional().or(z.literal("")),
+  migrationOnUpgrade: z.enum(["PRORATE_IMMEDIATE", "END_OF_PERIOD"]).default("PRORATE_IMMEDIATE"),
+  migrationOnDowngrade: z.enum(["END_OF_PERIOD", "PRORATE_REFUND"]).default("END_OF_PERIOD"),
+  defaultCycle: z.enum(["MONTHLY", "ANNUAL"]).default("MONTHLY"),
+  taxBehavior: z.enum(["EXCLUSIVE", "INCLUSIVE"]).default("EXCLUSIVE"),
+  taxCode: z.string().max(80).optional().or(z.literal("")),
+});
+
+export async function savePlanLifecycle(planId: string, formData: FormData) {
+  const ctx = await requirePlatformAdmin();
+  const raw = Object.fromEntries(formData.entries());
+  const parsed = lifecycleSchema.safeParse(raw);
+  if (!parsed.success) {
+    const msg = parsed.error.issues[0]?.message ?? "Invalid input";
+    redirect(`/platform/plans/${planId}?tab=lifecycle&error=${encodeURIComponent(msg)}`);
+  }
+
+  const existing = await db.pricingPlan.findUnique({ where: { id: planId }, select: { id: true } });
+  if (!existing) redirect(`/platform/plans?error=${encodeURIComponent("Plan not found")}`);
+
+  await db.pricingPlan.update({
+    where: { id: planId },
+    data: {
+      trialDays: parsed.data.trialDays ?? null,
+      trialRequiresCard: parsed.data.trialRequiresCard === "on",
+      trialCtaLabel: parsed.data.trialCtaLabel || null,
+      migrationOnUpgrade: parsed.data.migrationOnUpgrade,
+      migrationOnDowngrade: parsed.data.migrationOnDowngrade,
+      defaultCycle: parsed.data.defaultCycle,
+      taxBehavior: parsed.data.taxBehavior,
+      taxCode: parsed.data.taxCode || null,
+    },
+  });
+
+  await logPlatformAudit({
+    userId: ctx.userId,
+    action: "platform.plan_lifecycle_updated",
+    entityType: "PricingPlan",
+    entityId: planId,
+    metadata: { actor: ctx.email },
+  });
+
+  flushPricingCaches();
+  redirect(`/platform/plans/${planId}?tab=lifecycle&ok=1`);
+}
+
+// ─────────────────────────────────────────────────────────────
+// Page 19 — reorder. Plans render in `sortOrder` ascending on the
+// public pricing page. Admin can bump a plan up or down; we swap
+// `sortOrder` with the neighbor in the same status bucket so the
+// list stays compact (no gaps).
+// ─────────────────────────────────────────────────────────────
+
+export async function movePlan(planId: string, direction: "up" | "down") {
+  const ctx = await requirePlatformAdmin();
+
+  const plan = await db.pricingPlan.findUnique({
+    where: { id: planId },
+    select: { id: true, status: true, sortOrder: true, slug: true },
+  });
+  if (!plan) redirect(`/platform/plans?error=${encodeURIComponent("Plan not found")}`);
+
+  // Find the neighbor in the same status bucket.
+  const neighbor = await db.pricingPlan.findFirst({
+    where: {
+      status: plan.status,
+      id: { not: plan.id },
+      sortOrder: direction === "up"
+        ? { lt: plan.sortOrder }
+        : { gt: plan.sortOrder },
+    },
+    orderBy: { sortOrder: direction === "up" ? "desc" : "asc" },
+    select: { id: true, sortOrder: true },
+  });
+  if (!neighbor) redirect(`/platform/plans?ok=no-move`);
+
+  // Swap sort orders. If both happen to be the same number (rare but
+  // possible after manual edits), bump the neighbor by one and use it
+  // as the new sortOrder so they don't tie.
+  const newSelf = neighbor.sortOrder;
+  const newNeighbor = newSelf === plan.sortOrder
+    ? newSelf + (direction === "up" ? 1 : -1)
+    : plan.sortOrder;
+
+  await db.$transaction([
+    db.pricingPlan.update({ where: { id: plan.id },     data: { sortOrder: newSelf } }),
+    db.pricingPlan.update({ where: { id: neighbor.id }, data: { sortOrder: newNeighbor } }),
+  ]);
+
+  await logPlatformAudit({
+    userId: ctx.userId,
+    action: "platform.plan_reordered",
+    entityType: "PricingPlan",
+    entityId: plan.id,
+    metadata: { actor: ctx.email, direction, slug: plan.slug },
+  });
+
+  flushPricingCaches();
+  redirect(`/platform/plans?ok=reordered`);
+}
+
+export async function movePlanUp(planId: string)   { return movePlan(planId, "up"); }
+export async function movePlanDown(planId: string) { return movePlan(planId, "down"); }

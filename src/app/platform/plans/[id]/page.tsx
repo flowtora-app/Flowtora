@@ -6,6 +6,7 @@ import {
   savePlanDetails,
   savePlanPricing,
   savePlanMarketing,
+  savePlanLifecycle,
   publishPlan,
   unpublishPlan,
   archivePlan,
@@ -35,7 +36,7 @@ import { PlanFeaturesEditor } from "@/components/platform/PlanFeaturesEditor";
 
 export const dynamic = "force-dynamic";
 
-const TAB_KEYS: PlanTabKey[] = ["overview", "pricing", "features", "addons", "marketing", "advanced"];
+const TAB_KEYS: PlanTabKey[] = ["overview", "pricing", "features", "addons", "lifecycle", "marketing", "auditlog", "advanced"];
 
 type SP = { tab?: string; ok?: string; error?: string; published?: string };
 
@@ -190,12 +191,14 @@ export default async function PlatformPlanEditorPage({
       badge: plan.addOns.length > 0 ? plan.addOns.length : undefined,
       badgeTone: "neutral",
     },
+    { key: "lifecycle", label: "Lifecycle & tax" },
     {
       key: "marketing",
       label: "Marketing",
       badge: missingDescription ? "!" : undefined,
       badgeTone: "warning",
     },
+    { key: "auditlog", label: "Audit log" },
     { key: "advanced", label: "Advanced" },
   ];
 
@@ -256,8 +259,14 @@ export default async function PlatformPlanEditorPage({
       {activeTab === "addons"    && (
         <AddOnsTab plan={plan} addOns={plan.addOns} canWrite={canWrite} />
       )}
+      {activeTab === "lifecycle" && (
+        <LifecycleTab plan={plan} canWrite={canWrite} />
+      )}
       {activeTab === "marketing" && (
         <MarketingTab plan={plan} cardData={cardData} canWrite={canWrite} />
+      )}
+      {activeTab === "auditlog"  && (
+        <AuditLogTab planId={plan.id} />
       )}
       {activeTab === "advanced"  && (
         <AdvancedTab plan={plan} canWrite={canWrite} />
@@ -897,6 +906,221 @@ function AdvancedTab({
         </div>
       </div>
     </div>
+  );
+}
+
+// ────────────────────────────────────────────────────────────────
+// LIFECYCLE & TAX TAB — Page 19 alignment.
+// ────────────────────────────────────────────────────────────────
+
+function LifecycleTab({
+  plan, canWrite,
+}: {
+  plan: {
+    id: string;
+    trialDays: number | null;
+    trialRequiresCard: boolean;
+    trialCtaLabel: string | null;
+    migrationOnUpgrade: "PRORATE_IMMEDIATE" | "END_OF_PERIOD";
+    migrationOnDowngrade: "END_OF_PERIOD" | "PRORATE_REFUND";
+    defaultCycle: "MONTHLY" | "ANNUAL";
+    taxBehavior: "EXCLUSIVE" | "INCLUSIVE";
+    taxCode: string | null;
+  };
+  canWrite: boolean;
+}) {
+  return (
+    <form action={savePlanLifecycle.bind(null, plan.id)} className="space-y-6">
+      <Section
+        title="Trial settings"
+        description="How long does the trial run? Should we require a card up front?"
+      >
+        <div className="grid gap-4 md:grid-cols-2">
+          <FormField
+            label="Trial length (days)" name="trialDays" type="number"
+            defaultValue={plan.trialDays == null ? "" : String(plan.trialDays)}
+            hint="Blank = platform default (14)."
+            disabled={!canWrite}
+          />
+          <FormField
+            label="Trial-end CTA copy" name="trialCtaLabel"
+            defaultValue={plan.trialCtaLabel ?? ""}
+            hint='Override the default "Add card to keep access" copy.'
+            disabled={!canWrite} maxLength={80}
+          />
+        </div>
+        <div className="mt-3">
+          <CheckboxField
+            label="Require a card on file before the trial starts"
+            name="trialRequiresCard"
+            defaultChecked={plan.trialRequiresCard}
+            disabled={!canWrite}
+          />
+        </div>
+      </Section>
+
+      <Section
+        title="Migration rules"
+        description="What happens when a tenant changes plans? Default cycle picks which cadence renders first at signup."
+      >
+        <div className="grid gap-4 md:grid-cols-2">
+          <SelectField
+            label="On upgrade" name="migrationOnUpgrade"
+            defaultValue={plan.migrationOnUpgrade}
+            options={[
+              { value: "PRORATE_IMMEDIATE", label: "Prorate now — charge diff today" },
+              { value: "END_OF_PERIOD",     label: "Wait until next renewal" },
+            ]}
+            disabled={!canWrite}
+          />
+          <SelectField
+            label="On downgrade" name="migrationOnDowngrade"
+            defaultValue={plan.migrationOnDowngrade}
+            options={[
+              { value: "END_OF_PERIOD",  label: "Switch at next renewal (no refund)" },
+              { value: "PRORATE_REFUND", label: "Switch now — prorate refund" },
+            ]}
+            disabled={!canWrite}
+          />
+          <SelectField
+            label="Default billing cycle" name="defaultCycle"
+            defaultValue={plan.defaultCycle}
+            options={[
+              { value: "MONTHLY", label: "Monthly" },
+              { value: "ANNUAL",  label: "Annual" },
+            ]}
+            hint="Picked first on the pricing card if both prices exist."
+            disabled={!canWrite}
+          />
+        </div>
+      </Section>
+
+      <Section
+        title="Tax behavior"
+        description="Inclusive prices already contain tax. Exclusive prices add tax on top at checkout. Tax code maps to Stripe Tax (e.g. txcd_10000000)."
+      >
+        <div className="grid gap-4 md:grid-cols-2">
+          <SelectField
+            label="Tax behavior" name="taxBehavior"
+            defaultValue={plan.taxBehavior}
+            options={[
+              { value: "EXCLUSIVE", label: "Exclusive — tax added at checkout" },
+              { value: "INCLUSIVE", label: "Inclusive — tax baked into price" },
+            ]}
+            disabled={!canWrite}
+          />
+          <FormField
+            label="Tax code" name="taxCode"
+            defaultValue={plan.taxCode ?? ""}
+            hint='Stripe Tax code, e.g. "txcd_10000000".'
+            disabled={!canWrite} maxLength={80}
+          />
+        </div>
+      </Section>
+
+      {canWrite && <SaveRow />}
+    </form>
+  );
+}
+
+// ────────────────────────────────────────────────────────────────
+// AUDIT LOG TAB — Page 19 alignment. Plan-scoped events from the
+// platform audit chain (entityType = "PricingPlan" + entityId).
+// ────────────────────────────────────────────────────────────────
+
+async function AuditLogTab({ planId }: { planId: string }) {
+  const events = await db.auditLog.findMany({
+    where: { entityType: "PricingPlan", entityId: planId },
+    orderBy: { createdAt: "desc" },
+    take: 100,
+    select: {
+      id: true,
+      action: true,
+      createdAt: true,
+      metadata: true,
+      userId: true,
+      severity: true,
+    },
+  });
+
+  // Resolve user emails for display.
+  const userIds = Array.from(new Set(events.map((e) => e.userId).filter((x): x is string => !!x)));
+  const users = userIds.length === 0 ? [] : await db.user.findMany({
+    where: { id: { in: userIds } },
+    select: { id: true, email: true, name: true },
+  });
+  const userById = new Map(users.map((u) => [u.id, u]));
+
+  return (
+    <Section
+      title="Plan-scoped audit log"
+      description="Every mutation against this plan, newest first. Limited to the most recent 100 events."
+    >
+      {events.length === 0 ? (
+        <p className="py-8 text-center text-sm" style={{ color: "var(--text-muted)" }}>
+          No events yet.
+        </p>
+      ) : (
+        <ul className="divide-y" style={{ borderColor: "var(--border-subtle)" }}>
+          {events.map((e) => {
+            const u = e.userId ? userById.get(e.userId) : undefined;
+            const actor = u?.name ?? u?.email ?? "system";
+            return (
+              <li key={e.id} className="grid grid-cols-[140px_1fr_auto] gap-3 py-2.5 text-sm">
+                <span className="tabular-nums" style={{ color: "var(--text-muted)" }}>
+                  {e.createdAt.toISOString().slice(0, 16).replace("T", " ")}
+                </span>
+                <div className="min-w-0">
+                  <span className="font-mono text-[12px]" style={{ color: "var(--text-default)" }}>
+                    {e.action}
+                  </span>
+                  <span className="ml-2 text-[12px]" style={{ color: "var(--text-muted)" }}>
+                    by {actor}
+                  </span>
+                </div>
+                <span className="text-[10px] font-semibold uppercase tracking-wide"
+                      style={{ color:
+                        e.severity === "CRITICAL" ? "var(--rose-700)"
+                        : e.severity === "WARNING" ? "var(--amber-700)"
+                        : "var(--text-muted)",
+                      }}>
+                  {e.severity ?? "INFO"}
+                </span>
+              </li>
+            );
+          })}
+        </ul>
+      )}
+    </Section>
+  );
+}
+
+function SelectField({
+  label, name, defaultValue, options, hint, disabled,
+}: {
+  label: string;
+  name: string;
+  defaultValue: string;
+  options: { value: string; label: string }[];
+  hint?: string;
+  disabled?: boolean;
+}) {
+  return (
+    <label className="block">
+      <span className="mb-1 block text-sm font-medium" style={{ color: "var(--text-default)" }}>
+        {label}
+      </span>
+      <select name={name} defaultValue={defaultValue} disabled={disabled}
+              className="ts-focus w-full rounded-md px-3 py-2 text-sm outline-none"
+              style={{
+                background: "var(--surface-1)",
+                border: "1px solid var(--border-default)",
+                color: "var(--text-default)",
+              }}>
+        {options.map((o) => <option key={o.value} value={o.value}>{o.label}</option>)}
+      </select>
+      {hint && <span className="mt-1 block text-xs" style={{ color: "var(--text-muted)" }}>{hint}</span>}
+    </label>
   );
 }
 

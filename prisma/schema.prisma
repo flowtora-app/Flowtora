@@ -5099,6 +5099,28 @@ model WriteOff {
 // child rows keep the shorter `Plan*` prefix since they don't clash.
 // ────────────────────────────────────────────────────────────
 
+// Page 19 — lifecycle behavior enums for plan changes + trial settings + tax.
+
+enum PlanMigrationOnUpgrade {
+  PRORATE_IMMEDIATE  // charge prorated diff today
+  END_OF_PERIOD      // wait until next renewal
+}
+
+enum PlanMigrationOnDowngrade {
+  END_OF_PERIOD       // keep current plan until renewal, then drop
+  PRORATE_REFUND      // refund prorated diff today, switch immediately
+}
+
+enum PlanBillingCycle {
+  MONTHLY
+  ANNUAL
+}
+
+enum PlanTaxBehavior {
+  EXCLUSIVE   // tax added on top of price
+  INCLUSIVE   // tax already baked into price
+}
+
 model PricingPlan {
   id String @id @default(cuid())
 
@@ -5138,6 +5160,22 @@ model PricingPlan {
 
   // Optional free-trial override in days. Null = use platform default.
   trialDays Int?
+  // Page 19 — trial settings.
+  /** When true, signup requires a card on file before the trial starts. */
+  trialRequiresCard Boolean @default(false)
+  /** Trial-end CTA copy override (e.g. "Convert to paid", "Add card to keep access"). */
+  trialCtaLabel     String?
+
+  // Page 19 — migration rules. What happens on plan change?
+  migrationOnUpgrade   PlanMigrationOnUpgrade   @default(PRORATE_IMMEDIATE)
+  migrationOnDowngrade PlanMigrationOnDowngrade @default(END_OF_PERIOD)
+  /** Default billing cycle picked at signup if both monthly + annual exist. */
+  defaultCycle         PlanBillingCycle         @default(MONTHLY)
+
+  // Page 19 — tax behavior.
+  taxBehavior PlanTaxBehavior @default(EXCLUSIVE)
+  /** Stripe Tax tax code (e.g. "txcd_10000000" for SaaS). */
+  taxCode     String?
 
   // CTA button. If `ctaHref` is null the marketing component falls
   // back to `/signup?plan=<slug>`. Contact-sales plans point at /contact.

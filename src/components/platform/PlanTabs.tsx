@@ -16,7 +16,9 @@ export type PlanTabKey =
   | "pricing"
   | "features"
   | "addons"
+  | "lifecycle"   // Page 19 — trial / migration / tax
   | "marketing"
+  | "auditlog"    // Page 19 — plan-scoped audit events
   | "advanced";
 
 export interface PlanTab {
