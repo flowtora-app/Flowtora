@@ -67,6 +67,8 @@ const NAV_ITEMS: NavItem[] = [
   { href: "/platform/catalog/pricing",  label: "Pricing Formulas",   icon: "Revenue" },
   { href: "/platform/catalog/templates",label: "Industry Templates", icon: "FileText" },
   { href: "/platform/catalog/assets",   label: "Design Assets",      icon: "Palette" },
+  // Page 31 — operations
+  { href: "/platform/operations/jobs",  label: "Job Queue Monitor",  icon: "Pipeline" },
 ];
 
 export interface PlatformNavProps {
