@@ -2055,6 +2055,191 @@ model MasterProductVersion {
   @@index([productId, createdAt])
 }
 
+// ─────────────────────────────────────────────────────────────────
+// Page 26 — Master Material Library.
+//
+// Platform-curated list of materials sign + print shops can adopt.
+// Distinct from the tenant-side material tracking models (MaterialUsage)
+// — this is the spec source of truth: physical specs, cost defaults,
+// supplier links. Tenants reference these by slug when configuring
+// products.
+//
+// MasterMaterialSupplier is one row per (material × supplier) so we
+// can capture multiple suppliers with primary/backup designation +
+// per-supplier SKU + last-price snapshot. MasterMaterialColorSwatch
+// is for color-bearing materials (vinyl, ink, thread) where each
+// "color" is its own purchasable variant.
+//
+// Honest deferrals: tenant-side adoption tracking ships when the
+// tenant Material catalog UI lands; CSV import + datasheet upload
+// + supplier-portal scraping all wait on storage SDK + ingestion
+// worker.
+// ─────────────────────────────────────────────────────────────────
+
+enum MasterMaterialCategory {
+  VINYL
+  SUBSTRATES
+  INKS
+  THREADS
+  BLANKS
+  HARDWARE
+  TOOLS
+  FINISHING
+  ADHESIVES
+}
+
+enum MasterMaterialFinish {
+  MATTE
+  GLOSS
+  SATIN
+  TEXTURED
+  REFLECTIVE
+  FROSTED
+  CLEAR
+}
+
+enum MasterMaterialUsage {
+  INDOOR
+  OUTDOOR
+  BOTH
+}
+
+enum MasterMaterialStatus {
+  ACTIVE
+  DISCONTINUED
+}
+
+model MasterMaterial {
+  id              String                 @id @default(cuid())
+  slug            String                 @unique
+  /** Customer-visible / internal name e.g. "13oz scrim vinyl". */
+  name            String
+  /** Stable SKU at the platform level. Suppliers can ship their own. */
+  sku             String?
+  category        MasterMaterialCategory
+  /** Free-form subcategory (Cast, Calendared, Reflective, Eco-solvent,
+   *  Latex, Polyester, Coroplast, Aluminum, etc.) — keeping flexible. */
+  subcategory     String?
+
+  // Physical specs.
+  /** Default width in inches. Null when N/A (e.g. ink). */
+  widthIn         Decimal?               @db.Decimal(8, 2)
+  /** Default roll length in feet. */
+  rollLengthFt    Decimal?               @db.Decimal(8, 2)
+  /** Thickness in mils. */
+  thicknessMil    Decimal?               @db.Decimal(8, 3)
+  /** Grams per square meter. */
+  gsm             Int?
+
+  // Color (when applicable).
+  /** Primary color hex (e.g. "#FFFFFF"). Null = multi-color or N/A. */
+  colorHex        String?
+  /** Pantone code (e.g. "186 C"). */
+  pantoneCode     String?
+
+  finish          MasterMaterialFinish?
+  usage           MasterMaterialUsage    @default(BOTH)
+  /** Outdoor durability rating in years (1, 3, 5, 7+). */
+  durabilityYears Int?
+  /** Fire rating standard reference (e.g. "NFPA 701"). */
+  fireRating      String?
+  recyclable      Boolean                @default(false)
+  /** Opacity percent (0-100). 100 = fully opaque, 0 = fully translucent. */
+  opacityPct      Int?
+  /** Adhesive type for vinyl etc. ("permanent", "removable", "low-tack"). */
+  adhesiveType    String?
+
+  // Pricing defaults.
+  /** Cost per default unit in minor units (USD cents). */
+  defaultCost     Int                    @default(0)
+  /** Display unit ("sq_ft", "sq_m", "yard", "lb", "each", "linear_ft"). */
+  defaultUnit     String                 @default("sq_ft")
+  /** Suggested markup percent for tenants pricing this material. */
+  defaultMarkupPct Decimal               @default(50) @db.Decimal(6, 2)
+  /** Default waste factor percent (0-100). */
+  wasteFactorPct  Decimal                @default(0) @db.Decimal(6, 2)
+  /** Minimum order quantity in `defaultUnit`. */
+  minOrderQty     Decimal?               @db.Decimal(10, 2)
+
+  /** Hero image URL for the table thumbnail + editor. */
+  imageUrl        String?
+  /** Datasheet PDF URL. */
+  datasheetUrl    String?
+  /** Compatible printer / cutter / heat-press equipment keys. */
+  equipmentCompatibility String[]        @default([])
+  /** Master-product slugs that commonly use this material. Reporting only. */
+  compatibleProductSlugs String[]        @default([])
+
+  status          MasterMaterialStatus   @default(ACTIVE)
+  /** Internal notes — never customer-facing. */
+  internalNotes   String?
+  tags            String[]               @default([])
+
+  createdById     String
+  createdAt       DateTime               @default(now())
+  updatedAt       DateTime               @updatedAt
+
+  suppliers       MasterMaterialSupplier[]
+  swatches        MasterMaterialColorSwatch[]
+
+  @@index([status, category])
+  @@index([category, name])
+}
+
+model MasterMaterialSupplier {
+  id            String         @id @default(cuid())
+  materialId    String
+  /** Supplier display name (e.g. "Avery Dennison", "3M", "Roland DGA"). */
+  supplierName  String
+  /** SKU at this supplier — what the tenant orders from them. */
+  supplierSku   String?
+  /** Lead time for this supplier in days. */
+  leadTimeDays  Int?
+  /** Minimum order quantity at this supplier (in material's defaultUnit). */
+  moq           Decimal?       @db.Decimal(10, 2)
+  /** Cost at this supplier in minor units. */
+  costAtSupplier Int           @default(0)
+  /** When the cost was last updated — used for "outdated price" badge. */
+  lastPriceUpdate DateTime?
+  /** Direct portal / catalog URL. */
+  portalUrl     String?
+  /** When true, this is the tenant's primary source. */
+  isPrimary     Boolean        @default(false)
+  notes         String?
+  createdAt     DateTime       @default(now())
+  updatedAt     DateTime       @updatedAt
+
+  material      MasterMaterial @relation(fields: [materialId], references: [id], onDelete: Cascade)
+
+  @@unique([materialId, supplierName])
+  @@index([materialId, isPrimary])
+}
+
+model MasterMaterialColorSwatch {
+  id           String         @id @default(cuid())
+  materialId   String
+  /** Display name e.g. "White", "Cardinal Red", "Reflex Blue". */
+  colorName    String
+  /** Stable key (e.g. "white", "cardinal_red"). */
+  colorKey     String
+  hex          String?
+  pantoneCode  String?
+  /** SKU suffix at the supplier for this specific color. */
+  skuSuffix    String?
+  /** Optional swatch image URL. */
+  imageUrl     String?
+  sortOrder    Int            @default(0)
+  active       Boolean        @default(true)
+  notes        String?
+  createdAt    DateTime       @default(now())
+  updatedAt    DateTime       @updatedAt
+
+  material     MasterMaterial @relation(fields: [materialId], references: [id], onDelete: Cascade)
+
+  @@unique([materialId, colorKey])
+  @@index([materialId, sortOrder])
+}
+
 // Phase 8 — product classification.
 //
 // Sign / print shops don't just sell "products" — their catalogue is a mix
