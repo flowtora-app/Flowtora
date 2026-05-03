@@ -1801,6 +1801,12 @@ model Product {
   createdAt DateTime @default(now())
   updatedAt DateTime @updatedAt
 
+  // Page 25 — master-catalog clone link. When a tenant clones a
+  // MasterProduct into their workspace catalog, we stamp masterProductId
+  // so the platform admin can compute adoption + push updates back to
+  // every tenant copy. Null = native product the tenant authored.
+  masterProductId String?
+
   tenant            Tenant                    @relation(fields: [tenantId], references: [id], onDelete: Cascade)
   optionGroups      ProductOptionGroup[]
   quantityTiers     ProductQuantityTier[]
@@ -1808,11 +1814,245 @@ model Product {
   orderItems        OrderItem[]
   packageComponents ProductPackageComponent[] @relation("ComponentProduct")
   templateItems     QuoteTemplateItem[]       @relation("TemplateProduct")
+  // Page 25 — back-relation to the source master product (when cloned).
+  masterProduct     MasterProduct?            @relation(fields: [masterProductId], references: [id], onDelete: SetNull)
 
   @@index([tenantId, active])
   @@index([tenantId, category])
   @@index([tenantId, name])
   @@index([tenantId, kind])
+  @@index([masterProductId])
+}
+
+// ─────────────────────────────────────────────────────────────────
+// Page 25 — Master Product Catalog.
+//
+// A platform-curated library of sign/print product templates that
+// tenants can clone into their own catalogs as starting points.
+// Distinct from the tenant-scoped `Product` model above: master rows
+// live at the platform level, are authored by ops, and become the
+// source-of-truth for adoption + push-updates.
+//
+// MasterProductAttribute is a dynamic-schema attribute (size, finish,
+// material, etc.) — type + validation + conditional visibility live
+// as JSON. MasterProductMaterial is the bill-of-materials default
+// (e.g. 13oz vinyl: 1.05 × area). MasterProductImage covers gallery +
+// hero + mockup placements. MasterProductVersion is a snapshot for
+// rollback + push-to-tenants. Tenant clones link back via the
+// `masterProductId` field above.
+//
+// Honest deferrals: cascading-category picker UI, Pantone color
+// library, conditional-visibility runtime engine, mockup template
+// renderer — schema captured, UI deferred. Push-update to tenants
+// runs as a synchronous loop today; queue + per-tenant approval flow
+// ships when the worker pipeline lands.
+// ─────────────────────────────────────────────────────────────────
+
+enum MasterProductStatus {
+  DRAFT
+  PUBLISHED
+  ARCHIVED
+}
+
+enum MasterProductCategory {
+  BANNERS
+  YARD_SIGNS
+  VEHICLE_WRAPS
+  WINDOW_GRAPHICS
+  WALL_DECALS
+  TRADE_SHOW_DISPLAYS
+  A_FRAMES
+  CHANNEL_LETTERS
+  ADA_SIGNS
+  APPAREL_SCREEN_PRINT
+  APPAREL_DTG
+  APPAREL_DTF
+  APPAREL_EMBROIDERY
+  CAPS
+  HOODIES
+  BUSINESS_CARDS
+  BROCHURES
+  POSTERS
+  STICKERS
+  LABELS
+  MAGNETS
+  PROMO_PRODUCTS
+  TRADE_PRINT
+  WIDE_FORMAT
+  ARCHITECTURAL
+  WAYFINDING
+  CUSTOM
+}
+
+enum MasterAttributeType {
+  NUMBER
+  SELECT
+  MULTI_SELECT
+  COLOR
+  BOOLEAN
+  DATE
+  FILE_UPLOAD
+  TEXT
+}
+
+enum MasterImageKind {
+  HERO
+  GALLERY
+  MOCKUP
+  LIFESTYLE
+  HOVER
+}
+
+model MasterProduct {
+  id              String                @id @default(cuid())
+  /** URL-safe slug, unique. */
+  slug            String                @unique
+  name            String
+  /** Optional SKU on the master row — clones can override. */
+  sku             String?
+  category        MasterProductCategory
+  /** Industry vertical hint, free-form. */
+  industryVertical String?
+  /** Customer-visible long description (markdown / rich text). */
+  description     String?
+  /** Customer-visible short description for cards. */
+  shortDescription String?
+  /** Internal note — never customer-facing. */
+  internalNotes   String?
+  /** Tags for search + filter. */
+  tags            String[]              @default([])
+  status          MasterProductStatus   @default(DRAFT)
+  /** Lowest price the customer would see, in minor units (USD). */
+  priceFromMinor  Int                   @default(0)
+  /** Default price formula slug (links to a future PricingFormula library). */
+  pricingFormulaSlug String?
+  /** Custom expression override when no formula slug applies. */
+  pricingExpression  String?
+  /** Base lead time in days. Per-attribute modifiers can extend. */
+  leadTimeDays    Int                   @default(3)
+  rushLeadTimeDays Int?
+  /** Production waste percent (0-100). */
+  wasteFactorPct  Decimal               @default(0) @db.Decimal(6, 2)
+  /** Default required equipment list — e.g. ["wide_format_printer", "cutter"]. */
+  requiredEquipment String[]            @default([])
+  /** Capacity unit: "sq_ft_per_hour", "pcs_per_hour", "linear_ft_per_hour". */
+  capacityUnit    String?
+  capacityValue   Decimal?              @db.Decimal(10, 2)
+  /** Material certifications + regulatory notes. */
+  certifications  String[]              @default([])
+  complianceNotes String?
+  /** Primary hero image URL — also surfaced via MasterProductImage rows. */
+  primaryImageUrl String?
+  /** SEO. */
+  seoTitle        String?
+  seoDescription  String?
+  ogImageUrl      String?
+
+  createdById   String
+  createdAt     DateTime              @default(now())
+  updatedAt     DateTime              @updatedAt
+  publishedAt   DateTime?
+
+  attributes    MasterProductAttribute[]
+  materials     MasterProductMaterial[]
+  images        MasterProductImage[]
+  versions      MasterProductVersion[]
+  /** Workspaces that have cloned this master template. */
+  clones        Product[]
+
+  @@index([status, category])
+  @@index([category, name])
+}
+
+model MasterProductAttribute {
+  id              String              @id @default(cuid())
+  productId       String
+  /** Stable programmatic key (e.g. "width", "finish"). */
+  key             String
+  /** Display label (e.g. "Width", "Finish"). */
+  label           String
+  type            MasterAttributeType
+  /** Sort order within the editor + customer form. */
+  sortOrder       Int                 @default(0)
+  /** When true, customer must set this. */
+  required        Boolean             @default(false)
+  /** Surface to the customer (vs internal-only). */
+  customerVisible Boolean             @default(true)
+  /** Default value as JSON — type depends on `type`. */
+  defaultValue    Json?
+  /** Validation rules as JSON, e.g. { min: 1, max: 1000, step: 0.5, unit: "in" }. */
+  validation      Json?
+  /** Options for SELECT / MULTI_SELECT, JSON array of { value, label }. */
+  options         Json?
+  /** Conditional visibility, e.g. { showIf: { key: "sides", value: 2 } }. */
+  conditional     Json?
+  helpText        String?
+  createdAt       DateTime            @default(now())
+  updatedAt       DateTime            @updatedAt
+
+  product         MasterProduct       @relation(fields: [productId], references: [id], onDelete: Cascade)
+
+  @@unique([productId, key])
+  @@index([productId, sortOrder])
+}
+
+model MasterProductMaterial {
+  id                String         @id @default(cuid())
+  productId         String
+  /** Stable key for the material (e.g. "vinyl_13oz"). */
+  materialKey       String
+  /** Display label (e.g. "13oz vinyl"). */
+  label             String
+  /** Default consumption expression — e.g. "1.05 * area" or "qty * 0.25". */
+  defaultConsumption String?
+  /** Cost per unit in minor units. */
+  costPerUnit       Int            @default(0)
+  /** Display unit ("sq_ft", "linear_ft", "each"). */
+  unit              String?
+  preferredSupplier String?
+  notes             String?
+  createdAt         DateTime       @default(now())
+  updatedAt         DateTime       @updatedAt
+
+  product           MasterProduct  @relation(fields: [productId], references: [id], onDelete: Cascade)
+
+  @@unique([productId, materialKey])
+  @@index([productId])
+}
+
+model MasterProductImage {
+  id          String           @id @default(cuid())
+  productId   String
+  url         String
+  altText     String?
+  kind        MasterImageKind  @default(GALLERY)
+  sortOrder   Int              @default(0)
+  /** When kind=MOCKUP, JSON of placeholder rectangles for the artwork
+   *  area (positions / sizes / rotation). */
+  mockupAreas Json?
+  createdAt   DateTime         @default(now())
+  updatedAt   DateTime         @updatedAt
+
+  product     MasterProduct    @relation(fields: [productId], references: [id], onDelete: Cascade)
+
+  @@index([productId, kind, sortOrder])
+}
+
+model MasterProductVersion {
+  id                  String        @id @default(cuid())
+  productId           String
+  version             Int
+  /** Full serialized state at publish time — same shape as the
+   *  PlanVersion snapshot pattern (intentionally loose JSON). */
+  snapshot            Json
+  publishedByUserId   String?
+  note                String?
+  createdAt           DateTime      @default(now())
+
+  product             MasterProduct @relation(fields: [productId], references: [id], onDelete: Cascade)
+
+  @@unique([productId, version])
+  @@index([productId, createdAt])
 }
 
 // Phase 8 — product classification.
