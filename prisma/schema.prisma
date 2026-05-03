@@ -2556,6 +2556,78 @@ model IndustryTemplateVersion {
   @@index([templateId, createdAt])
 }
 
+// ─────────────────────────────────────────────────────────────────
+// Page 30 — Design Asset Library.
+//
+// Licensed stock assets tenants pull into their workspaces — fonts,
+// icons, mockups, palettes, patterns, photos, templates. Each asset
+// carries a license + attribution string + plan-tier gate.
+//
+// Honest deferrals: actual binary upload (URL field today; storage
+// SDK pending), per-tenant usage tracking, license-doc attestation,
+// font preview rendering, mockup PSD layer extraction.
+// ─────────────────────────────────────────────────────────────────
+
+enum DesignAssetKind {
+  FONT
+  ICON
+  MOCKUP
+  PALETTE
+  PATTERN
+  PHOTO
+  TEMPLATE
+}
+
+enum DesignAssetLicense {
+  CC0
+  CC_BY
+  CC_BY_SA
+  COMMERCIAL
+  PROPRIETARY
+  CUSTOM
+}
+
+enum DesignAssetStatus {
+  ACTIVE
+  ARCHIVED
+}
+
+model DesignAsset {
+  id                 String              @id @default(cuid())
+  slug               String              @unique
+  name               String
+  description        String?
+  kind               DesignAssetKind
+  /** Direct URL to the asset binary. */
+  fileUrl            String?
+  /** Thumbnail / preview image URL. */
+  thumbnailUrl       String?
+  /** Display format string ("OTF", "SVG", "PNG", "PSD", "PDF"). */
+  format             String?
+  sizeBytes          Int?
+  /** Dimensions / spec metadata as JSON. */
+  metadata           Json?
+  /** For PALETTE kind — array of hex strings. */
+  paletteColors      String[]            @default([])
+
+  license            DesignAssetLicense  @default(COMMERCIAL)
+  licenseAttribution String?
+  licenseUrl         String?
+  /** Plan slugs gated to this asset. Empty = all plans. */
+  allowedPlanSlugs   String[]            @default([])
+
+  status             DesignAssetStatus   @default(ACTIVE)
+  internalNotes      String?
+  tags               String[]            @default([])
+
+  createdById        String
+  createdAt          DateTime            @default(now())
+  updatedAt          DateTime            @updatedAt
+
+  @@index([status, kind])
+  @@index([kind, name])
+}
+
 // Phase 8 — product classification.
 //
 // Sign / print shops don't just sell "products" — their catalogue is a mix
