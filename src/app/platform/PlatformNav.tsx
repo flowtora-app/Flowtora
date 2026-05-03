@@ -63,6 +63,7 @@ const NAV_ITEMS: NavItem[] = [
   { href: "/platform/billing/payouts",  label: "Payouts",            icon: "Vendors" },
   { href: "/platform/catalog/products", label: "Master Catalog",     icon: "Products" },
   { href: "/platform/catalog/materials",label: "Material Library",   icon: "Package" },
+  { href: "/platform/catalog/equipment",label: "Equipment Templates", icon: "Production" },
 ];
 
 export interface PlatformNavProps {
