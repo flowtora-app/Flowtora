@@ -8255,6 +8255,116 @@ enum SupportTicketModule {
 }
 
 // ────────────────────────────────────────────────────────────
+// Page 36 — Feature Requests / Roadmap board.
+// ────────────────────────────────────────────────────────────
+
+enum FeatureRequestStatus {
+  SUBMITTED // freshly created, awaiting triage
+  BACKLOG
+  UNDER_REVIEW
+  PLANNED
+  IN_PROGRESS
+  BETA
+  SHIPPED
+  WONT_DO
+}
+
+enum EngineeringEffort {
+  XS
+  S
+  M
+  L
+  XL
+}
+
+enum VoteDirection {
+  UP
+  DOWN
+}
+
+model FeatureRequest {
+  id String @id @default(cuid())
+
+  title       String
+  description String               @default("") // Markdown
+  status      FeatureRequestStatus @default(SUBMITTED)
+
+  // Submitter — tenant user who filed it. Both nullable so requests can
+  // outlive a removed tenant or user; the body is still useful.
+  submitterUserId   String?
+  submitterTenantId String?
+
+  // Voting — denormalized counters. FeatureRequestVote is the source of truth
+  // and a Prisma trigger / server-action increments these alongside.
+  upvoteCount   Int @default(0)
+  downvoteCount Int @default(0)
+
+  // ICE scoring (1..10 each).
+  iceImpact     Int?
+  iceConfidence Int?
+  iceEase       Int?
+
+  // Engineering
+  effort EngineeringEffort?
+
+  // Schedule
+  plannedRelease String? // e.g. "2026Q3" or "v3.2"
+  swimlane       String? // e.g. "Sales" / "Production" — drives roadmap lanes
+
+  // Public roadmap visibility — when true, surfaces on /roadmap.
+  isPublic Boolean @default(false)
+
+  tags String[] @default([])
+
+  // Linked records — ticket ids (Page 33), and a future Bug.id (Page 37).
+  linkedSupportTicketIds String[] @default([])
+  linkedBugId            String?
+
+  // Merge tracking — when this request is merged INTO another, mergedIntoId
+  // points at the survivor and the row stops accepting new votes.
+  mergedIntoId String?
+  mergedAt     DateTime?
+
+  createdAt DateTime  @default(now())
+  updatedAt DateTime  @updatedAt
+  shippedAt DateTime?
+
+  votes    FeatureRequestVote[]
+  comments FeatureRequestComment[]
+
+  @@index([status, updatedAt])
+  @@index([plannedRelease])
+  @@index([mergedIntoId])
+  @@index([isPublic, status])
+}
+
+model FeatureRequestVote {
+  id        String        @id @default(cuid())
+  requestId String
+  userId    String
+  direction VoteDirection
+  createdAt DateTime      @default(now())
+
+  request FeatureRequest @relation(fields: [requestId], references: [id], onDelete: Cascade)
+
+  @@unique([requestId, userId])
+  @@index([requestId])
+  @@index([userId])
+}
+
+model FeatureRequestComment {
+  id        String   @id @default(cuid())
+  requestId String
+  authorId  String
+  body      String
+  createdAt DateTime @default(now())
+
+  request FeatureRequest @relation(fields: [requestId], references: [id], onDelete: Cascade)
+
+  @@index([requestId, createdAt])
+}
+
+// ────────────────────────────────────────────────────────────
 // Page 34 — Knowledge Base / Help Center.
 //
 // Public-facing docs site authored from the platform admin and

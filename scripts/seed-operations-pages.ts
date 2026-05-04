@@ -20,6 +20,7 @@ import type {
   AnnouncementType, AnnouncementPriority, AnnouncementStatus,
   AnnouncementAudience, AnnouncementChannel,
   ChangelogCategory,
+  FeatureRequestStatus, EngineeringEffort, VoteDirection,
 } from "@prisma/client";
 
 const SEED_TAG = "[seed]";
@@ -52,6 +53,7 @@ async function main() {
   await seedSupportTickets(tenants, platformUsers); // Page 33
   await seedKnowledgeBase(platformUsers);       // Page 34
   await seedAnnouncements(platformUsers, tenants);  // Page 35
+  await seedFeatureRequests(platformUsers, tenants); // Page 36
 
   console.log("\n✓ Seed complete.\n");
   await db.$disconnect();
@@ -105,6 +107,15 @@ async function wipeOldSeed() {
   if (oldAnn.length) {
     await db.platformAnnouncement.deleteMany({ where: { id: { in: oldAnn.map((a) => a.id) } } });
     console.log(`  deleted ${oldAnn.length} announcements`);
+  }
+  // Feature requests tagged seed.
+  const oldFr = await db.featureRequest.findMany({
+    where: { tags: { has: "seed" } },
+    select: { id: true },
+  });
+  if (oldFr.length) {
+    await db.featureRequest.deleteMany({ where: { id: { in: oldFr.map((f) => f.id) } } });
+    console.log(`  deleted ${oldFr.length} feature requests`);
   }
   // Customers tagged seed (after orders are gone).
   await db.customer.deleteMany({ where: { tags: { has: "seed" } } });
@@ -1184,6 +1195,224 @@ async function seedAnnouncements(
   }
 
   console.log(`  ✓ ${count + 3} announcements with view tracking`);
+}
+
+/* ── Feature Requests (Page 36) ──────────────────────── */
+
+const FR_TEMPLATES: {
+  title: string;
+  description: string;
+  swimlane: string;
+  tags: string[];
+  preferredStatus?: FeatureRequestStatus;
+  effort?: EngineeringEffort;
+  ice?: { i: number; c: number; e: number };
+}[] = [
+  { title: "Bulk export of completed jobs as CSV",
+    description: "## Why\n\nAccounting software needs a CSV with customer, total, and completion date for every closed job in a window.\n\n## What\n\n- Filter by date range\n- Pick columns\n- Background job for >5k rows + email when done",
+    swimlane: "Reports", tags: ["export", "csv", "reports"],
+    preferredStatus: "PLANNED", effort: "M", ice: { i: 7, c: 8, e: 6 } },
+  { title: "Square as a payment processor",
+    description: "Several shops are on Square for in-store and want one accounting flow. Connect Square via OAuth, sync payouts, and reconcile invoices.",
+    swimlane: "Billing", tags: ["square", "payments"],
+    preferredStatus: "UNDER_REVIEW", effort: "L", ice: { i: 9, c: 6, e: 3 } },
+  { title: "Mobile app — offline proof signing",
+    description: "Installers in the field lose signal mid-job. Cache the proof PDF locally, capture the signature, and sync once back on Wi-Fi.",
+    swimlane: "Mobile", tags: ["mobile", "offline", "proofs"],
+    preferredStatus: "BETA", effort: "L", ice: { i: 8, c: 7, e: 4 } },
+  { title: "Two-way Google Calendar sync",
+    description: "Today the sync is one-way. Pulling external events from a tech's calendar would prevent double-booking.",
+    swimlane: "Integrations", tags: ["google", "calendar"],
+    preferredStatus: "BACKLOG", effort: "L", ice: { i: 6, c: 5, e: 4 } },
+  { title: "Per-customer default tax rate",
+    description: "Some commercial customers are tax-exempt; today reps have to remember to zero out tax line. Make it a customer-level default.",
+    swimlane: "Sales", tags: ["tax", "customer"],
+    preferredStatus: "IN_PROGRESS", effort: "S", ice: { i: 7, c: 9, e: 9 } },
+  { title: "Dashboards exportable to PDF",
+    description: "Owners want to email weekly KPIs to investors. Add an Export → PDF button on the executive dashboard with auto-generated annotations.",
+    swimlane: "Reports", tags: ["dashboard", "pdf", "executive"],
+    preferredStatus: "BACKLOG", effort: "M", ice: { i: 5, c: 6, e: 6 } },
+  { title: "Native mobile push notifications for installers",
+    description: "When an install is rescheduled or the customer reschedules, the assigned installer should get a push within seconds — not at the next email check.",
+    swimlane: "Mobile", tags: ["push", "installs"],
+    preferredStatus: "PLANNED", effort: "M", ice: { i: 8, c: 7, e: 5 } },
+  { title: "Custom proof watermark per tenant",
+    description: "Currently watermarks are fixed text. Let shops set their own watermark — logo or shop name.",
+    swimlane: "Proofs", tags: ["proofs", "branding"],
+    preferredStatus: "SHIPPED", effort: "S", ice: { i: 5, c: 9, e: 9 } },
+  { title: "Stripe Tax integration",
+    description: "Move tax calculation from our internal table to Stripe Tax for automatic compliance across jurisdictions.",
+    swimlane: "Billing", tags: ["stripe", "tax"],
+    preferredStatus: "UNDER_REVIEW", effort: "XL", ice: { i: 9, c: 5, e: 2 } },
+  { title: "Quote → recurring contract",
+    description: "Some commercial customers buy the same job monthly (cleaning vinyl, replacement decals). Convert a quote to a recurring schedule.",
+    swimlane: "Sales", tags: ["quotes", "recurring"],
+    preferredStatus: "BACKLOG", effort: "L", ice: { i: 7, c: 6, e: 3 } },
+  { title: "Production board — split into shifts",
+    description: "Day vs night shifts have different team members; let supervisors filter the production board by shift window.",
+    swimlane: "Production", tags: ["production", "shifts"],
+    preferredStatus: "SUBMITTED" },
+  { title: "Webhook events for order status changes",
+    description: "Tenants integrating with their own ERP need a webhook when an order moves status. JSON payload with the new status + tenant id.",
+    swimlane: "API", tags: ["webhooks", "api"],
+    preferredStatus: "PLANNED", effort: "S", ice: { i: 8, c: 8, e: 8 } },
+  { title: "Inline tax-exempt certificate uploads",
+    description: "Customers with a resale certificate need to upload it once and have it apply to every invoice. Today it's a free-form note.",
+    swimlane: "Billing", tags: ["tax", "compliance"],
+    preferredStatus: "SUBMITTED" },
+  { title: "Bulk email all open quotes",
+    description: "Send a follow-up email to every quote that's been sitting >7 days without a response.",
+    swimlane: "Sales", tags: ["quotes", "automation"],
+    preferredStatus: "BETA", effort: "M", ice: { i: 6, c: 7, e: 7 } },
+  { title: "Slack notifications for high-priority tickets",
+    description: "When a P1 support ticket lands, ping a Slack channel so the on-call sees it immediately.",
+    swimlane: "Integrations", tags: ["slack", "alerts"],
+    preferredStatus: "IN_PROGRESS", effort: "S", ice: { i: 7, c: 9, e: 8 } },
+];
+
+async function seedFeatureRequests(
+  staff: { id: string; email: string; name: string | null }[],
+  tenants: { id: string; name: string }[],
+) {
+  console.log("\n── Seeding feature requests (Page 36)…");
+  let count = 0;
+  let voteCount = 0;
+  let commentCount = 0;
+
+  // Pull a couple of tenant users to author submissions.
+  const tenantUsers = await db.user.findMany({
+    where: { memberships: { some: { tenantId: { in: tenants.map((t) => t.id) } } } },
+    select: { id: true, memberships: { select: { tenantId: true }, take: 1 } },
+    take: 20,
+  });
+
+  // Pull a few real ticket ids to link.
+  const seedTickets = await db.supportTicket.findMany({
+    where: { subject: { startsWith: SEED_TAG } },
+    select: { id: true },
+    take: 10,
+  });
+
+  for (const tmpl of FR_TEMPLATES) {
+    const ageDays = randInt(1, 120);
+    const createdAt = daysAgo(ageDays);
+    const submitter = rand(tenantUsers);
+    const submitterTenantId = submitter?.memberships[0]?.tenantId ?? rand(tenants).id;
+
+    const status: FeatureRequestStatus = tmpl.preferredStatus
+      ?? rand(["SUBMITTED", "BACKLOG", "UNDER_REVIEW"] as FeatureRequestStatus[]);
+
+    // Per-status quarter assignment.
+    const quarter = (() => {
+      if (status === "SHIPPED") return null;
+      if (status === "IN_PROGRESS" || status === "BETA") return "2026Q2";
+      if (status === "PLANNED") return rand(["2026Q3", "2026Q4"] as const);
+      return null;
+    })();
+
+    const upvotes = randInt(2, 80);
+    const downvotes = randInt(0, 6);
+    const linkedTickets = seedTickets.length > 0 && Math.random() < 0.4
+      ? sample(seedTickets, randInt(1, 3)).map((t) => t.id)
+      : [];
+
+    const fr = await db.featureRequest.create({
+      data: {
+        title: tmpl.title,
+        description: tmpl.description,
+        status,
+        submitterUserId: submitter?.id ?? rand(staff).id,
+        submitterTenantId,
+        upvoteCount: upvotes,
+        downvoteCount: downvotes,
+        iceImpact: tmpl.ice?.i ?? null,
+        iceConfidence: tmpl.ice?.c ?? null,
+        iceEase: tmpl.ice?.e ?? null,
+        effort: tmpl.effort ?? null,
+        plannedRelease: quarter ?? null,
+        swimlane: tmpl.swimlane,
+        isPublic: status !== "SUBMITTED" && status !== "BACKLOG" && Math.random() < 0.6,
+        tags: ["seed", ...tmpl.tags],
+        linkedSupportTicketIds: linkedTickets,
+        createdAt,
+        shippedAt: status === "SHIPPED" ? daysAgo(randInt(0, 30)) : null,
+      },
+      select: { id: true },
+    });
+    count += 1;
+
+    // Dedicated FeatureRequestVote rows (matches the counters above).
+    const voteRows = [
+      ...Array.from({ length: upvotes }, (): VoteDirection => "UP"),
+      ...Array.from({ length: downvotes }, (): VoteDirection => "DOWN"),
+    ];
+    const voters = sample(tenantUsers, Math.min(tenantUsers.length, voteRows.length));
+    for (let i = 0; i < voters.length; i++) {
+      const u = voters[i];
+      const dir = voteRows[i];
+      if (!u || !dir) continue;
+      try {
+        await db.featureRequestVote.create({
+          data: {
+            requestId: fr.id,
+            userId: u.id,
+            direction: dir,
+            createdAt: new Date(createdAt.getTime() + randInt(60, 60 * 24) * 60_000),
+          },
+        });
+        voteCount += 1;
+      } catch {
+        // unique violation — skip
+      }
+    }
+
+    // 0-3 comments per request from random staff/tenant users.
+    const cmts = randInt(0, 3);
+    for (let i = 0; i < cmts; i++) {
+      const author = Math.random() < 0.5 ? rand(staff) : (rand(tenantUsers) ?? rand(staff));
+      await db.featureRequestComment.create({
+        data: {
+          requestId: fr.id,
+          authorId: author.id,
+          body: rand([
+            "Strong +1 — this would unblock our biggest accounts.",
+            "We've been working around this with a hacky CSV. A native option would be so much cleaner.",
+            "Pinged engineering; we want to scope this in the next sprint.",
+            "Could we ship a smaller version first? Even just the date filter.",
+            "I tagged the related tickets so the conversion threshold is clearer.",
+          ]),
+          createdAt: new Date(createdAt.getTime() + randInt(2, 60) * 3_600_000),
+        },
+      });
+      commentCount += 1;
+    }
+  }
+
+  // Also create one merged-into example so the merged-in panel has data.
+  const survivors = await db.featureRequest.findMany({
+    where: { tags: { has: "seed" }, status: { in: ["PLANNED", "IN_PROGRESS"] } },
+    select: { id: true, title: true },
+    take: 1,
+  });
+  if (survivors.length > 0) {
+    const survivor = survivors[0]!;
+    const merged = await db.featureRequest.create({
+      data: {
+        title: "Duplicate — pls let us export jobs to CSV",
+        description: "Same as the survivor, just opened separately by another tenant. Marking as merged.",
+        status: "BACKLOG",
+        tags: ["seed", "merged-test"],
+        upvoteCount: 5,
+        mergedIntoId: survivor.id,
+        mergedAt: daysAgo(7),
+        submitterUserId: rand(staff).id,
+        submitterTenantId: rand(tenants).id,
+      },
+    });
+    console.log(`  ✓ marked ${merged.id.slice(0, 8)} as merged into ${survivor.id.slice(0, 8)}`);
+  }
+
+  console.log(`  ✓ ${count} feature requests, ${voteCount} votes, ${commentCount} comments`);
 }
 
 main().catch((e) => {
