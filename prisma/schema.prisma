@@ -8071,3 +8071,131 @@ enum SupportTicketModule {
   ADMIN
   OTHER
 }
+
+// ────────────────────────────────────────────────────────────
+// Page 34 — Knowledge Base / Help Center.
+//
+// Public-facing docs site authored from the platform admin and
+// served (eventually) at /help. Articles live in nested categories
+// (up to 3 levels deep) with a draft → review → published →
+// archived workflow. Translations, helpfulness feedback, search
+// analytics, and revision history are first-class.
+// ────────────────────────────────────────────────────────────
+
+model KbCategory {
+  id        String  @id @default(cuid())
+  slug      String  @unique
+  name      String
+  parentId  String?
+  sortOrder Int     @default(0)
+  createdAt DateTime @default(now())
+  updatedAt DateTime @updatedAt
+
+  parent   KbCategory?  @relation("KbCategoryTree", fields: [parentId], references: [id], onDelete: SetNull)
+  children KbCategory[] @relation("KbCategoryTree")
+  articles KbArticle[]
+
+  @@index([parentId, sortOrder])
+}
+
+model KbArticle {
+  id           String          @id @default(cuid())
+  slug         String
+  locale       String          @default("en")
+  title        String
+  summary      String?
+  bodyMarkdown String          @default("")
+  categoryId   String?
+  status       KbArticleStatus @default(DRAFT)
+  visibility   KbVisibility    @default(PUBLIC)
+  featured     Boolean         @default(false)
+
+  // Author lifecycle. `authorId` is the original creator;
+  // `publishedById` records who flipped it to PUBLISHED.
+  authorId      String?
+  publishedById String?
+  publishedAt   DateTime?
+  archivedAt    DateTime?
+
+  // Counters — incremented async; charts in the analytics tab can
+  // re-aggregate from KbSearchQuery + KbArticleFeedback if needed.
+  viewCount   Int @default(0)
+  helpfulUp   Int @default(0)
+  helpfulDown Int @default(0)
+
+  // SEO fields. Empty = fall back to title/summary at render time.
+  metaTitle       String?
+  metaDescription String?
+  canonicalUrl    String?
+  ogImageUrl      String?
+
+  tags              String[] @default([])
+  relatedArticleIds String[] @default([])
+
+  createdAt DateTime @default(now())
+  updatedAt DateTime @updatedAt
+
+  category     KbCategory?         @relation(fields: [categoryId], references: [id], onDelete: SetNull)
+  revisions    KbArticleRevision[]
+  feedback     KbArticleFeedback[]
+  searchClicks KbSearchQuery[]
+
+  @@unique([slug, locale])
+  @@index([status, updatedAt])
+  @@index([categoryId, status])
+  @@index([locale, status])
+}
+
+model KbArticleRevision {
+  id            String          @id @default(cuid())
+  articleId     String
+  title         String
+  bodyMarkdown  String
+  status        KbArticleStatus
+  note          String?
+  savedByUserId String?
+  createdAt     DateTime        @default(now())
+
+  article KbArticle @relation(fields: [articleId], references: [id], onDelete: Cascade)
+
+  @@index([articleId, createdAt])
+}
+
+model KbArticleFeedback {
+  id        String   @id @default(cuid())
+  articleId String
+  helpful   Boolean
+  comment   String?
+  userId    String? // nullable = anonymous reader
+  createdAt DateTime @default(now())
+
+  article KbArticle @relation(fields: [articleId], references: [id], onDelete: Cascade)
+
+  @@index([articleId, createdAt])
+}
+
+model KbSearchQuery {
+  id               String   @id @default(cuid())
+  query            String
+  resultsCount     Int
+  clickedArticleId String?
+  at               DateTime @default(now())
+
+  clickedArticle KbArticle? @relation(fields: [clickedArticleId], references: [id], onDelete: SetNull)
+
+  @@index([at])
+  @@index([query])
+}
+
+enum KbArticleStatus {
+  DRAFT
+  REVIEW
+  PUBLISHED
+  ARCHIVED
+}
+
+enum KbVisibility {
+  PUBLIC
+  INTERNAL
+  PLAN_RESTRICTED
+}

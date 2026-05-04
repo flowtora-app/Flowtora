@@ -67,10 +67,11 @@ const NAV_ITEMS: NavItem[] = [
   { href: "/platform/catalog/pricing",        label: "Pricing Formulas",     icon: "Revenue" },
   { href: "/platform/catalog/templates",      label: "Industry Templates",   icon: "FileText" },
   { href: "/platform/catalog/assets",         label: "Design Assets",        icon: "Palette" },
-  // Pages 31-33 — operations
-  { href: "/platform/operations/jobs",        label: "Job Queue Monitor",    icon: "Pipeline" },
-  { href: "/platform/operations/production",  label: "Production Health",    icon: "Heartbeat" },
-  { href: "/platform/operations/tickets",     label: "Support Tickets",      icon: "Support" },
+  // Pages 31-34 — operations
+  { href: "/platform/operations/jobs",            label: "Job Queue Monitor",    icon: "Pipeline" },
+  { href: "/platform/operations/production",      label: "Production Health",    icon: "Heartbeat" },
+  { href: "/platform/operations/tickets",         label: "Support Tickets",      icon: "Support" },
+  { href: "/platform/operations/knowledge-base",  label: "Knowledge Base",       icon: "FileText" },
 ];
 
 const COLLAPSE_KEY = "flowtora.platform-nav.collapsed";
