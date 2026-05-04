@@ -2628,6 +2628,35 @@ model DesignAsset {
   @@index([kind, name])
 }
 
+// ─────────────────────────────────────────────────────────────────
+// Page 32 — Production Health benchmark config.
+//
+// Singleton row controlling which industry-wide benchmark metrics
+// are eligible for surfacing on tenant dashboards. The platform
+// admin runs the privacy review here and flips the toggle once a
+// metric is anonymized + statistically valid (e.g. minimum sample
+// size, no leak risk via outlier).
+//
+// Honest deferral: the tenant-side dashboard surface that consumes
+// these toggles ships later — flipping the toggle today records the
+// intent + audit trail, but the workspace doesn't render the
+// benchmark widget yet.
+// ─────────────────────────────────────────────────────────────────
+
+model ProductionBenchmarkConfig {
+  id                          String   @id @default("default")
+  publishOnTimeDeliveryRate   Boolean  @default(false)
+  publishAvgCycleDays         Boolean  @default(false)
+  publishAvgOrderValue        Boolean  @default(false)
+  publishEstGrossMarginPct    Boolean  @default(false)
+  publishLateRate             Boolean  @default(false)
+  /** Minimum tenant sample required before a metric is shown on
+   *  any individual tenant's dashboard (privacy floor). */
+  minSampleSize               Int      @default(10)
+  updatedAt                   DateTime @updatedAt
+  updatedBy                   String?
+}
+
 // Phase 8 — product classification.
 //
 // Sign / print shops don't just sell "products" — their catalogue is a mix
