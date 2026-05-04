@@ -28,6 +28,8 @@ import { AttentionPanel } from "@/components/dashboard/AttentionPanel";
 import { ActivityFeed } from "@/components/dashboard/ActivityFeed";
 import { QuickActions } from "@/components/dashboard/QuickActions";
 import { EmptyStateCard } from "@/components/dashboard/EmptyStateCard";
+import { BenchmarkBadge } from "@/components/dashboard/BenchmarkBadge";
+import { loadTenantBenchmarks } from "@/server/tenant/benchmarks";
 import { DashboardShell } from "@/components/dashboard/DashboardShell";
 import { HeroBand } from "@/components/dashboard/HeroBand";
 import { ExecutiveView } from "@/components/dashboard/views/ExecutiveView";
@@ -116,11 +118,16 @@ export default async function DashboardPage({
   // Fan-out: hero (shop-wide financial summary, only for personas that
   // see it), per-persona data, attention feed, recent activity.
   const showHero = personaSeesHero(persona);
-  const [heroMetrics, personaData, attention, activity] = await Promise.all([
+  const [heroMetrics, personaData, attention, activity, benchmarks] = await Promise.all([
     showHero ? loadHeroMetrics(loaderCtx) : Promise.resolve(null),
     loadPersonaData(persona, loaderCtx),
     loadAttention(tenant.id, attentionFilter),
     loadRecentActivity(tenant.id, { limit: 8 }),
+    // Industry benchmarks — only relevant for personas that own the
+    // shop-wide P&L view; sales/csr/installer dashboards don't show it.
+    (persona === "executive" || persona === "production" || persona === "finance")
+      ? loadTenantBenchmarks(tenant.id)
+      : Promise.resolve({ rows: [], anyPublished: false }),
   ]);
 
   // Activation widget — still Owner/Admin-only. Hidden once the shop
@@ -205,12 +212,15 @@ export default async function DashboardPage({
           }
         />
       ) : (
-        <PersonaView
-          persona={persona}
-          slug={slug}
-          currency={tenant.currency}
-          data={personaData}
-        />
+        <>
+          <PersonaView
+            persona={persona}
+            slug={slug}
+            currency={tenant.currency}
+            data={personaData}
+          />
+          {benchmarks.rows.length > 0 && <BenchmarkBadge rows={benchmarks.rows} />}
+        </>
       )}
     </DashboardShell>
   );

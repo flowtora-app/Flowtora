@@ -16,6 +16,9 @@ const configSchema = z.object({
   publishAvgOrderValue:      z.union([z.literal("on"), z.literal("")]).optional(),
   publishEstGrossMarginPct:  z.union([z.literal("on"), z.literal("")]).optional(),
   publishLateRate:           z.union([z.literal("on"), z.literal("")]).optional(),
+  publishEquipmentUptime:    z.union([z.literal("on"), z.literal("")]).optional(),
+  publishWasteRate:          z.union([z.literal("on"), z.literal("")]).optional(),
+  publishReworkRate:         z.union([z.literal("on"), z.literal("")]).optional(),
   minSampleSize: z.coerce.number().int().min(1).max(1000).default(10),
 });
 
@@ -26,26 +29,28 @@ export async function saveBenchmarkConfig(formData: FormData) {
     const msg = parsed.error.issues[0]?.message ?? "Invalid input";
     redirect(`${ROUTE}?error=${encodeURIComponent(msg)}`);
   }
+  const flags = {
+    publishOnTimeDeliveryRate: parsed.data.publishOnTimeDeliveryRate === "on",
+    publishAvgCycleDays:       parsed.data.publishAvgCycleDays === "on",
+    publishAvgOrderValue:      parsed.data.publishAvgOrderValue === "on",
+    publishEstGrossMarginPct:  parsed.data.publishEstGrossMarginPct === "on",
+    publishLateRate:           parsed.data.publishLateRate === "on",
+    publishEquipmentUptime:    parsed.data.publishEquipmentUptime === "on",
+    publishWasteRate:          parsed.data.publishWasteRate === "on",
+    publishReworkRate:         parsed.data.publishReworkRate === "on",
+  };
   await db.productionBenchmarkConfig.upsert({
     where: { id: "default" },
     create: {
       id: "default",
-      publishOnTimeDeliveryRate: parsed.data.publishOnTimeDeliveryRate === "on",
-      publishAvgCycleDays:       parsed.data.publishAvgCycleDays === "on",
-      publishAvgOrderValue:      parsed.data.publishAvgOrderValue === "on",
-      publishEstGrossMarginPct:  parsed.data.publishEstGrossMarginPct === "on",
-      publishLateRate:           parsed.data.publishLateRate === "on",
-      minSampleSize:             parsed.data.minSampleSize,
-      updatedBy:                 ctx.userId,
+      ...flags,
+      minSampleSize: parsed.data.minSampleSize,
+      updatedBy: ctx.userId,
     },
     update: {
-      publishOnTimeDeliveryRate: parsed.data.publishOnTimeDeliveryRate === "on",
-      publishAvgCycleDays:       parsed.data.publishAvgCycleDays === "on",
-      publishAvgOrderValue:      parsed.data.publishAvgOrderValue === "on",
-      publishEstGrossMarginPct:  parsed.data.publishEstGrossMarginPct === "on",
-      publishLateRate:           parsed.data.publishLateRate === "on",
-      minSampleSize:             parsed.data.minSampleSize,
-      updatedBy:                 ctx.userId,
+      ...flags,
+      minSampleSize: parsed.data.minSampleSize,
+      updatedBy: ctx.userId,
     },
   });
   await logPlatformAudit({
@@ -55,13 +60,7 @@ export async function saveBenchmarkConfig(formData: FormData) {
     entityId: "default",
     metadata: {
       actor: ctx.email,
-      published: {
-        onTime: parsed.data.publishOnTimeDeliveryRate === "on",
-        cycle: parsed.data.publishAvgCycleDays === "on",
-        aov: parsed.data.publishAvgOrderValue === "on",
-        margin: parsed.data.publishEstGrossMarginPct === "on",
-        late: parsed.data.publishLateRate === "on",
-      },
+      published: flags,
       minSampleSize: parsed.data.minSampleSize,
     },
   });

@@ -1,6 +1,5 @@
 import { saveBenchmarkConfig } from "@/app/actions/platform-production-health";
 import type { ProductionBenchmarkConfig } from "@prisma/client";
-import { DeferredNote } from "./shared";
 
 const TOGGLES: { key: keyof ProductionBenchmarkConfig; label: string; help: string }[] = [
   { key: "publishOnTimeDeliveryRate", label: "On-time delivery rate",  help: "% of completed orders shipped on or before due date." },
@@ -8,6 +7,9 @@ const TOGGLES: { key: keyof ProductionBenchmarkConfig; label: string; help: stri
   { key: "publishAvgOrderValue",      label: "Avg order value",         help: "Average Order.total across completed orders." },
   { key: "publishEstGrossMarginPct",  label: "Est. gross margin %",     help: "Revenue − cost / revenue across order items with cost data." },
   { key: "publishLateRate",           label: "Late rate (open orders)", help: "Open orders past dueDate / total open orders." },
+  { key: "publishEquipmentUptime",    label: "Equipment uptime",        help: "Per-workstation active time / window. Higher is better." },
+  { key: "publishWasteRate",          label: "Material waste rate",     help: "Quantity-weighted MaterialUsage waste %. Lower is better." },
+  { key: "publishReworkRate",         label: "Rework rate",             help: "% of completed orders with a MAJOR/CRITICAL defect. Lower is better." },
 ];
 
 export function BenchmarkPublishCard({
@@ -72,13 +74,11 @@ export function BenchmarkPublishCard({
           </div>
         )}
       </form>
-      <div className="border-t px-4 py-3" style={{ borderColor: "var(--border-subtle)" }}>
-        <DeferredNote>
-          <strong>Tenant dashboard surface is deferred.</strong> Toggling here records intent +
-          audit trail today, but the workspace doesn&apos;t render the benchmark widget yet.
-          When the tenant dashboard slot ships, it reads this config + the privacy floor before
-          deciding what to show.
-        </DeferredNote>
+      <div className="border-t px-4 py-3 text-[11px]" style={{ borderColor: "var(--border-subtle)", color: "var(--text-muted)" }}>
+        Live on tenant dashboards: the BenchmarkBadge widget reads this config + the privacy
+        floor before deciding what to show. Tenants only see metrics where at least
+        <b style={{ color: "var(--text-default)" }}> {config.minSampleSize}</b>{" "}
+        peers are contributing samples.
       </div>
     </section>
   );

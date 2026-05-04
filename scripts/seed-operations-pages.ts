@@ -48,6 +48,7 @@ async function main() {
 
   await seedCustomersAndProducts(tenants);
   await seedOrders(tenants);                    // Pages 31-32
+  await seedProductionMetrics(tenants);         // Page 32 — uptime, waste, rework
   await seedSupportTickets(tenants, platformUsers); // Page 33
   await seedKnowledgeBase(platformUsers);       // Page 34
   await seedAnnouncements(platformUsers, tenants);  // Page 35
@@ -60,14 +61,18 @@ async function main() {
 
 async function wipeOldSeed() {
   console.log("── Wiping prior seed rows…");
-  // Orders + dependents.
+  // Orders + dependents (stages, material usage, defects all cascade).
   const oldOrders = await db.order.findMany({
     where: { customerNote: { contains: SEED_TAG } },
     select: { id: true },
   });
   if (oldOrders.length) {
-    await db.order.deleteMany({ where: { id: { in: oldOrders.map((o) => o.id) } } });
-    console.log(`  deleted ${oldOrders.length} orders`);
+    const ids = oldOrders.map((o) => o.id);
+    await db.defectReport.deleteMany({ where: { orderId: { in: ids } } });
+    await db.materialUsage.deleteMany({ where: { orderId: { in: ids } } });
+    await db.productionStage.deleteMany({ where: { orderId: { in: ids } } });
+    await db.order.deleteMany({ where: { id: { in: ids } } });
+    console.log(`  deleted ${oldOrders.length} orders + descendants`);
   }
   // SupportTickets where subject prefixed [seed].
   const oldTickets = await db.supportTicket.findMany({
@@ -319,6 +324,117 @@ async function seedOrders(tenants: { id: string }[]) {
     }
   }
   console.log(`  ✓ ${total} orders across ${tenants.length} tenants`);
+}
+
+/* ── Production metrics (Page 32) ────────────────────── */
+
+async function seedProductionMetrics(tenants: { id: string }[]) {
+  console.log("\n── Seeding production metrics (Page 32)…");
+  let stages = 0, defects = 0, mats = 0;
+  for (const t of tenants) {
+    // Pick a sample of recent + completed orders to attach data to.
+    const orders = await db.order.findMany({
+      where: {
+        tenantId: t.id,
+        customerNote: { contains: SEED_TAG },
+      },
+      select: { id: true, status: true, createdAt: true, completedAt: true, startedAt: true },
+      orderBy: { createdAt: "desc" },
+      take: 60,
+    });
+    if (orders.length === 0) continue;
+
+    const owner = await db.membership.findFirst({
+      where: { tenantId: t.id },
+      select: { userId: true },
+    });
+    const reporter = owner?.userId;
+    if (!reporter) continue;
+
+    // Pretend each tenant has 4 workstations — IDs are synthetic strings,
+    // not WorkStation rows, since the loader only needs a stable key.
+    const stationIds = ["ws-print-1", "ws-print-2", "ws-cnc", "ws-laminator"]
+      .map((s) => `${t.id}::${s}`);
+
+    // ProductionStages — 1-3 per order with a station id assigned.
+    for (const o of orders) {
+      const stageCount = randInt(1, 3);
+      const orderStart = o.startedAt ?? o.createdAt;
+      for (let i = 0; i < stageCount; i++) {
+        const stationId = rand(stationIds);
+        const stageStart = new Date(orderStart.getTime() + i * randInt(2, 24) * 3_600_000);
+        const stageDurationHrs = randInt(1, 6);
+        const stageEnd = new Date(stageStart.getTime() + stageDurationHrs * 3_600_000);
+        const completed = o.status === "COMPLETED" || (Math.random() < 0.7 && stageEnd.getTime() < Date.now());
+
+        // We can't reference a real WorkStation row, so we pass null and
+        // store the synthetic id as part of the title for traceability.
+        // The uptime computation will still bucket per-tenant time — we
+        // accept the synthetic-station limitation for seed purposes.
+        await db.productionStage.create({
+          data: {
+            tenantId: t.id,
+            orderId: o.id,
+            title: `Stage ${i + 1} (${stationId.split("::")[1]})`,
+            status: completed ? "DONE" : "ACTIVE",
+            sortOrder: i,
+            startedAt: stageStart,
+            completedAt: completed ? stageEnd : null,
+            startedBy: reporter,
+            completedBy: completed ? reporter : null,
+          },
+        });
+        stages += 1;
+      }
+    }
+
+    // MaterialUsage — log on ~70% of orders.
+    const materials = ["3M Scotchcal", "Coroplast 4mm", "Aluminum Composite", "Vinyl Roll", "PMS Ink Set"];
+    for (const o of orders) {
+      if (Math.random() > 0.7) continue;
+      const usageCount = randInt(1, 3);
+      for (let i = 0; i < usageCount; i++) {
+        await db.materialUsage.create({
+          data: {
+            tenantId: t.id,
+            orderId: o.id,
+            material: rand(materials),
+            quantity: randInt(2, 80),
+            unit: rand(["ft", "sqft", "sheet", "roll"]),
+            // Distribution centered around ~10%, occasionally high spikes.
+            wastePct: Math.random() < 0.85 ? randInt(2, 12) : randInt(15, 30),
+            loggedBy: reporter,
+            createdAt: new Date(o.createdAt.getTime() + randInt(1, 12) * 3_600_000),
+          },
+        });
+        mats += 1;
+      }
+    }
+
+    // DefectReports — ~8% of completed orders pick up a MAJOR/CRITICAL
+    // defect (drives the rework rate). 4% MINOR (cosmetic-only).
+    for (const o of orders) {
+      if (o.status !== "COMPLETED") continue;
+      const r = Math.random();
+      if (r > 0.12) continue;
+      const severity = r < 0.04 ? "MINOR" : (r < 0.10 ? "MAJOR" : "CRITICAL");
+      await db.defectReport.create({
+        data: {
+          tenantId: t.id,
+          orderId: o.id,
+          severity,
+          cause: rand(["misaligned cut", "wrong ink", "peel-off after laminate", "color drift", "operator error"]),
+          notes: `${SEED_TAG} demo defect — ${severity.toLowerCase()}`,
+          reportedBy: reporter,
+          resolvedAt: severity === "MINOR" ? null : new Date((o.completedAt ?? new Date()).getTime() + randInt(1, 24) * 3_600_000),
+          resolvedBy: severity === "MINOR" ? null : reporter,
+          resolution: severity === "MINOR" ? null : rand(["Reprinted and replaced", "Re-laminated", "Sent to rework"]),
+        },
+      });
+      defects += 1;
+    }
+  }
+  console.log(`  ✓ ${stages} stages, ${mats} material usages, ${defects} defects`);
 }
 
 /* ── SupportTickets (Page 33) ────────────────────────── */

@@ -2650,6 +2650,9 @@ model ProductionBenchmarkConfig {
   publishAvgOrderValue        Boolean  @default(false)
   publishEstGrossMarginPct    Boolean  @default(false)
   publishLateRate             Boolean  @default(false)
+  publishEquipmentUptime      Boolean  @default(false)
+  publishWasteRate            Boolean  @default(false)
+  publishReworkRate           Boolean  @default(false)
   /** Minimum tenant sample required before a metric is shown on
    *  any individual tenant's dashboard (privacy floor). */
   minSampleSize               Int      @default(10)

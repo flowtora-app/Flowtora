@@ -17,7 +17,7 @@ import {
   loadBenchmarkConfig,
   loadIndustrySnapshot,
 } from "@/server/platform/production-health";
-import { Kpi, DeferredNote } from "./_components/shared";
+import { Kpi } from "./_components/shared";
 import { DistributionTable } from "./_components/DistributionTable";
 import { AnomalyList } from "./_components/AnomalyList";
 import { BenchmarkPublishCard } from "./_components/BenchmarkPublishCard";
@@ -86,7 +86,7 @@ export default async function ProductionHealthPage({
         </Card>
       ) : (
         <>
-          <div className="grid grid-cols-2 gap-3 md:grid-cols-3 xl:grid-cols-5">
+          <div className="grid grid-cols-2 gap-3 md:grid-cols-4 xl:grid-cols-8">
             <Kpi label="On-time delivery"
                  value={snapshot.onTimeRatePct == null ? "—" : `${snapshot.onTimeRatePct.toFixed(1)}%`}
                  sub={snapshot.stdDev.onTimeRatePct == null
@@ -114,15 +114,25 @@ export default async function ProductionHealthPage({
             <Kpi label="Late rate (open)"
                  value={snapshot.lateRatePct == null ? "—" : `${snapshot.lateRatePct.toFixed(1)}%`}
                  tone={snapshot.lateRatePct != null && snapshot.lateRatePct > 10 ? "warning" : "default"} />
+            <Kpi label="Equipment uptime"
+                 value={snapshot.equipmentUptimePct == null ? "—" : `${snapshot.equipmentUptimePct.toFixed(1)}%`}
+                 sub={snapshot.stdDev.equipmentUptimePct == null
+                   ? "from ProductionStage timing"
+                   : `σ ${snapshot.stdDev.equipmentUptimePct.toFixed(1)}%`}
+                 tone={snapshot.equipmentUptimePct != null && snapshot.equipmentUptimePct >= 60 ? "good" : "default"} />
+            <Kpi label="Waste rate"
+                 value={snapshot.wasteRatePct == null ? "—" : `${snapshot.wasteRatePct.toFixed(1)}%`}
+                 sub={snapshot.stdDev.wasteRatePct == null
+                   ? "MaterialUsage weighted"
+                   : `σ ${snapshot.stdDev.wasteRatePct.toFixed(1)}%`}
+                 tone={snapshot.wasteRatePct != null && snapshot.wasteRatePct < 8 ? "good" : (snapshot.wasteRatePct != null && snapshot.wasteRatePct > 15 ? "warning" : "default")} />
+            <Kpi label="Rework rate"
+                 value={snapshot.reworkRatePct == null ? "—" : `${snapshot.reworkRatePct.toFixed(1)}%`}
+                 sub={snapshot.stdDev.reworkRatePct == null
+                   ? "MAJOR/CRITICAL defects"
+                   : `σ ${snapshot.stdDev.reworkRatePct.toFixed(1)}%`}
+                 tone={snapshot.reworkRatePct != null && snapshot.reworkRatePct < 3 ? "good" : (snapshot.reworkRatePct != null && snapshot.reworkRatePct > 8 ? "warning" : "default")} />
           </div>
-
-          <DeferredNote>
-            <strong>Equipment uptime, material waste rate, and rework rate are deferred.</strong>
-            Computing those needs an equipment-job mapping (Page 27 schema captured but not
-            tenant-wired), measured material consumption rather than the configured waste %, and
-            a rework event log we don&apos;t track yet. We surface the metrics we can compute
-            honestly above and flag the gaps here.
-          </DeferredNote>
 
           <BenchmarkPublishCard config={config} canManage={canManage} />
 

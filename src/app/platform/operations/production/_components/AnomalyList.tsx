@@ -7,6 +7,9 @@ const METRIC_LABEL: Record<MetricKey, string> = {
   avgOrderValue: "Avg order value",
   estMarginPct: "Est. gross margin",
   lateRatePct: "Late rate",
+  equipmentUptimePct: "Equipment uptime",
+  wasteRatePct: "Material waste",
+  reworkRatePct: "Rework rate",
 };
 
 function formatValue(metric: MetricKey, n: number): string {

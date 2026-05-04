@@ -20,6 +20,9 @@ export function DistributionTable({
             <th className="px-3 py-2 text-right font-semibold" style={{ color: "var(--text-muted)" }}>AOV</th>
             <th className="px-3 py-2 text-right font-semibold" style={{ color: "var(--text-muted)" }}>Margin</th>
             <th className="px-3 py-2 text-right font-semibold" style={{ color: "var(--text-muted)" }}>Late rate</th>
+            <th className="px-3 py-2 text-right font-semibold" style={{ color: "var(--text-muted)" }}>Uptime</th>
+            <th className="px-3 py-2 text-right font-semibold" style={{ color: "var(--text-muted)" }}>Waste</th>
+            <th className="px-3 py-2 text-right font-semibold" style={{ color: "var(--text-muted)" }}>Rework</th>
             <th className="px-3 py-2 text-left font-semibold" style={{ color: "var(--text-muted)" }}>Sample</th>
           </tr>
         </thead>
@@ -61,6 +64,17 @@ export function DistributionTable({
                 <td className="px-3 py-2 text-right tabular-nums"
                     style={{ color: s.lateRatePct != null && s.lateRatePct > 10 ? "var(--rose-700)" : "var(--text-default)" }}>
                   {s.lateRatePct == null ? "—" : `${s.lateRatePct.toFixed(1)}%`}
+                </td>
+                <td className="px-3 py-2 text-right tabular-nums" style={{ color: "var(--text-default)" }}>
+                  {s.equipmentUptimePct == null ? "—" : `${s.equipmentUptimePct.toFixed(1)}%`}
+                </td>
+                <td className="px-3 py-2 text-right tabular-nums"
+                    style={{ color: s.wasteRatePct != null && s.wasteRatePct > 15 ? "var(--rose-700)" : "var(--text-default)" }}>
+                  {s.wasteRatePct == null ? "—" : `${s.wasteRatePct.toFixed(1)}%`}
+                </td>
+                <td className="px-3 py-2 text-right tabular-nums"
+                    style={{ color: s.reworkRatePct != null && s.reworkRatePct > 8 ? "var(--rose-700)" : "var(--text-default)" }}>
+                  {s.reworkRatePct == null ? "—" : `${s.reworkRatePct.toFixed(1)}%`}
                 </td>
                 <td className="px-3 py-2">
                   {lowSample ? (
