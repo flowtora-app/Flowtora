@@ -14,6 +14,7 @@ import {
 } from "@/components/ui";
 import {
   loadBottlenecks,
+  loadCapacityGauge,
   loadJobQueueRows,
   loadOperationsFilterOptions,
   loadOperationsKpis,
@@ -22,12 +23,14 @@ import {
   type OperationsFilters,
 } from "@/server/platform/operations";
 import type { OrderStatus } from "@prisma/client";
-import { Kpi, DeferredNote, STATUS_LABEL } from "./_components/shared";
+import { Kpi, STATUS_LABEL } from "./_components/shared";
 import { OperationsFiltersBar } from "./_components/OperationsFiltersBar";
 import { ThroughputChart } from "./_components/ThroughputChart";
 import { StatusDonut } from "./_components/StatusDonut";
 import { BottleneckChart } from "./_components/BottleneckChart";
 import { JobQueueTable } from "./_components/JobQueueTable";
+import { AutoRefresh } from "./_components/AutoRefresh";
+import { CapacityGauge } from "./_components/CapacityGauge";
 
 export const dynamic = "force-dynamic";
 
@@ -67,13 +70,14 @@ export default async function JobQueueMonitorPage({
   const filters = parseFilters(sp);
   const page = Math.max(1, Number(typeof sp.page === "string" ? sp.page : "1") || 1);
 
-  const [kpis, throughput, distribution, bottlenecks, queueResult, options] = await Promise.all([
+  const [kpis, throughput, distribution, bottlenecks, queueResult, options, capacity] = await Promise.all([
     loadOperationsKpis(filters),
     loadThroughputTrend(filters, 30),
     loadStatusDistribution(filters),
     loadBottlenecks(filters),
     loadJobQueueRows({ filters, page, pageSize: PAGE_SIZE }),
     loadOperationsFilterOptions(),
+    loadCapacityGauge(filters),
   ]);
 
   return (
@@ -84,11 +88,12 @@ export default async function JobQueueMonitorPage({
           { label: "Operations" },
           { label: "Job Queue Monitor" },
         ]} />
-        <div className="mt-3">
+        <div className="mt-3 flex flex-wrap items-start justify-between gap-3">
           <PageHeader
             title="Job Queue Monitor"
             description="Cross-tenant production throughput. Anonymized refs by default — drill into a tenant via Impersonation when intervention is needed."
           />
+          <AutoRefresh />
         </div>
       </div>
 
@@ -147,18 +152,33 @@ export default async function JobQueueMonitorPage({
         </div>
       </div>
 
-      <Card padding="md">
-        <div className="mb-3">
-          <h2 className="text-[14px] font-semibold" style={{ color: "var(--text-default)" }}>
-            Bottlenecks · time in current status (open orders)
-          </h2>
-          <p className="text-[12px]" style={{ color: "var(--text-muted)" }}>
-            Average days each open order has been sitting in its current status.
-            High dwell-time in any one status indicates the bottleneck.
-          </p>
-        </div>
-        <BottleneckChart rows={bottlenecks} />
-      </Card>
+      <div className="grid grid-cols-1 gap-4 lg:grid-cols-2">
+        <Card padding="md">
+          <div className="mb-3">
+            <h2 className="text-[14px] font-semibold" style={{ color: "var(--text-default)" }}>
+              Bottlenecks · time in current status (open orders)
+            </h2>
+            <p className="text-[12px]" style={{ color: "var(--text-muted)" }}>
+              Average days each open order has been sitting in its current status.
+              High dwell-time in any one status indicates the bottleneck.
+            </p>
+          </div>
+          <BottleneckChart rows={bottlenecks} />
+        </Card>
+
+        <Card padding="md">
+          <div className="mb-3">
+            <h2 className="text-[14px] font-semibold" style={{ color: "var(--text-default)" }}>
+              Capacity utilization · by job type
+            </h2>
+            <p className="text-[12px]" style={{ color: "var(--text-muted)" }}>
+              Active jobs vs. completed-in-30d, bucketed by Product kind.
+              Bars at 80%+ flag categories with more in flight than the shop is closing.
+            </p>
+          </div>
+          <CapacityGauge rows={capacity} />
+        </Card>
+      </div>
 
       {queueResult.rows.length === 0 ? (
         <Card padding="lg">
@@ -178,15 +198,6 @@ export default async function JobQueueMonitorPage({
           pageSize={PAGE_SIZE}
         />
       )}
-
-      <DeferredNote>
-        <strong>Real-time updates + capacity-utilization gauge are deferred.</strong> The
-        WebSocket pipeline that pushes per-job status changes ships when the realtime layer
-        lands; today the page snapshot-refreshes on filter change. Capacity utilization per
-        equipment category needs the Equipment Templates clone-link (Page 27 schema captured;
-        tenant-side adoption + scheduling not wired yet). Job-type breakdown (Sign / Print /
-        Apparel / Embroidery / Promo) waits on an OrderItem→Product→kind aggregation pass.
-      </DeferredNote>
 
       <p className="text-[11px]" style={{ color: "var(--text-muted)" }}>
         Need to intervene on a specific job? Use{" "}

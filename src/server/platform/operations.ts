@@ -211,6 +211,94 @@ export async function loadBottlenecks(filters: OperationsFilters): Promise<Bottl
     .sort((a, b) => b.avgDays - a.avgDays);
 }
 
+/* ── Capacity gauge + Job-type breakdown ────────────────── */
+
+export interface CapacityRow {
+  /** Bucket — Product kind value or "MIXED" / "UNKNOWN". */
+  bucket: string;
+  /** Active jobs touching this bucket. */
+  active: number;
+  /** Completed in last 30 days — proxy for steady-state throughput. */
+  recentCompleted: number;
+  /** Computed utilization 0..1 — active / (active + recentThroughput). */
+  utilizationPct: number;
+}
+
+const CAPACITY_BUCKET_ORDER = [
+  "SIGN", "PRINT", "INSTALL_SERVICE", "DESIGN_SERVICE",
+  "LABOR", "SETUP_FEE", "RUSH_FEE", "DELIVERY_FEE",
+  "STANDARD", "CUSTOM",
+];
+
+export async function loadCapacityGauge(filters: OperationsFilters): Promise<CapacityRow[]> {
+  // Active jobs joined to their items + products to bucket by Product.kind.
+  const baseWhere = buildOrderWhere(filters);
+  const window30 = new Date(Date.now() - 30 * DAY);
+
+  const [activeOrders, completedOrders] = await Promise.all([
+    db.order.findMany({
+      where: { ...baseWhere, status: { in: ["NEW", "IN_PRODUCTION", "READY", "OUT_FOR_INSTALL"] } },
+      select: {
+        id: true,
+        items: { select: { product: { select: { kind: true } } } },
+      },
+      take: 50_000,
+    }),
+    db.order.findMany({
+      where: { ...baseWhere, status: "COMPLETED", completedAt: { gte: window30 } },
+      select: {
+        id: true,
+        items: { select: { product: { select: { kind: true } } } },
+      },
+      take: 50_000,
+    }),
+  ]);
+
+  function bucketsForOrder(items: { product: { kind: string } | null }[]): string[] {
+    const set = new Set<string>();
+    for (const it of items) {
+      const k = it.product?.kind;
+      if (k) set.add(k);
+    }
+    if (set.size === 0) return ["UNKNOWN"];
+    return Array.from(set);
+  }
+
+  const activeMap = new Map<string, number>();
+  for (const o of activeOrders) {
+    for (const b of bucketsForOrder(o.items)) {
+      activeMap.set(b, (activeMap.get(b) ?? 0) + 1);
+    }
+  }
+  const completedMap = new Map<string, number>();
+  for (const o of completedOrders) {
+    for (const b of bucketsForOrder(o.items)) {
+      completedMap.set(b, (completedMap.get(b) ?? 0) + 1);
+    }
+  }
+
+  const buckets = new Set<string>([...activeMap.keys(), ...completedMap.keys()]);
+  const rows: CapacityRow[] = Array.from(buckets).map((b) => {
+    const active = activeMap.get(b) ?? 0;
+    const recentCompleted = completedMap.get(b) ?? 0;
+    const denom = active + recentCompleted;
+    return {
+      bucket: b,
+      active,
+      recentCompleted,
+      utilizationPct: denom === 0 ? 0 : active / denom,
+    };
+  });
+  // Sort by canonical order, falling back to active count.
+  rows.sort((a, b) => {
+    const ai = CAPACITY_BUCKET_ORDER.indexOf(a.bucket);
+    const bi = CAPACITY_BUCKET_ORDER.indexOf(b.bucket);
+    if (ai !== bi) return (ai === -1 ? 99 : ai) - (bi === -1 ? 99 : bi);
+    return b.active - a.active;
+  });
+  return rows;
+}
+
 /* ── Anonymized job queue rows ──────────────────────────── */
 
 export interface JobQueueRow {
