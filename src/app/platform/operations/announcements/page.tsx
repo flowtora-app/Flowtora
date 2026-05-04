@@ -27,7 +27,6 @@ import type {
 import {
   AUDIENCE_LABEL,
   CHANNEL_LABEL,
-  DeferredNote,
   FormError,
   FormOk,
   Kpi,
@@ -188,12 +187,21 @@ export default async function OpsAnnouncementsPage({
         />
       </div>
 
-      <DeferredNote>
-        <strong>Deferred:</strong> per-channel content variants, A/B traffic split, recurring schedules,
-        push notification opt-out, RSS feed for changelog, in-app inbox conversion attribution.
-        The schema captures channels + CTA + frequency cap so the tenant-side surfaces can
-        light up incrementally.
-      </DeferredNote>
+      <div className="flex items-center justify-end">
+        <Link
+          href="/changelog/rss.xml"
+          className="ts-focus rounded-md px-3 py-1.5 text-[11px] font-medium"
+          style={{
+            background: "var(--surface-1)",
+            color: "var(--text-default)",
+            border: "1px solid var(--border-default)",
+          }}
+          target="_blank"
+          rel="noopener"
+        >
+          📰 Public RSS feed
+        </Link>
+      </div>
 
       {/* Tabs */}
       <TabsBar active={tab} counts={tabCounts} hrefFor={hrefForTab} />

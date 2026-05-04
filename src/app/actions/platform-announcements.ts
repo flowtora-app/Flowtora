@@ -79,6 +79,8 @@ const saveSchema = z.object({
   frequencyCap: z.enum(["UNLIMITED", "ONCE", "DAILY"]).default("UNLIMITED"),
   changelogCategory: z.enum(["FEATURE", "IMPROVEMENT", "FIX", "SECURITY", "DEPRECATION"]).optional().or(z.literal("")),
   tags: z.string().optional().or(z.literal("")),
+  recurrence: z.enum(["NONE", "DAILY", "WEEKLY", "MONTHLY"]).default("NONE"),
+  recurrenceEnd: z.string().optional().or(z.literal("")),
 });
 
 export async function saveOpsAnnouncement(formData: FormData) {
@@ -119,6 +121,8 @@ export async function saveOpsAnnouncement(formData: FormData) {
       changelogCategory: d.changelogCategory || null,
       channels,
       tags: splitList(d.tags),
+      recurrence: d.recurrence,
+      recurrenceEnd: d.recurrenceEnd ? new Date(d.recurrenceEnd) : null,
     },
   });
   await logPlatformAudit({
@@ -137,6 +141,149 @@ export async function saveOpsAnnouncement(formData: FormData) {
   revalidatePath(LIST_ROUTE);
   revalidatePath(detailRoute(d.id));
   redirect(`${detailRoute(d.id)}?ok=saved`);
+}
+
+/* ── Per-channel content variants ─────────────────────── */
+
+const channelVariantSchema = z.object({
+  announcementId: z.string().min(1),
+  channel: z.enum(["BANNER", "MODAL", "INBOX", "EMAIL", "CHANGELOG", "PUSH"]),
+  title: z.string().max(200).optional().or(z.literal("")),
+  body: z.string().max(20_000).optional().or(z.literal("")),
+  ctaLabel: z.string().max(60).optional().or(z.literal("")),
+  ctaUrl: z.string().max(500).optional().or(z.literal("")),
+  heroImageUrl: z.string().max(500).optional().or(z.literal("")),
+});
+
+export async function upsertChannelVariant(formData: FormData) {
+  const ctx = await requirePlatformPermission(PERM_WRITE);
+  const parsed = channelVariantSchema.safeParse(Object.fromEntries(formData.entries()));
+  if (!parsed.success) {
+    redirect(`${LIST_ROUTE}?error=${encodeURIComponent(parsed.error.issues[0]?.message ?? "Invalid")}`);
+  }
+  const d = parsed.data;
+  const allEmpty = !d.title && !d.body && !d.ctaLabel && !d.ctaUrl && !d.heroImageUrl;
+  if (allEmpty) {
+    // Empty payload = delete the override.
+    await db.announcementChannelVariant.deleteMany({
+      where: { announcementId: d.announcementId, channel: d.channel },
+    });
+    await logPlatformAudit({
+      userId: ctx.userId,
+      action: "platform.announcement.channel_variant_cleared",
+      entityType: "AnnouncementChannelVariant",
+      entityId: `${d.announcementId}_${d.channel}`,
+      metadata: { actor: ctx.email },
+    });
+  } else {
+    await db.announcementChannelVariant.upsert({
+      where: { announcementId_channel: { announcementId: d.announcementId, channel: d.channel } },
+      create: {
+        announcementId: d.announcementId,
+        channel: d.channel,
+        title: d.title || null,
+        body: d.body || null,
+        ctaLabel: d.ctaLabel || null,
+        ctaUrl: d.ctaUrl || null,
+        heroImageUrl: d.heroImageUrl || null,
+        updatedBy: ctx.userId,
+      },
+      update: {
+        title: d.title || null,
+        body: d.body || null,
+        ctaLabel: d.ctaLabel || null,
+        ctaUrl: d.ctaUrl || null,
+        heroImageUrl: d.heroImageUrl || null,
+        updatedBy: ctx.userId,
+      },
+    });
+    await logPlatformAudit({
+      userId: ctx.userId,
+      action: "platform.announcement.channel_variant_saved",
+      entityType: "AnnouncementChannelVariant",
+      entityId: `${d.announcementId}_${d.channel}`,
+      metadata: { actor: ctx.email },
+    });
+  }
+  revalidatePath(detailRoute(d.announcementId));
+  redirect(`${detailRoute(d.announcementId)}?ok=saved`);
+}
+
+/* ── A/B variants ────────────────────────────────────── */
+
+const abVariantSchema = z.object({
+  variantId: z.string().optional().or(z.literal("")),
+  announcementId: z.string().min(1),
+  label: z.string().min(1).max(40),
+  title: z.string().max(200).optional().or(z.literal("")),
+  body: z.string().max(20_000).optional().or(z.literal("")),
+  ctaLabel: z.string().max(60).optional().or(z.literal("")),
+  ctaUrl: z.string().max(500).optional().or(z.literal("")),
+  weightPct: z.coerce.number().int().min(0).max(100),
+});
+
+export async function upsertAbVariant(formData: FormData) {
+  const ctx = await requirePlatformPermission(PERM_WRITE);
+  const parsed = abVariantSchema.safeParse(Object.fromEntries(formData.entries()));
+  if (!parsed.success) {
+    redirect(`${LIST_ROUTE}?error=${encodeURIComponent(parsed.error.issues[0]?.message ?? "Invalid")}`);
+  }
+  const d = parsed.data;
+  if (d.variantId) {
+    await db.announcementAbVariant.update({
+      where: { id: d.variantId },
+      data: {
+        label: d.label,
+        title: d.title || null,
+        body: d.body || null,
+        ctaLabel: d.ctaLabel || null,
+        ctaUrl: d.ctaUrl || null,
+        weightPct: d.weightPct,
+      },
+    });
+  } else {
+    await db.announcementAbVariant.create({
+      data: {
+        announcementId: d.announcementId,
+        label: d.label,
+        title: d.title || null,
+        body: d.body || null,
+        ctaLabel: d.ctaLabel || null,
+        ctaUrl: d.ctaUrl || null,
+        weightPct: d.weightPct,
+      },
+    });
+  }
+  await logPlatformAudit({
+    userId: ctx.userId,
+    action: "platform.announcement.ab_variant_saved",
+    entityType: "AnnouncementAbVariant",
+    entityId: d.variantId || d.label,
+    metadata: { actor: ctx.email, label: d.label, weight: d.weightPct },
+  });
+  revalidatePath(detailRoute(d.announcementId));
+  redirect(`${detailRoute(d.announcementId)}?ok=saved`);
+}
+
+const deleteAbSchema = z.object({
+  variantId: z.string().min(1),
+  announcementId: z.string().min(1),
+});
+
+export async function deleteAbVariant(formData: FormData) {
+  const ctx = await requirePlatformPermission(PERM_WRITE);
+  const parsed = deleteAbSchema.safeParse(Object.fromEntries(formData.entries()));
+  if (!parsed.success) redirect(`${LIST_ROUTE}?error=${encodeURIComponent("Invalid")}`);
+  await db.announcementAbVariant.delete({ where: { id: parsed.data.variantId } });
+  await logPlatformAudit({
+    userId: ctx.userId,
+    action: "platform.announcement.ab_variant_deleted",
+    entityType: "AnnouncementAbVariant",
+    entityId: parsed.data.variantId,
+    metadata: { actor: ctx.email },
+  });
+  revalidatePath(detailRoute(parsed.data.announcementId));
+  redirect(`${detailRoute(parsed.data.announcementId)}?ok=saved`);
 }
 
 /* ── Status transitions ───────────────────────────────── */

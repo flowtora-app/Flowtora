@@ -15,6 +15,7 @@ import type {
   AnnouncementChannel,
   AnnouncementFrequencyCap,
   ChangelogCategory,
+  AnnouncementRecurrence,
   Plan,
   BetaCohort,
 } from "@prisma/client";
@@ -319,6 +320,8 @@ export interface AnnouncementDetail {
   frequencyCap: AnnouncementFrequencyCap;
   changelogCategory: ChangelogCategory | null;
   audienceCustomersOnly: boolean;
+  recurrence: AnnouncementRecurrence;
+  recurrenceEnd: Date | null;
   publishAt: Date | null;
   expireAt: Date | null;
   publishedAt: Date | null;
@@ -337,10 +340,35 @@ export interface AnnouncementDetail {
     /** Estimated audience size — count of tenants matching targeting at read time. */
     audienceTenantCount: number | null;
   };
+  channelVariants: {
+    channel: AnnouncementChannel;
+    title: string | null;
+    body: string | null;
+    ctaLabel: string | null;
+    ctaUrl: string | null;
+    heroImageUrl: string | null;
+  }[];
+  abVariants: {
+    id: string;
+    label: string;
+    title: string | null;
+    body: string | null;
+    ctaLabel: string | null;
+    ctaUrl: string | null;
+    weightPct: number;
+    viewCount: number;
+    clickCount: number;
+  }[];
 }
 
 export async function loadAnnouncementDetail(id: string): Promise<AnnouncementDetail | null> {
-  const a = await db.platformAnnouncement.findUnique({ where: { id } });
+  const a = await db.platformAnnouncement.findUnique({
+    where: { id },
+    include: {
+      channelVariants: true,
+      abVariants: { orderBy: { createdAt: "asc" } },
+    },
+  });
   if (!a) return null;
 
   const [author, views, clicks, dismissals, distinctTenantRows] = await Promise.all([
@@ -381,6 +409,8 @@ export async function loadAnnouncementDetail(id: string): Promise<AnnouncementDe
     frequencyCap: a.frequencyCap,
     changelogCategory: a.changelogCategory,
     audienceCustomersOnly: a.audienceCustomersOnly,
+    recurrence: a.recurrence,
+    recurrenceEnd: a.recurrenceEnd,
     publishAt: a.publishAt,
     expireAt: a.expireAt,
     publishedAt: a.publishedAt,
@@ -398,6 +428,25 @@ export async function loadAnnouncementDetail(id: string): Promise<AnnouncementDe
       distinctTenants: distinctTenantRows.length,
       audienceTenantCount,
     },
+    channelVariants: a.channelVariants.map((v) => ({
+      channel: v.channel,
+      title: v.title,
+      body: v.body,
+      ctaLabel: v.ctaLabel,
+      ctaUrl: v.ctaUrl,
+      heroImageUrl: v.heroImageUrl,
+    })),
+    abVariants: a.abVariants.map((v) => ({
+      id: v.id,
+      label: v.label,
+      title: v.title,
+      body: v.body,
+      ctaLabel: v.ctaLabel,
+      ctaUrl: v.ctaUrl,
+      weightPct: v.weightPct,
+      viewCount: v.viewCount,
+      clickCount: v.clickCount,
+    })),
   };
 }
 

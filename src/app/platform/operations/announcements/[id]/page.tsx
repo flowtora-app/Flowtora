@@ -12,6 +12,9 @@ import { loadAnnouncementDetail } from "@/server/platform/announcements";
 import {
   saveOpsAnnouncement,
   transitionOpsAnnouncement,
+  upsertChannelVariant,
+  upsertAbVariant,
+  deleteAbVariant,
 } from "@/app/actions/platform-announcements";
 import type {
   AnnouncementType,
@@ -19,6 +22,7 @@ import type {
   AnnouncementAudience,
   AnnouncementChannel,
   AnnouncementFrequencyCap,
+  AnnouncementRecurrence,
   AnnouncementStatus,
   ChangelogCategory,
 } from "@prisma/client";
@@ -26,7 +30,6 @@ import {
   AUDIENCE_LABEL,
   CHANNEL_LABEL,
   CHANGELOG_CATEGORY_LABEL,
-  DeferredNote,
   FormError,
   FormOk,
   FREQUENCY_LABEL,
@@ -48,6 +51,14 @@ const AUDIENCES: AnnouncementAudience[] = ["ALL", "PLAN", "COHORT", "TENANT"];
 const CHANNELS: AnnouncementChannel[] = ["BANNER", "MODAL", "INBOX", "EMAIL", "CHANGELOG", "PUSH"];
 const FREQUENCIES: AnnouncementFrequencyCap[] = ["UNLIMITED", "ONCE", "DAILY"];
 const CHANGELOG_CATEGORIES: ChangelogCategory[] = ["FEATURE", "IMPROVEMENT", "FIX", "SECURITY", "DEPRECATION"];
+const RECURRENCES: AnnouncementRecurrence[] = ["NONE", "DAILY", "WEEKLY", "MONTHLY"];
+
+const RECURRENCE_LABEL: Record<AnnouncementRecurrence, string> = {
+  NONE: "One-shot",
+  DAILY: "Daily",
+  WEEKLY: "Weekly",
+  MONTHLY: "Monthly",
+};
 
 const dtLocal = (d: Date | null) => d ? d.toISOString().slice(0, 16) : "";
 
@@ -354,6 +365,26 @@ export default async function OpsAnnouncementEditorPage({
           </Field>
         </div>
 
+        <div className="grid gap-3 md:grid-cols-2">
+          <Field label="Recurrence" help="One-shot publishes once. Daily/weekly/monthly re-fire automatically until recurrence end.">
+            <Select name="recurrence" defaultValue={a.recurrence} disabled={!canWrite}>
+              {RECURRENCES.map((r) => (
+                <option key={r} value={r}>{RECURRENCE_LABEL[r]}</option>
+              ))}
+            </Select>
+          </Field>
+          <Field label="Recurrence end" help="When recurring publishes stop. Leave blank for indefinite.">
+            <input
+              type="datetime-local"
+              name="recurrenceEnd"
+              defaultValue={dtLocal(a.recurrenceEnd)}
+              disabled={!canWrite}
+              className="ts-focus w-full rounded-md px-3 py-2 text-[12px] outline-none"
+              style={inputStyle()}
+            />
+          </Field>
+        </div>
+
         {/* Changelog meta */}
         <div className="grid gap-3 md:grid-cols-2">
           <Field label="Changelog category" help="Used when CHANGELOG is in the channel set.">
@@ -375,11 +406,6 @@ export default async function OpsAnnouncementEditorPage({
           </Field>
         </div>
 
-        <DeferredNote>
-          <strong>Deferred:</strong> A/B traffic split, recurring schedules, per-channel overrides,
-          push-notification opt-out enforcement, RSS feed for the public changelog.
-        </DeferredNote>
-
         {canWrite && (
           <div className="flex items-center justify-end gap-2">
             <button
@@ -392,7 +418,357 @@ export default async function OpsAnnouncementEditorPage({
           </div>
         )}
       </form>
+
+      {/* Per-channel content variants */}
+      <ChannelVariantsSection
+        announcementId={a.id}
+        channels={a.channels}
+        existing={a.channelVariants}
+        canWrite={canWrite}
+      />
+
+      {/* A/B traffic split */}
+      <AbVariantsSection
+        announcementId={a.id}
+        variants={a.abVariants}
+        canWrite={canWrite}
+      />
     </div>
+  );
+}
+
+function ChannelVariantsSection({
+  announcementId, channels, existing, canWrite,
+}: {
+  announcementId: string;
+  channels: AnnouncementChannel[];
+  existing: { channel: AnnouncementChannel; title: string | null; body: string | null; ctaLabel: string | null; ctaUrl: string | null; heroImageUrl: string | null }[];
+  canWrite: boolean;
+}) {
+  if (channels.length === 0) return null;
+  return (
+    <section
+      className="rounded-lg border p-4"
+      style={{ background: "var(--surface-1)", borderColor: "var(--border-subtle)" }}
+    >
+      <h2 className="text-[14px] font-semibold" style={{ color: "var(--text-default)" }}>
+        Per-channel content overrides
+      </h2>
+      <p className="mt-1 text-[11px]" style={{ color: "var(--text-muted)" }}>
+        Override the default body / CTA / hero image for individual channels. Empty fields fall back
+        to the announcement defaults — saving with everything blank clears the override entirely.
+      </p>
+
+      <div className="mt-4 grid gap-3 lg:grid-cols-2">
+        {channels.map((c) => {
+          const v = existing.find((x) => x.channel === c);
+          return (
+            <ChannelVariantForm
+              key={c}
+              announcementId={announcementId}
+              channel={c}
+              existing={v}
+              canWrite={canWrite}
+            />
+          );
+        })}
+      </div>
+    </section>
+  );
+}
+
+function ChannelVariantForm({
+  announcementId, channel, existing, canWrite,
+}: {
+  announcementId: string;
+  channel: AnnouncementChannel;
+  existing: { title: string | null; body: string | null; ctaLabel: string | null; ctaUrl: string | null; heroImageUrl: string | null } | undefined;
+  canWrite: boolean;
+}) {
+  const hasOverride = !!existing && (existing.title || existing.body || existing.ctaLabel || existing.ctaUrl || existing.heroImageUrl);
+  return (
+    <form
+      action={upsertChannelVariant}
+      className="flex flex-col gap-2 rounded-md border p-3"
+      style={{
+        background: "var(--surface-1)",
+        borderColor: hasOverride ? "var(--accent-primary)" : "var(--border-subtle)",
+      }}
+    >
+      <input type="hidden" name="announcementId" value={announcementId} />
+      <input type="hidden" name="channel" value={channel} />
+      <div className="flex items-center justify-between">
+        <span className="text-[11px] font-semibold uppercase tracking-wider" style={{ color: "var(--text-default)" }}>
+          {channel}
+        </span>
+        {hasOverride && (
+          <span className="text-[10px] font-semibold uppercase tracking-wide" style={{ color: "var(--accent-primary)" }}>
+            override active
+          </span>
+        )}
+      </div>
+      <input
+        name="title"
+        defaultValue={existing?.title ?? ""}
+        placeholder="Override title (optional)"
+        disabled={!canWrite}
+        className="ts-focus rounded-md px-2 py-1.5 text-[12px] outline-none"
+        style={inputStyle()}
+      />
+      <textarea
+        name="body"
+        defaultValue={existing?.body ?? ""}
+        placeholder="Override body (optional)"
+        rows={3}
+        disabled={!canWrite}
+        className="ts-focus rounded-md px-2 py-1.5 text-[11px] outline-none"
+        style={{ ...inputStyle(), lineHeight: 1.4 }}
+      />
+      <div className="grid grid-cols-2 gap-2">
+        <input
+          name="ctaLabel"
+          defaultValue={existing?.ctaLabel ?? ""}
+          placeholder="CTA label"
+          maxLength={60}
+          disabled={!canWrite}
+          className="ts-focus rounded-md px-2 py-1.5 text-[11px] outline-none"
+          style={inputStyle()}
+        />
+        <input
+          name="ctaUrl"
+          defaultValue={existing?.ctaUrl ?? ""}
+          placeholder="CTA URL"
+          disabled={!canWrite}
+          className="ts-focus rounded-md px-2 py-1.5 text-[11px] outline-none"
+          style={inputStyle()}
+        />
+      </div>
+      <input
+        name="heroImageUrl"
+        defaultValue={existing?.heroImageUrl ?? ""}
+        placeholder="Hero image URL (optional)"
+        disabled={!canWrite}
+        className="ts-focus rounded-md px-2 py-1.5 text-[11px] outline-none"
+        style={inputStyle()}
+      />
+      {canWrite && (
+        <div className="flex items-center justify-end gap-2">
+          <button
+            type="submit"
+            className="ts-focus rounded-md px-3 py-1 text-[11px] font-semibold"
+            style={{ background: "var(--accent-primary)", color: "var(--accent-fg)" }}
+          >
+            {hasOverride ? "Save override" : "Add override"}
+          </button>
+        </div>
+      )}
+    </form>
+  );
+}
+
+function AbVariantsSection({
+  announcementId, variants, canWrite,
+}: {
+  announcementId: string;
+  variants: { id: string; label: string; title: string | null; body: string | null; ctaLabel: string | null; ctaUrl: string | null; weightPct: number; viewCount: number; clickCount: number }[];
+  canWrite: boolean;
+}) {
+  const totalWeight = variants.reduce((s, v) => s + v.weightPct, 0);
+  return (
+    <section
+      className="rounded-lg border p-4"
+      style={{ background: "var(--surface-1)", borderColor: "var(--border-subtle)" }}
+    >
+      <div className="flex items-baseline justify-between gap-3">
+        <div>
+          <h2 className="text-[14px] font-semibold" style={{ color: "var(--text-default)" }}>
+            A/B traffic split
+          </h2>
+          <p className="mt-1 text-[11px]" style={{ color: "var(--text-muted)" }}>
+            Split incoming impressions across variants by weight. The remainder of 100% reads the
+            announcement default. The runtime hashes (announcementId, userId) so each user sees a
+            consistent variant.
+          </p>
+        </div>
+        <span className="text-[11px]" style={{ color: totalWeight > 100 ? "var(--danger-fg)" : "var(--text-muted)" }}>
+          Variants total <b className="tabular-nums" style={{ color: "var(--text-default)" }}>{totalWeight}%</b>{" "}
+          {totalWeight > 100 ? "— exceeds 100, lower one" : `(default control = ${Math.max(0, 100 - totalWeight)}%)`}
+        </span>
+      </div>
+
+      <ul className="mt-3 flex flex-col gap-3">
+        {variants.map((v) => {
+          const ctr = v.viewCount === 0 ? null : v.clickCount / v.viewCount;
+          return (
+            <li
+              key={v.id}
+              className="rounded-md border p-3"
+              style={{ background: "var(--surface-1)", borderColor: "var(--border-subtle)" }}
+            >
+              <form action={upsertAbVariant} className="grid gap-2 md:grid-cols-2">
+                <input type="hidden" name="variantId" value={v.id} />
+                <input type="hidden" name="announcementId" value={announcementId} />
+                <Field label="Label">
+                  <input
+                    name="label"
+                    defaultValue={v.label}
+                    maxLength={40}
+                    disabled={!canWrite}
+                    className="ts-focus rounded-md px-2 py-1.5 text-[12px] outline-none"
+                    style={inputStyle()}
+                  />
+                </Field>
+                <Field label={`Weight % · views ${v.viewCount} · clicks ${v.clickCount}${ctr != null ? ` · CTR ${(ctr * 100).toFixed(1)}%` : ""}`}>
+                  <input
+                    type="number"
+                    name="weightPct"
+                    defaultValue={v.weightPct}
+                    min={0}
+                    max={100}
+                    disabled={!canWrite}
+                    className="ts-focus w-24 rounded-md px-2 py-1.5 text-[12px] tabular-nums outline-none"
+                    style={inputStyle()}
+                  />
+                </Field>
+                <Field label="Title (optional override)">
+                  <input
+                    name="title"
+                    defaultValue={v.title ?? ""}
+                    disabled={!canWrite}
+                    className="ts-focus rounded-md px-2 py-1.5 text-[12px] outline-none"
+                    style={inputStyle()}
+                  />
+                </Field>
+                <Field label="CTA label">
+                  <input
+                    name="ctaLabel"
+                    defaultValue={v.ctaLabel ?? ""}
+                    disabled={!canWrite}
+                    className="ts-focus rounded-md px-2 py-1.5 text-[12px] outline-none"
+                    style={inputStyle()}
+                  />
+                </Field>
+                <Field label="Body (optional override)" help="">
+                  <textarea
+                    name="body"
+                    defaultValue={v.body ?? ""}
+                    rows={3}
+                    disabled={!canWrite}
+                    className="ts-focus rounded-md px-2 py-1.5 text-[11px] outline-none md:col-span-2"
+                    style={{ ...inputStyle(), lineHeight: 1.4 }}
+                  />
+                </Field>
+                <Field label="CTA URL">
+                  <input
+                    name="ctaUrl"
+                    defaultValue={v.ctaUrl ?? ""}
+                    disabled={!canWrite}
+                    className="ts-focus rounded-md px-2 py-1.5 text-[12px] outline-none"
+                    style={inputStyle()}
+                  />
+                </Field>
+                <div className="flex items-center justify-end gap-2 md:col-span-2">
+                  {canWrite && (
+                    <>
+                      <button
+                        type="submit"
+                        className="ts-focus rounded-md px-3 py-1.5 text-[11px] font-semibold"
+                        style={{ background: "var(--accent-primary)", color: "var(--accent-fg)" }}
+                      >
+                        Save
+                      </button>
+                    </>
+                  )}
+                </div>
+              </form>
+              {canWrite && (
+                <form action={deleteAbVariant} className="mt-2">
+                  <input type="hidden" name="variantId" value={v.id} />
+                  <input type="hidden" name="announcementId" value={announcementId} />
+                  <button
+                    type="submit"
+                    className="text-[10px] underline"
+                    style={{ color: "var(--danger-fg)" }}
+                  >
+                    Delete variant
+                  </button>
+                </form>
+              )}
+            </li>
+          );
+        })}
+        {canWrite && (
+          <li>
+            <form
+              action={upsertAbVariant}
+              className="grid gap-2 rounded-md border border-dashed p-3 md:grid-cols-2"
+              style={{ borderColor: "var(--border-default)", background: "var(--surface-1)" }}
+            >
+              <input type="hidden" name="announcementId" value={announcementId} />
+              <Field label="New variant — label">
+                <input
+                  name="label"
+                  required
+                  placeholder="A / B / experiment-1"
+                  className="ts-focus rounded-md px-2 py-1.5 text-[12px] outline-none"
+                  style={inputStyle()}
+                />
+              </Field>
+              <Field label="Weight %">
+                <input
+                  type="number"
+                  name="weightPct"
+                  required
+                  defaultValue={50}
+                  min={0}
+                  max={100}
+                  className="ts-focus w-24 rounded-md px-2 py-1.5 text-[12px] tabular-nums outline-none"
+                  style={inputStyle()}
+                />
+              </Field>
+              <Field label="Title (optional override)">
+                <input
+                  name="title"
+                  className="ts-focus rounded-md px-2 py-1.5 text-[12px] outline-none"
+                  style={inputStyle()}
+                />
+              </Field>
+              <Field label="CTA label">
+                <input
+                  name="ctaLabel"
+                  className="ts-focus rounded-md px-2 py-1.5 text-[12px] outline-none"
+                  style={inputStyle()}
+                />
+              </Field>
+              <Field label="Body (optional override)">
+                <textarea
+                  name="body"
+                  rows={3}
+                  className="ts-focus rounded-md px-2 py-1.5 text-[11px] outline-none md:col-span-2"
+                  style={{ ...inputStyle(), lineHeight: 1.4 }}
+                />
+              </Field>
+              <Field label="CTA URL">
+                <input
+                  name="ctaUrl"
+                  className="ts-focus rounded-md px-2 py-1.5 text-[12px] outline-none"
+                  style={inputStyle()}
+                />
+              </Field>
+              <div className="md:col-span-2 flex items-center justify-end">
+                <button
+                  type="submit"
+                  className="ts-focus rounded-md px-3 py-1.5 text-[11px] font-semibold"
+                  style={{ background: "var(--accent-primary)", color: "var(--accent-fg)" }}
+                >
+                  + Add variant
+                </button>
+              </div>
+            </form>
+          </li>
+        )}
+      </ul>
+    </section>
   );
 }
 

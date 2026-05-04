@@ -1123,6 +1123,48 @@ async function seedAnnouncements(
     count += 1;
   }
 
+  // Seed a few channel-variant overrides + A/B variants on a couple
+  // of published announcements so the new editor sections aren't empty.
+  const liveAnns = await db.platformAnnouncement.findMany({
+    where: { status: "PUBLISHED", tags: { has: "seed" } },
+    select: { id: true, channels: true, body: true },
+    take: 3,
+  });
+  for (const a of liveAnns) {
+    if (a.channels.includes("EMAIL")) {
+      await db.announcementChannelVariant.upsert({
+        where: { announcementId_channel: { announcementId: a.id, channel: "EMAIL" } },
+        create: {
+          announcementId: a.id,
+          channel: "EMAIL",
+          title: null,
+          body: `${a.body}\n\nSent because you're subscribed to Flowtora product updates. Manage your preferences in Settings → Notifications.`,
+          ctaLabel: "Read on the changelog",
+        },
+        update: {},
+      });
+    }
+    // Two A/B variants per announcement.
+    const labels = ["A — short", "B — long"];
+    for (let i = 0; i < labels.length; i++) {
+      const existing = await db.announcementAbVariant.findFirst({
+        where: { announcementId: a.id, label: labels[i]! },
+      });
+      if (existing) continue;
+      await db.announcementAbVariant.create({
+        data: {
+          announcementId: a.id,
+          label: labels[i]!,
+          title: null,
+          body: i === 0 ? a.body.slice(0, 80) + "…" : a.body + "\n\nLearn more about this update on the blog.",
+          weightPct: 50,
+          viewCount: randInt(40, 600),
+          clickCount: randInt(5, 80),
+        },
+      });
+    }
+  }
+
   // Seed a few extra DRAFT templates so the Templates tab isn't empty.
   for (let i = 0; i < 3; i++) {
     await db.platformAnnouncement.create({

@@ -5335,6 +5335,12 @@ model PlatformAnnouncement {
   changelogCategory     ChangelogCategory?
   audienceCustomersOnly Boolean            @default(false)
 
+  // Page 35 — recurring schedule. NONE means one-shot. The runtime
+  // re-fires the announcement on the matching cadence between
+  // publishAt and recurrenceEnd.
+  recurrence    AnnouncementRecurrence @default(NONE)
+  recurrenceEnd DateTime?
+
   // Author audit — platform staff user id; nullable for system-created
   // rows we may add later (e.g. auto-generated incident posts).
   authorId String?
@@ -5346,7 +5352,9 @@ model PlatformAnnouncement {
   emailedAt              DateTime?
   emailedRecipientCount  Int       @default(0)
 
-  views PlatformAnnouncementView[]
+  views          PlatformAnnouncementView[]
+  channelVariants AnnouncementChannelVariant[]
+  abVariants     AnnouncementAbVariant[]
 
   createdAt DateTime @default(now())
   updatedAt DateTime @updatedAt
@@ -5354,6 +5362,77 @@ model PlatformAnnouncement {
   @@index([status, publishedAt])
   @@index([type, status])
   @@index([publishAt])
+}
+
+// Page 35 — per-channel content overrides. When a row exists for a
+// (announcementId, channel) pair, that channel uses the override
+// title/body/cta/hero in place of the announcement's default. Missing
+// rows fall back to the parent.
+model AnnouncementChannelVariant {
+  id             String              @id @default(cuid())
+  announcementId String
+  channel        AnnouncementChannel
+
+  title        String?
+  body         String?
+  ctaLabel     String?
+  ctaUrl       String?
+  heroImageUrl String?
+
+  updatedBy String?
+  updatedAt DateTime @updatedAt
+  createdAt DateTime @default(now())
+
+  announcement PlatformAnnouncement @relation(fields: [announcementId], references: [id], onDelete: Cascade)
+
+  @@unique([announcementId, channel])
+  @@index([channel])
+}
+
+// Page 35 — A/B test variants. The runtime picks one variant per
+// (announcementId, userId) deterministically based on weight.
+// `weightPct` columns sum to ≤100; the remainder reads the parent
+// content. `viewCount` / `clickCount` are denormalized counters.
+model AnnouncementAbVariant {
+  id             String @id @default(cuid())
+  announcementId String
+
+  label     String // "A" / "B" / "control"
+  title     String?
+  body      String?
+  ctaLabel  String?
+  ctaUrl    String?
+  heroImageUrl String?
+
+  weightPct Int @default(50)
+
+  viewCount  Int @default(0)
+  clickCount Int @default(0)
+
+  createdAt DateTime @default(now())
+  updatedAt DateTime @updatedAt
+
+  announcement PlatformAnnouncement @relation(fields: [announcementId], references: [id], onDelete: Cascade)
+
+  @@index([announcementId])
+}
+
+// Page 35 — recurrence cadence. The runtime re-fires the announcement
+// on the matching cycle between publishAt and recurrenceEnd.
+enum AnnouncementRecurrence {
+  NONE
+  DAILY
+  WEEKLY
+  MONTHLY
+}
+
+// Page 35 — per-user push opt-out. A row exists iff the user has
+// asked us to stop sending push notifications. Tenant-side the user
+// preferences page writes this; the runtime PUSH dispatcher reads it.
+model UserPushOptOut {
+  userId    String   @id
+  reason    String?
+  createdAt DateTime @default(now())
 }
 
 // Per-user view + dismissal tracking for PlatformAnnouncement. One row
