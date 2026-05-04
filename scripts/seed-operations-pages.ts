@@ -1,0 +1,1002 @@
+// Seed data for Pages 31-35 — Operations command center.
+//
+// Generates realistic dummy data so every chart, KPI, and list on:
+//   • /platform/operations/jobs           (Page 31)
+//   • /platform/operations/production     (Page 32)
+//   • /platform/operations/tickets        (Page 33)
+//   • /platform/operations/knowledge-base (Page 34)
+//   • /platform/operations/announcements  (Page 35)
+// renders against meaningful numbers instead of empty states.
+//
+// Idempotent — re-running is safe: every row is tagged "[seed]" in
+// notes / tags, and we delete-then-insert by tag.
+
+import { db } from "../src/lib/db";
+import type {
+  OrderStatus, OrderPriority,
+  SupportTicketStatus, SupportTicketPriority,
+  SupportTicketCategory, SupportTicketModule,
+  KbArticleStatus, KbVisibility,
+  AnnouncementType, AnnouncementPriority, AnnouncementStatus,
+  AnnouncementAudience, AnnouncementChannel,
+  ChangelogCategory,
+} from "@prisma/client";
+
+const SEED_TAG = "[seed]";
+const DAY = 86_400_000;
+
+const rand = <T>(arr: readonly T[]): T => arr[Math.floor(Math.random() * arr.length)]!;
+const randInt = (min: number, max: number) => Math.floor(Math.random() * (max - min + 1)) + min;
+const sample = <T>(arr: readonly T[], n: number): T[] => {
+  const copy = [...arr];
+  const out: T[] = [];
+  for (let i = 0; i < Math.min(n, copy.length); i++) {
+    const idx = Math.floor(Math.random() * copy.length);
+    out.push(copy.splice(idx, 1)[0]!);
+  }
+  return out;
+};
+const daysAgo = (d: number) => new Date(Date.now() - d * DAY);
+const minutesAgo = (m: number) => new Date(Date.now() - m * 60_000);
+
+async function main() {
+  console.log("\n══ Operations seed (Pages 31-35) ════════════════════\n");
+
+  await wipeOldSeed();
+  const tenants = await ensureTenants();
+  const platformUsers = await ensurePlatformUsers();
+
+  await seedCustomersAndProducts(tenants);
+  await seedOrders(tenants);                    // Pages 31-32
+  await seedSupportTickets(tenants, platformUsers); // Page 33
+  await seedKnowledgeBase(platformUsers);       // Page 34
+  await seedAnnouncements(platformUsers, tenants);  // Page 35
+
+  console.log("\n✓ Seed complete.\n");
+  await db.$disconnect();
+}
+
+/* ── Wipe ────────────────────────────────────────────── */
+
+async function wipeOldSeed() {
+  console.log("── Wiping prior seed rows…");
+  // Orders + dependents.
+  const oldOrders = await db.order.findMany({
+    where: { customerNote: { contains: SEED_TAG } },
+    select: { id: true },
+  });
+  if (oldOrders.length) {
+    await db.order.deleteMany({ where: { id: { in: oldOrders.map((o) => o.id) } } });
+    console.log(`  deleted ${oldOrders.length} orders`);
+  }
+  // SupportTickets where subject prefixed [seed].
+  const oldTickets = await db.supportTicket.findMany({
+    where: { subject: { startsWith: SEED_TAG } },
+    select: { id: true },
+  });
+  if (oldTickets.length) {
+    await db.supportTicket.deleteMany({ where: { id: { in: oldTickets.map((t) => t.id) } } });
+    console.log(`  deleted ${oldTickets.length} support tickets`);
+  }
+  // KbArticles + KbCategories tagged seed.
+  const oldArticles = await db.kbArticle.findMany({
+    where: { tags: { has: "seed" } },
+    select: { id: true },
+  });
+  if (oldArticles.length) {
+    await db.kbArticle.deleteMany({ where: { id: { in: oldArticles.map((a) => a.id) } } });
+    console.log(`  deleted ${oldArticles.length} KB articles`);
+  }
+  await db.kbCategory.deleteMany({ where: { slug: { startsWith: "seed-" } } });
+  await db.kbSearchQuery.deleteMany({ where: { query: { startsWith: SEED_TAG } } });
+  // Announcements tagged seed.
+  const oldAnn = await db.platformAnnouncement.findMany({
+    where: { tags: { has: "seed" } },
+    select: { id: true },
+  });
+  if (oldAnn.length) {
+    await db.platformAnnouncement.deleteMany({ where: { id: { in: oldAnn.map((a) => a.id) } } });
+    console.log(`  deleted ${oldAnn.length} announcements`);
+  }
+  // Customers tagged seed (after orders are gone).
+  await db.customer.deleteMany({ where: { tags: { has: "seed" } } });
+  // Products tagged seed (use description marker since Product has no tags array).
+  await db.product.deleteMany({ where: { description: { startsWith: SEED_TAG } } });
+}
+
+/* ── Tenants & users ─────────────────────────────────── */
+
+async function ensureTenants() {
+  const tenants = await db.tenant.findMany({
+    select: { id: true, slug: true, name: true, plan: true },
+    orderBy: { createdAt: "asc" },
+  });
+  if (tenants.length === 0) {
+    throw new Error("No tenants found — run base seed first.");
+  }
+  console.log(`\n── Found ${tenants.length} tenants — seeding into all of them.`);
+  return tenants;
+}
+
+async function ensurePlatformUsers() {
+  const users = await db.user.findMany({
+    where: { platformRole: { not: null } },
+    select: { id: true, email: true, name: true },
+    orderBy: { createdAt: "asc" },
+  });
+  if (users.length === 0) throw new Error("No platform staff found.");
+  console.log(`── Found ${users.length} platform staff users for assignments.`);
+  return users;
+}
+
+/* ── Customers + Products ────────────────────────────── */
+
+const CUSTOMER_NAMES = [
+  "Acme Storefronts LLC", "Bright Light Signs", "Castle Real Estate",
+  "Davis Dental", "Evergreen Bakery", "Foothill Coffee Roasters",
+  "Gemini Auto Detail", "Harbor Boutique", "Iron Oak Barbershop",
+  "Jefferson High Athletics", "Kona Surf Co", "Lumen Yoga Studio",
+  "Mountainside Brewing", "Northshore Marina", "Olive Branch Catering",
+  "Pacific Pediatrics", "Quartz Tile & Stone", "Riverbend Outdoors",
+  "Sunset Auto Body", "Trailhead Bicycle Co", "Urban Oasis Spa",
+  "Vertex Office Park", "Westside Pharmacy", "Yellowstone Outfitters",
+  "Zenith Medical Group",
+];
+
+const PRODUCT_TEMPLATES = [
+  { name: "Channel letters — internal LED", basePrice: 280000, cost: 145000 },
+  { name: "Storefront acrylic sign 4ft",     basePrice: 95000,  cost: 38000  },
+  { name: "Vinyl banner 6x3",                basePrice: 18000,  cost: 5500   },
+  { name: "Window decals — set of 8",        basePrice: 24000,  cost: 7200   },
+  { name: "Vehicle wrap — full sedan",       basePrice: 320000, cost: 145000 },
+  { name: "Wayfinding sign panel",           basePrice: 42000,  cost: 17500  },
+  { name: "Trade show pop-up display",       basePrice: 78000,  cost: 28500  },
+  { name: "Real estate yard sign",           basePrice: 4500,   cost: 1200   },
+];
+
+async function seedCustomersAndProducts(tenants: { id: string }[]) {
+  console.log("\n── Seeding customers & products…");
+  let cust = 0, prod = 0;
+  for (const t of tenants) {
+    // 12 customers per tenant
+    const customerSlice = sample(CUSTOMER_NAMES, 12);
+    for (const name of customerSlice) {
+      await db.customer.create({
+        data: {
+          tenantId: t.id,
+          name,
+          kind: Math.random() < 0.85 ? "BUSINESS" : "INDIVIDUAL",
+          status: "ACTIVE",
+          stage: rand(["WON", "WON", "WON", "QUOTED", "NEGOTIATING"] as const),
+          email: `contact@${name.toLowerCase().replace(/[^a-z0-9]+/g, "")}.example`,
+          tags: ["seed"],
+        },
+      });
+      cust += 1;
+    }
+    // 6 products per tenant
+    const productSlice = sample(PRODUCT_TEMPLATES, 6);
+    for (const p of productSlice) {
+      await db.product.create({
+        data: {
+          tenantId: t.id,
+          name: p.name,
+          basePrice: p.basePrice / 100,
+          cost: p.cost / 100,
+          description: `${SEED_TAG} demo product`,
+        },
+      });
+      prod += 1;
+    }
+  }
+  console.log(`  ✓ ${cust} customers, ${prod} products`);
+}
+
+/* ── Orders (Pages 31 + 32) ──────────────────────────── */
+
+async function seedOrders(tenants: { id: string }[]) {
+  console.log("\n── Seeding orders (Pages 31-32)…");
+  let total = 0;
+  for (const t of tenants) {
+    const customers = await db.customer.findMany({
+      where: { tenantId: t.id, tags: { has: "seed" } },
+      select: { id: true },
+      take: 50,
+    });
+    const products = await db.product.findMany({
+      where: { tenantId: t.id, description: { startsWith: SEED_TAG } },
+      select: { id: true, basePrice: true, cost: true, name: true },
+      take: 20,
+    });
+    if (customers.length === 0 || products.length === 0) continue;
+
+    const owner = await db.tenant.findUnique({
+      where: { id: t.id },
+      select: { memberships: { take: 1, select: { userId: true } } },
+    });
+    const createdBy = owner?.memberships[0]?.userId ?? "unknown";
+    if (createdBy === "unknown") continue;
+
+    // Find the highest existing number for this tenant so we don't collide.
+    const lastOrder = await db.order.findFirst({
+      where: { tenantId: t.id, number: { startsWith: "O-" } },
+      orderBy: { number: "desc" },
+      select: { number: true },
+    });
+    const lastNum = lastOrder ? parseInt(lastOrder.number.replace(/^O-/, ""), 10) || 0 : 0;
+    let counter = Math.max(1000, lastNum + 100);
+    for (let i = 0; i < 60; i++) {
+      counter += 1;
+      const ageDays = randInt(0, 60);
+      const createdAt = daysAgo(ageDays);
+
+      // Pick status based on age — older = more likely completed.
+      const status: OrderStatus = (() => {
+        if (ageDays > 35) return Math.random() < 0.85 ? "COMPLETED" : (Math.random() < 0.5 ? "READY" : "CANCELED");
+        if (ageDays > 18) return Math.random() < 0.55 ? "COMPLETED" : (Math.random() < 0.5 ? "OUT_FOR_INSTALL" : "READY");
+        if (ageDays > 7)  return Math.random() < 0.4  ? "IN_PRODUCTION" : (Math.random() < 0.5 ? "READY" : "OUT_FOR_INSTALL");
+        if (ageDays > 2)  return Math.random() < 0.55 ? "IN_PRODUCTION" : "NEW";
+        return Math.random() < 0.5 ? "NEW" : "IN_PRODUCTION";
+      })();
+
+      const dueOffset = randInt(-10, 21);
+      const dueDate = new Date(createdAt.getTime() + (10 + dueOffset) * DAY);
+      const isLate = dueDate.getTime() < Date.now() && (status === "NEW" || status === "IN_PRODUCTION" || status === "READY");
+
+      const startedAt = status !== "NEW" ? new Date(createdAt.getTime() + randInt(1, 4) * DAY) : null;
+      const readyAt   = (status === "READY" || status === "OUT_FOR_INSTALL" || status === "COMPLETED")
+        ? new Date((startedAt ?? createdAt).getTime() + randInt(2, 12) * DAY)
+        : null;
+      const completedAt = status === "COMPLETED"
+        ? new Date((readyAt ?? startedAt ?? createdAt).getTime() + randInt(1, 6) * DAY)
+        : null;
+      const canceledAt = status === "CANCELED"
+        ? new Date(createdAt.getTime() + randInt(1, 14) * DAY)
+        : null;
+
+      const itemCount = randInt(1, 4);
+      const items: { productId: string | null; description: string; quantity: number; unitPrice: number; subtotal: number; cost: number }[] = [];
+      let subtotal = 0;
+      for (let k = 0; k < itemCount; k++) {
+        const product = rand(products);
+        const qty = randInt(1, 6);
+        const price = Number(product.basePrice);
+        const cost = Number(product.cost ?? 0);
+        const lineSubtotal = price * qty;
+        items.push({
+          productId: product.id,
+          description: product.name,
+          quantity: qty,
+          unitPrice: price,
+          subtotal: lineSubtotal,
+          cost: cost * qty,
+        });
+        subtotal += lineSubtotal;
+      }
+
+      const priority: OrderPriority = Math.random() < 0.06 ? "RUSH" : (Math.random() < 0.18 ? "HIGH" : "NORMAL");
+      const customer = rand(customers);
+
+      await db.order.create({
+        data: {
+          tenantId: t.id,
+          customerId: customer.id,
+          number: `O-${counter}`,
+          status,
+          priority,
+          subtotal,
+          total: subtotal,
+          dueDate,
+          startedAt,
+          readyAt,
+          completedAt,
+          canceledAt,
+          createdAt,
+          updatedAt: completedAt ?? canceledAt ?? readyAt ?? startedAt ?? createdAt,
+          createdBy,
+          customerNote: `${SEED_TAG} ${isLate ? "marked late by seed" : "demo order"}`,
+          productionNotes: rand([
+            "Standard run.",
+            "Customer requested matte finish.",
+            "Verify pantone match before lamination.",
+            "Coordinate with installer for next-day pickup.",
+            "Rush — escalated by AE.",
+          ]),
+          items: {
+            create: items.map((it) => ({
+              productId: it.productId,
+              name: it.description,
+              description: it.description,
+              pricingModel: "PER_UNIT",
+              basePrice: it.unitPrice,
+              quantity: it.quantity,
+              subtotal: it.subtotal,
+            })),
+          },
+        },
+      });
+      total += 1;
+    }
+  }
+  console.log(`  ✓ ${total} orders across ${tenants.length} tenants`);
+}
+
+/* ── SupportTickets (Page 33) ────────────────────────── */
+
+const TICKET_SUBJECTS: { subject: string; category: SupportTicketCategory; module: SupportTicketModule; bodies: string[] }[] = [
+  {
+    subject: "Stripe webhook is failing for our prod env",
+    category: "BILLING", module: "BILLING",
+    bodies: [
+      "Hey — we just upgraded to Pro and Stripe shows the charge succeeded but our portal still says trial. Can you sync?",
+      "Updated, took ~10 min to propagate. Working now.",
+    ],
+  },
+  {
+    subject: "Proof email never arrived for customer",
+    category: "BUG", module: "PROOFS",
+    bodies: [
+      "Sent a proof to acme@example.com 2 hours ago and they say nothing in spam. Resend button greyed out.",
+    ],
+  },
+  {
+    subject: "Can we add Square as a payment processor?",
+    category: "FEATURE_REQUEST", module: "INTEGRATIONS",
+    bodies: [
+      "Hi, several of our shops are on Square already. Adding it would let us migrate without breaking their accounting.",
+    ],
+  },
+  {
+    subject: "Order status reverted unexpectedly",
+    category: "BUG", module: "ORDERS",
+    bodies: [
+      "Order O-1042 went back from READY to IN_PRODUCTION overnight. Nobody on our team touched it.",
+    ],
+  },
+  {
+    subject: "How do I reset 2FA for a team member?",
+    category: "QUESTION", module: "AUTH",
+    bodies: [
+      "She lost her phone and we can't find a clear option in the team settings.",
+    ],
+  },
+  {
+    subject: "Quote PDF showing wrong logo",
+    category: "BUG", module: "QUOTES",
+    bodies: [
+      "Uploaded the new logo last Friday but the quote PDF still shows the old one.",
+    ],
+  },
+  {
+    subject: "Bulk export of completed jobs",
+    category: "FEATURE_REQUEST", module: "REPORTS",
+    bodies: [
+      "Need a CSV export with customer, total, due date, and completion date for the last 90 days.",
+    ],
+  },
+  {
+    subject: "Customer portal page is loading slow",
+    category: "BUG", module: "PORTAL",
+    bodies: [
+      "Customers reporting 8-10s load times on the proof view page. Started Tuesday morning.",
+    ],
+  },
+  {
+    subject: "Refund isn't reflecting in invoice",
+    category: "BILLING", module: "INVOICES",
+    bodies: [
+      "Issued a $250 refund through Stripe two days ago. Invoice still shows full balance paid.",
+    ],
+  },
+  {
+    subject: "Can we get an SSO option for Google Workspace?",
+    category: "FEATURE_REQUEST", module: "AUTH",
+    bodies: [
+      "Several of our larger customers are asking — would unblock enterprise tier conversations.",
+    ],
+  },
+  {
+    subject: "Email templates don't preserve our brand color",
+    category: "BUG", module: "EMAIL",
+    bodies: [
+      "Set #FF6600 in branding but quote emails arrive with the default blue.",
+    ],
+  },
+  {
+    subject: "Where do I edit production notes?",
+    category: "QUESTION", module: "ORDERS",
+    bodies: [
+      "Looking for a way to add per-order production notes that the install team can see.",
+    ],
+  },
+];
+
+async function seedSupportTickets(
+  tenants: { id: string; name: string }[],
+  staff: { id: string; email: string; name: string | null }[],
+) {
+  console.log("\n── Seeding support tickets (Page 33)…");
+  let count = 0;
+  // 35 tickets total spread across tenants/statuses/priorities.
+  for (let i = 0; i < 35; i++) {
+    const t = rand(tenants);
+    const tmpl = rand(TICKET_SUBJECTS);
+    const ageDays = randInt(0, 21);
+    const createdAt = daysAgo(ageDays);
+
+    const status: SupportTicketStatus = (() => {
+      if (ageDays > 14) return Math.random() < 0.7 ? "RESOLVED" : "CLOSED";
+      if (ageDays > 7)  return Math.random() < 0.4 ? "WAITING_CUSTOMER" : "RESOLVED";
+      if (ageDays > 3)  return Math.random() < 0.5 ? "IN_PROGRESS" : "WAITING_CUSTOMER";
+      return Math.random() < 0.55 ? "OPEN" : "IN_PROGRESS";
+    })();
+
+    const priority: SupportTicketPriority = (() => {
+      const r = Math.random();
+      if (r < 0.08) return "URGENT";
+      if (r < 0.25) return "HIGH";
+      if (r < 0.85) return "NORMAL";
+      return "LOW";
+    })();
+
+    const slaHoursByPriority: Record<SupportTicketPriority, number> = {
+      URGENT: 1, HIGH: 4, NORMAL: 24, LOW: 72,
+    };
+    const dueBy = new Date(createdAt.getTime() + slaHoursByPriority[priority] * 3_600_000);
+
+    const tenantOwner = await db.membership.findFirst({
+      where: { tenantId: t.id },
+      select: { userId: true },
+    });
+    if (!tenantOwner) continue;
+
+    const assigned = (status === "OPEN" && Math.random() < 0.5) ? null : rand(staff);
+    const firstStaffReplyAt = (status !== "OPEN")
+      ? new Date(createdAt.getTime() + randInt(15, 480) * 60_000)
+      : null;
+
+    const isResolved = status === "RESOLVED" || status === "CLOSED";
+    const resolvedAt = isResolved
+      ? new Date(createdAt.getTime() + randInt(2, 12) * 3_600_000 + ageDays * DAY * 0.5)
+      : null;
+
+    const csat = isResolved && Math.random() < 0.55
+      ? { rating: rand([3, 4, 4, 4, 5, 5, 5, 5, 2]), comment: rand(["Quick fix, thanks!", "Took a while but resolved.", "Great communication.", "Wish it had been escalated sooner.", null, null]) }
+      : null;
+
+    const ticket = await db.supportTicket.create({
+      data: {
+        tenantId: t.id,
+        subject: `${SEED_TAG} ${tmpl.subject}`,
+        category: tmpl.category,
+        module: tmpl.module,
+        priority,
+        status,
+        openedByUserId: tenantOwner.userId,
+        assignedTo: assigned ? assigned.id : null,
+        createdAt,
+        dueBy,
+        firstStaffReplyAt,
+        resolvedAt,
+        closedAt: status === "CLOSED" ? resolvedAt : null,
+        satisfactionRating: csat?.rating ?? null,
+        satisfactionComment: csat?.comment ?? null,
+        satisfactionAt: csat ? new Date((resolvedAt?.getTime() ?? createdAt.getTime()) + randInt(60, 720) * 60_000) : null,
+        ratedByUserId: csat ? tenantOwner.userId : null,
+      },
+    });
+
+    // Customer message + optional staff replies.
+    await db.supportTicketMessage.create({
+      data: {
+        ticketId: ticket.id,
+        authorId: tenantOwner.userId,
+        isStaff: false,
+        body: tmpl.bodies[0]!,
+        createdAt,
+      },
+    });
+    if (firstStaffReplyAt && assigned) {
+      await db.supportTicketMessage.create({
+        data: {
+          ticketId: ticket.id,
+          authorId: assigned.id,
+          isStaff: true,
+          body: rand([
+            "Thanks for flagging — checking now.",
+            "Got it. Looking at the logs from your tenant — I'll be back in a few minutes.",
+            "We see the issue on our end. Pulling in engineering.",
+          ]),
+          createdAt: firstStaffReplyAt,
+        },
+      });
+    }
+    if (tmpl.bodies[1]) {
+      await db.supportTicketMessage.create({
+        data: {
+          ticketId: ticket.id,
+          authorId: tenantOwner.userId,
+          isStaff: false,
+          body: tmpl.bodies[1],
+          createdAt: new Date(createdAt.getTime() + randInt(60, 600) * 60_000),
+        },
+      });
+    }
+
+    count += 1;
+  }
+  console.log(`  ✓ ${count} support tickets`);
+}
+
+/* ── Knowledge Base (Page 34) ────────────────────────── */
+
+const CATEGORY_TREE: { slug: string; name: string; children?: { slug: string; name: string }[] }[] = [
+  {
+    slug: "seed-getting-started",
+    name: "Getting started",
+    children: [
+      { slug: "seed-onboarding",   name: "Onboarding" },
+      { slug: "seed-quickstart",   name: "Quickstart" },
+    ],
+  },
+  {
+    slug: "seed-orders-jobs",
+    name: "Orders & jobs",
+    children: [
+      { slug: "seed-create-quote", name: "Quotes & estimates" },
+      { slug: "seed-production",   name: "Production workflow" },
+    ],
+  },
+  {
+    slug: "seed-billing",
+    name: "Billing & payments",
+  },
+  {
+    slug: "seed-integrations",
+    name: "Integrations",
+  },
+  {
+    slug: "seed-troubleshooting",
+    name: "Troubleshooting",
+  },
+];
+
+const ARTICLE_TEMPLATES: { title: string; summary: string; body: string; categorySlug: string; tags: string[] }[] = [
+  {
+    title: "Setting up your first storefront",
+    summary: "How to launch your customer-facing storefront in under 10 minutes.",
+    body: "## Overview\n\nThis guide walks you through configuring branding, adding your first product, and sending your first quote.\n\n## Branding\n\nNavigate to Settings → Branding and upload your logo, set your accent color, and pick a font. The storefront uses these for every customer touchpoint.\n\n## Products\n\nCreate at least one product before sharing your storefront. Customers can request quotes against any active product.\n\n## Going live\n\nOnce branding + at least one product are in, the storefront is automatically published at `/yourshop/`.",
+    categorySlug: "seed-onboarding",
+    tags: ["seed", "storefront", "onboarding"],
+  },
+  {
+    title: "Inviting team members",
+    summary: "Add admins, sales reps, and production staff to your shop.",
+    body: "## Adding teammates\n\nGo to **Settings → Team** and click **Invite member**. Pick a role:\n\n- **Owner** — full access\n- **Admin** — everything except billing\n- **Sales rep** — quotes, orders, customers\n- **Production** — orders + production stages only\n\n## What invitees see\n\nThey'll receive an email with a magic link valid for 7 days.",
+    categorySlug: "seed-onboarding",
+    tags: ["seed", "team", "permissions"],
+  },
+  {
+    title: "Building your first quote",
+    summary: "Turn a customer inquiry into a polished, branded quote PDF.",
+    body: "## Step 1 — Find or create the customer\n\n## Step 2 — Add line items\n\n## Step 3 — Apply discounts (optional)\n\n## Step 4 — Send for approval\n\nYour customer gets a link with one-click approve / decline. Approved quotes auto-convert to orders if you've enabled that in Settings.",
+    categorySlug: "seed-create-quote",
+    tags: ["seed", "quotes"],
+  },
+  {
+    title: "Production stages explained",
+    summary: "How orders move through Cut, Print, Laminate, Ship, Install.",
+    body: "## What is a production stage?\n\nA stage represents a unit of work in your shop — Cutting, Printing, Laminating, Shipping, Installing.\n\n## Configuring stages\n\nBy default, every order gets the standard pipeline. Per-order overrides let you skip stages (digital-only orders skip Lamination).\n\n## Status colors\n\n- 🔵 In progress\n- 🟢 Ready\n- 🟠 Blocked\n- ⚫ Skipped",
+    categorySlug: "seed-production",
+    tags: ["seed", "production", "stages"],
+  },
+  {
+    title: "Connecting Stripe for payments",
+    summary: "One-time setup so customers can pay invoices online.",
+    body: "## Prerequisites\n\nYou'll need a verified Stripe account with the products + tax settings already filled in.\n\n## Steps\n\n1. **Settings → Billing → Connect Stripe**\n2. Authorize the connection\n3. Pick which Stripe account if you have multiple\n4. Test with a $1 invoice\n\n## What's pulled\n\n- Charges + refunds\n- Dispute notifications\n- Customer payment methods (last 4 only)",
+    categorySlug: "seed-billing",
+    tags: ["seed", "stripe", "billing"],
+  },
+  {
+    title: "Tax setup by region",
+    summary: "Set per-location tax rates so quotes and invoices are accurate.",
+    body: "## Why per-location?\n\nIf you operate in multiple states/regions, the tax rate on a customer's invoice depends on where the work ships. Configure each location independently.\n\n## How\n\nSettings → Tax → Add region.",
+    categorySlug: "seed-billing",
+    tags: ["seed", "tax"],
+  },
+  {
+    title: "Connecting Google Calendar",
+    summary: "Sync install appointments to your team's calendar.",
+    body: "Calendar sync is one-way (Flowtora → Google) by default. Two-way sync requires a Pro plan.",
+    categorySlug: "seed-integrations",
+    tags: ["seed", "calendar", "google"],
+  },
+  {
+    title: "Why is my proof email not arriving?",
+    summary: "Common causes and how to fix them.",
+    body: "## Most common causes\n\n1. The customer's domain blocks our sending domain — ask them to whitelist `@email.flowtora.com`.\n2. Resend cooldown — we throttle resends to 1 per hour to avoid spam flags.\n3. Soft bounce — the address briefly rejected the email; we retry automatically for 4 hours.\n\n## How to check\n\nSettings → Email log shows every send + status.",
+    categorySlug: "seed-troubleshooting",
+    tags: ["seed", "email", "proofs"],
+  },
+  {
+    title: "Recovering a deleted quote",
+    summary: "Soft-deleted quotes stick around for 30 days.",
+    body: "Trash → Quotes. Restore returns it to draft state.",
+    categorySlug: "seed-troubleshooting",
+    tags: ["seed", "trash"],
+  },
+  {
+    title: "Subscription billing cycles",
+    summary: "How monthly + annual cycles work, mid-cycle changes, and prorations.",
+    body: "## Monthly\n\nBills on the same day each month based on signup date.\n\n## Annual\n\nFlat 12-month price, prorated refund on cancel.\n\n## Mid-cycle upgrades\n\nWe charge the difference immediately and reset the cycle.",
+    categorySlug: "seed-billing",
+    tags: ["seed", "subscriptions"],
+  },
+  {
+    title: "Quickstart: from signup to first order in 30 minutes",
+    summary: "The fastest path through onboarding.",
+    body: "1. Sign up\n2. Brand it (logo + color)\n3. Add 1 product\n4. Add 1 customer\n5. Send 1 quote\n6. Approve + convert\n\nDone.",
+    categorySlug: "seed-quickstart",
+    tags: ["seed", "quickstart", "onboarding"],
+  },
+  {
+    title: "Bulk import customers from CSV",
+    summary: "Move your existing customer list in 5 minutes.",
+    body: "## CSV format\n\nRequired columns: `name`, `email`. Optional: `phone`, `tags` (comma-separated), `billingAddress`.\n\n## Where\n\nCustomers → Import.",
+    categorySlug: "seed-onboarding",
+    tags: ["seed", "import", "csv"],
+  },
+];
+
+async function seedKnowledgeBase(staff: { id: string; email: string; name: string | null }[]) {
+  console.log("\n── Seeding knowledge base (Page 34)…");
+  // Categories first — parents, then children.
+  const slugToId = new Map<string, string>();
+  for (const c of CATEGORY_TREE) {
+    const cat = await db.kbCategory.create({
+      data: { slug: c.slug, name: c.name, sortOrder: 0 },
+      select: { id: true, slug: true },
+    });
+    slugToId.set(cat.slug, cat.id);
+    if (c.children) {
+      for (const child of c.children) {
+        const sub = await db.kbCategory.create({
+          data: { slug: child.slug, name: child.name, parentId: cat.id, sortOrder: 0 },
+          select: { id: true, slug: true },
+        });
+        slugToId.set(sub.slug, sub.id);
+      }
+    }
+  }
+
+  const statusMix: KbArticleStatus[] = ["PUBLISHED", "PUBLISHED", "PUBLISHED", "PUBLISHED", "PUBLISHED", "PUBLISHED", "PUBLISHED", "DRAFT", "DRAFT", "REVIEW", "ARCHIVED"];
+  const visibilityMix: KbVisibility[] = ["PUBLIC", "PUBLIC", "PUBLIC", "PUBLIC", "PUBLIC", "INTERNAL"];
+
+  let articleCount = 0;
+  for (const tmpl of ARTICLE_TEMPLATES) {
+    const slug = tmpl.title.toLowerCase().replace(/[^a-z0-9]+/g, "-").replace(/^-|-$/g, "");
+    const status = rand(statusMix);
+    const visibility = rand(visibilityMix);
+    const author = rand(staff);
+    const ageDays = randInt(2, 90);
+    const createdAt = daysAgo(ageDays);
+    const updatedAt = daysAgo(randInt(0, ageDays));
+    const publishedAt = status === "PUBLISHED" ? daysAgo(randInt(0, ageDays - 1)) : null;
+
+    const a = await db.kbArticle.create({
+      data: {
+        slug,
+        locale: "en",
+        title: tmpl.title,
+        summary: tmpl.summary,
+        bodyMarkdown: tmpl.body,
+        categoryId: slugToId.get(tmpl.categorySlug) ?? null,
+        status,
+        visibility,
+        featured: Math.random() < 0.18,
+        authorId: author.id,
+        publishedById: status === "PUBLISHED" ? author.id : null,
+        publishedAt,
+        viewCount: status === "PUBLISHED" ? randInt(40, 4200) : 0,
+        helpfulUp: status === "PUBLISHED" ? randInt(2, 80) : 0,
+        helpfulDown: status === "PUBLISHED" ? randInt(0, 12) : 0,
+        metaTitle: tmpl.title,
+        metaDescription: tmpl.summary,
+        tags: tmpl.tags,
+        createdAt,
+        updatedAt,
+      },
+      select: { id: true },
+    });
+
+    // Add a couple of revisions.
+    const revCount = randInt(1, 4);
+    for (let i = 0; i < revCount; i++) {
+      await db.kbArticleRevision.create({
+        data: {
+          articleId: a.id,
+          title: tmpl.title,
+          bodyMarkdown: tmpl.body.slice(0, Math.max(60, tmpl.body.length - i * 80)),
+          status: i === 0 ? "DRAFT" : (i === revCount - 1 ? status : "REVIEW"),
+          note: rand(["Initial draft", "Cleaned up wording", "Added screenshots", "Fixed link", "Updated for new UI", null]),
+          savedByUserId: rand(staff).id,
+          createdAt: new Date(createdAt.getTime() + i * randInt(1, 6) * DAY),
+        },
+      });
+    }
+
+    // Reader feedback on published articles.
+    if (status === "PUBLISHED") {
+      const fbCount = randInt(0, 5);
+      for (let i = 0; i < fbCount; i++) {
+        const helpful = Math.random() < 0.85;
+        await db.kbArticleFeedback.create({
+          data: {
+            articleId: a.id,
+            helpful,
+            comment: !helpful && Math.random() < 0.6
+              ? rand(["Wasn't quite what I was looking for.", "Could use a video.", "Out of date — UI doesn't match.", "Too short, missing detail."])
+              : (Math.random() < 0.2 ? rand(["Nailed it.", "Saved me an hour."]) : null),
+            createdAt: new Date(createdAt.getTime() + randInt(2, 60) * DAY),
+          },
+        });
+      }
+    }
+
+    // Spanish locale variant for ~20% of published articles.
+    if (status === "PUBLISHED" && Math.random() < 0.2) {
+      await db.kbArticle.create({
+        data: {
+          slug,
+          locale: "es",
+          title: tmpl.title + " (ES)",
+          summary: tmpl.summary,
+          bodyMarkdown: tmpl.body,
+          categoryId: slugToId.get(tmpl.categorySlug) ?? null,
+          status: rand(["PUBLISHED", "DRAFT", "REVIEW"] as KbArticleStatus[]),
+          visibility,
+          featured: false,
+          authorId: author.id,
+          tags: tmpl.tags,
+          createdAt,
+          updatedAt,
+        },
+      });
+    }
+
+    articleCount += 1;
+  }
+
+  // Search analytics rows
+  const queries = [
+    "stripe", "invoice not paid", "reset password", "production stages",
+    "google calendar", "csv import", "tax setup", "refund customer",
+    "quote pdf", "team invite", "cancel subscription", "two factor",
+    "white label", "api key", "webhook",
+  ];
+  for (let i = 0; i < 200; i++) {
+    const q = rand(queries);
+    const resultsCount = q === "white label" || q === "api key" ? 0 : randInt(1, 8);
+    await db.kbSearchQuery.create({
+      data: {
+        query: `${SEED_TAG} ${q}`,
+        resultsCount,
+        at: daysAgo(randInt(0, 29)),
+      },
+    });
+  }
+
+  console.log(`  ✓ ${slugToId.size} categories, ${articleCount} articles, 200 search queries`);
+}
+
+/* ── Announcements (Page 35) ─────────────────────────── */
+
+const ANNOUNCEMENT_TEMPLATES: {
+  title: string;
+  body: string;
+  type: AnnouncementType;
+  priority: AnnouncementPriority;
+  channels: AnnouncementChannel[];
+  changelogCategory?: ChangelogCategory;
+  cta?: { label: string; url: string };
+}[] = [
+  {
+    title: "New: Bulk customer import from CSV",
+    body: "Spreadsheet too long to copy-paste? You can now import customers in bulk from a CSV file. Includes tag auto-creation and dedupe by email.",
+    type: "NEW_FEATURE", priority: "INFO",
+    channels: ["BANNER", "INBOX", "CHANGELOG", "EMAIL"],
+    changelogCategory: "FEATURE",
+    cta: { label: "Open import wizard", url: "/customers/import" },
+  },
+  {
+    title: "Quote PDF rendering 4x faster",
+    body: "We rebuilt the PDF pipeline. Quotes with 50+ line items used to take ~12 seconds to generate; now they're under 3.",
+    type: "RELEASE", priority: "INFO",
+    channels: ["INBOX", "CHANGELOG"],
+    changelogCategory: "IMPROVEMENT",
+  },
+  {
+    title: "Scheduled maintenance — Sunday 02:00-03:00 UTC",
+    body: "We're upgrading the primary database. The app will be read-only for ~30 minutes during the window.",
+    type: "MAINTENANCE", priority: "IMPORTANT",
+    channels: ["BANNER", "MODAL", "EMAIL"],
+  },
+  {
+    title: "Stripe webhooks delayed — investigating",
+    body: "We're seeing 5-10 minute delays on Stripe webhook processing for some tenants. The team is rolling out a fix; subscription states will catch up once deployed.",
+    type: "INCIDENT", priority: "CRITICAL",
+    channels: ["BANNER", "EMAIL"],
+  },
+  {
+    title: "Pricing update — new Enterprise tier",
+    body: "We're introducing a dedicated Enterprise tier with SSO, audit log export, and priority support. Existing Pro customers retain their current pricing.",
+    type: "PRICING", priority: "IMPORTANT",
+    channels: ["EMAIL", "CHANGELOG"],
+    changelogCategory: "FEATURE",
+    cta: { label: "See pricing", url: "/pricing" },
+  },
+  {
+    title: "Fixed: Production stage sort order",
+    body: "Stages saved out of order in some browsers. Now persists exactly as you arrange them.",
+    type: "RELEASE", priority: "INFO",
+    channels: ["INBOX", "CHANGELOG"],
+    changelogCategory: "FIX",
+  },
+  {
+    title: "Security: 2FA now required for owners",
+    body: "Effective next month, two-factor auth will be required for tenant owners. Set yours up now to avoid disruption.",
+    type: "GENERAL", priority: "IMPORTANT",
+    channels: ["BANNER", "EMAIL", "CHANGELOG"],
+    changelogCategory: "SECURITY",
+    cta: { label: "Set up 2FA", url: "/settings/security" },
+  },
+  {
+    title: "Deprecating legacy v1 API",
+    body: "The v1 API will sunset on 2026-09-01. v2 is fully backward-compatible for all read endpoints — write endpoints need a small migration.",
+    type: "GENERAL", priority: "INFO",
+    channels: ["EMAIL", "CHANGELOG"],
+    changelogCategory: "DEPRECATION",
+  },
+  {
+    title: "Real-time order updates rolling out",
+    body: "Your jobs board now updates live as production stages move — no more manual refresh.",
+    type: "NEW_FEATURE", priority: "INFO",
+    channels: ["INBOX", "CHANGELOG", "PUSH"],
+    changelogCategory: "FEATURE",
+  },
+  {
+    title: "iOS app v2.4 is live",
+    body: "iPad layout, offline proof signing, and a redesigned customer detail screen.",
+    type: "RELEASE", priority: "INFO",
+    channels: ["INBOX", "CHANGELOG", "PUSH"],
+    changelogCategory: "FEATURE",
+    cta: { label: "Update on App Store", url: "https://apps.apple.com/" },
+  },
+];
+
+async function seedAnnouncements(
+  staff: { id: string; email: string }[],
+  tenants: { id: string }[],
+) {
+  console.log("\n── Seeding announcements (Page 35)…");
+  let count = 0;
+
+  for (const tmpl of ANNOUNCEMENT_TEMPLATES) {
+    const ageDays = randInt(0, 60);
+    const createdAt = daysAgo(ageDays);
+    const author = rand(staff);
+
+    const status: AnnouncementStatus = (() => {
+      if (ageDays > 30) return Math.random() < 0.5 ? "ARCHIVED" : "PUBLISHED";
+      if (ageDays > 5)  return Math.random() < 0.7 ? "PUBLISHED" : "ARCHIVED";
+      const r = Math.random();
+      if (r < 0.15) return "DRAFT";
+      if (r < 0.30) return "SCHEDULED";
+      return "PUBLISHED";
+    })();
+
+    const audience: AnnouncementAudience = rand(["ALL", "ALL", "ALL", "PLAN", "COHORT"] as const);
+    const publishAt = status === "SCHEDULED"
+      ? new Date(Date.now() + randInt(1, 7) * DAY)
+      : null;
+    const publishedAt = status === "PUBLISHED" || status === "ARCHIVED"
+      ? new Date(createdAt.getTime() + randInt(0, 24) * 3_600_000)
+      : null;
+
+    const expireAt = (status === "PUBLISHED" && Math.random() < 0.4)
+      ? new Date((publishedAt ?? createdAt).getTime() + randInt(7, 60) * DAY)
+      : null;
+
+    const a = await db.platformAnnouncement.create({
+      data: {
+        title: tmpl.title,
+        body: tmpl.body,
+        type: tmpl.type,
+        priority: tmpl.priority,
+        status,
+        audience,
+        audiencePlans: audience === "PLAN" ? rand([["GROWTH", "PRO", "ENTERPRISE"], ["PRO", "ENTERPRISE"], ["ENTERPRISE"]]) : [],
+        audienceCohorts: audience === "COHORT" ? rand([["BETA"], ["ALPHA", "BETA"]]) : [],
+        audienceTenantIds: [],
+        channels: tmpl.channels,
+        ctaLabel: tmpl.cta?.label ?? null,
+        ctaUrl: tmpl.cta?.url ?? null,
+        heroImageUrl: Math.random() < 0.3
+          ? `https://images.unsplash.com/photo-${rand(["1517336714731", "1554475901", "1551836022"])}-bb6f04c4d65f?w=1200`
+          : null,
+        frequencyCap: rand(["UNLIMITED", "ONCE", "ONCE", "DAILY"] as const),
+        changelogCategory: tmpl.changelogCategory ?? null,
+        audienceCustomersOnly: tmpl.changelogCategory === "DEPRECATION",
+        publishAt,
+        publishedAt,
+        expireAt,
+        emailedAt: tmpl.channels.includes("EMAIL") && status === "PUBLISHED"
+          ? new Date((publishedAt ?? createdAt).getTime() + 60 * 60 * 1000)
+          : null,
+        emailedRecipientCount: tmpl.channels.includes("EMAIL") && status === "PUBLISHED"
+          ? randInt(50, 500)
+          : 0,
+        tags: ["seed"],
+        authorId: author.id,
+        createdAt,
+        updatedAt: publishedAt ?? createdAt,
+      },
+      select: { id: true },
+    });
+
+    // Generate views/clicks/dismissals for published items.
+    if (status === "PUBLISHED" || status === "ARCHIVED") {
+      const tenantUsers = await db.user.findMany({
+        where: { memberships: { some: { tenantId: { in: tenants.map((t) => t.id) } } } },
+        select: { id: true, memberships: { select: { tenantId: true }, take: 1 } },
+        take: 50,
+      });
+      const sampleUsers = sample(tenantUsers, randInt(2, Math.max(2, tenantUsers.length)));
+      for (const u of sampleUsers) {
+        const tenantId = u.memberships[0]?.tenantId;
+        if (!tenantId) continue;
+        const seenAt = new Date((publishedAt ?? createdAt).getTime() + randInt(0, 6) * 3_600_000);
+        const clicked = Math.random() < 0.18;
+        const dismissed = !clicked && Math.random() < 0.5;
+        await db.platformAnnouncementView.upsert({
+          where: { announcementId_userId: { announcementId: a.id, userId: u.id } },
+          create: {
+            announcementId: a.id,
+            userId: u.id,
+            tenantId,
+            seenAt,
+            dismissedAt: dismissed ? new Date(seenAt.getTime() + randInt(5, 600) * 60_000) : null,
+            clickedAt:   clicked  ? new Date(seenAt.getTime() + randInt(5, 300) * 60_000) : null,
+          },
+          update: {},
+        });
+      }
+    }
+    count += 1;
+  }
+
+  // Seed a few extra DRAFT templates so the Templates tab isn't empty.
+  for (let i = 0; i < 3; i++) {
+    await db.platformAnnouncement.create({
+      data: {
+        title: `Template — ${rand(["Outage post-mortem", "Feature launch", "Pricing change", "Holiday hours"])}`,
+        body: "Reusable copy. Replace tokens before sending.",
+        type: "GENERAL",
+        priority: "INFO",
+        status: "DRAFT",
+        audience: "ALL",
+        channels: ["BANNER"],
+        tags: ["seed", "template"],
+        authorId: rand(staff).id,
+        createdAt: daysAgo(randInt(20, 90)),
+      },
+    });
+  }
+
+  console.log(`  ✓ ${count + 3} announcements with view tracking`);
+}
+
+main().catch((e) => {
+  console.error(e);
+  process.exit(1);
+});
