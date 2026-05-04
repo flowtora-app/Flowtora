@@ -5179,6 +5179,32 @@ enum AnnouncementAudience {
   TENANT
 }
 
+// Page 35 — multi-channel fan-out. Each channel renders the same body
+// (per-channel content variants are deferred). The set lives on the
+// announcement; absent channels never fan out.
+enum AnnouncementChannel {
+  BANNER    // in-app banner top of tenant app
+  MODAL     // in-app one-time modal
+  INBOX     // in-app notification center entry
+  EMAIL     // email blast
+  CHANGELOG // public changelog post + RSS
+  PUSH      // mobile push notification
+}
+
+enum AnnouncementFrequencyCap {
+  UNLIMITED // always show until dismissed
+  ONCE      // once per user
+  DAILY     // once per user per day
+}
+
+enum ChangelogCategory {
+  FEATURE
+  IMPROVEMENT
+  FIX
+  SECURITY
+  DEPRECATION
+}
+
 // Singleton row that holds platform-wide operational state. Only one
 // row exists, with a fixed id so reads + upserts stay simple.
 model PlatformSetting {
@@ -5235,6 +5261,27 @@ model PlatformAnnouncement {
   // Optional tags shown as small chips, free-form.
   tags String[] @default([])
 
+  // Page 35 — channel fan-out. Empty array = legacy behavior (banner
+  // only). Order doesn't matter; rendered as multi-select chips.
+  channels AnnouncementChannel[] @default([])
+
+  // Per-announcement CTA. The banner / modal / inbox renders this as
+  // a button when both label and URL are set.
+  ctaLabel String?
+  ctaUrl   String?
+
+  // Optional hero image — rendered above the body in modals + emails.
+  heroImageUrl String?
+
+  // How often to surface this announcement to a given user.
+  frequencyCap AnnouncementFrequencyCap @default(UNLIMITED)
+
+  // Changelog-only fields — used when CHANGELOG is in `channels`.
+  // `audienceCustomersOnly` flips changelog visibility from public
+  // (anyone) to customers-only (signed-in tenant users).
+  changelogCategory     ChangelogCategory?
+  audienceCustomersOnly Boolean            @default(false)
+
   // Author audit — platform staff user id; nullable for system-created
   // rows we may add later (e.g. auto-generated incident posts).
   authorId String?
@@ -5268,6 +5315,9 @@ model PlatformAnnouncementView {
   tenantId       String
   seenAt         DateTime  @default(now())
   dismissedAt    DateTime?
+  // Page 35 — click-through tracking for the per-announcement
+  // performance dashboard (view rate, click rate, dismissal rate).
+  clickedAt      DateTime?
 
   announcement PlatformAnnouncement @relation(fields: [announcementId], references: [id], onDelete: Cascade)
 
