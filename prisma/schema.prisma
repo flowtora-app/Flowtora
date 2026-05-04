@@ -4395,6 +4395,9 @@ model SupportTicket {
   module   SupportTicketModule   @default(OTHER)
   priority SupportTicketPriority @default(NORMAL)
   status   SupportTicketStatus   @default(OPEN)
+  // Page 33 — intake channel. Drives the left-rail folder filter on
+  // /platform/operations/tickets.
+  channel  SupportTicketChannel  @default(EMAIL)
 
   // Tenant user who opened it. Left nullable so a ticket survives a
   // member being removed — the body is still useful to platform staff.
@@ -4474,6 +4477,53 @@ enum SupportTicketStatus {
   WAITING_CUSTOMER
   RESOLVED
   CLOSED
+}
+
+// Page 33 §Folders by channel — where the ticket originated. EMAIL is
+// the default for tickets opened via the customer support form / inbound
+// SMTP. CHAT/IN_APP/PHONE/FORUM are populated by the matching intake
+// channels as they ship.
+enum SupportTicketChannel {
+  EMAIL
+  CHAT
+  IN_APP
+  PHONE
+  FORUM
+}
+
+// Page 33 §SLA settings — per priority + plan combo.
+//
+// Composite uniqueness on (priority, plan) — singletons per matrix
+// cell so admins edit + look up by both axes. We use the legacy Plan
+// enum here so SLA definitions survive PricingPlan rename/clone.
+model SupportSlaTarget {
+  id String @id @default(cuid())
+
+  priority SupportTicketPriority
+  plan     Plan
+
+  /** Hours allowed for the first staff response. */
+  firstResponseTargetHrs Int
+  /** Hours allowed to resolve. */
+  resolutionTargetHrs    Int
+
+  /** Pause SLA outside business hours (Mon-Fri 9am-5pm tenant local). */
+  businessHoursOnly Boolean @default(false)
+  /** Free-form holiday-calendar id (resolved at evaluation time). */
+  holidayCalendar   String?
+
+  /** Hours-from-deadline at which to fire the early-warning escalation. */
+  warningHrsBefore Int      @default(2)
+  /** User ids to alert when SLA hits the warning threshold. */
+  escalateAtWarning String[] @default([])
+  /** User ids to alert on breach. */
+  escalateAtBreach  String[] @default([])
+
+  updatedBy String?
+  updatedAt DateTime @updatedAt
+  createdAt DateTime @default(now())
+
+  @@unique([priority, plan])
 }
 
 // Phase 20 Slice D — platform-wide library of canned replies for the

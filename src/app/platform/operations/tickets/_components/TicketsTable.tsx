@@ -1,18 +1,19 @@
 // Center pane — ticket list. Each row links to the existing detail
-// page at /platform/support/[id]. Multi-select bulk actions are
-// deferred (we'd need bulk server actions wired up); the checkboxes
-// are rendered as a visual placeholder so the design intent is clear.
+// page at /platform/support/[id]. Multi-select with bulk actions is
+// wired through SelectionContext (BulkActionsBar.tsx).
 
 import Link from "next/link";
 import type { TicketListRow } from "@/server/platform/support-tickets";
 import {
   CATEGORY_LABEL,
+  CHANNEL_LABEL,
   STATUS_TONE,
   STATUS_LABEL,
   PRIORITY_TONE,
   PRIORITY_LABEL,
   relativeFromNow,
 } from "./shared";
+import { TicketCheckbox } from "./BulkActionsBar";
 
 export function TicketsTable({
   rows,
@@ -61,17 +62,8 @@ export function TicketsTable({
               }}
             >
               <div className="flex items-stretch">
-                {/* Multi-select placeholder — bulk actions deferred. */}
-                <label
-                  className="flex shrink-0 items-start pl-3 pt-3.5"
-                  title="Bulk actions are deferred — see header note."
-                >
-                  <input
-                    type="checkbox"
-                    disabled
-                    aria-label={`Select ticket ${r.id.slice(0, 6)}`}
-                    className="ts-focus h-3.5 w-3.5 cursor-not-allowed opacity-40"
-                  />
+                <label className="flex shrink-0 items-start pl-3 pt-3.5">
+                  <TicketCheckbox id={r.id} />
                 </label>
                 <Link
                   href={buildHref({ selected: r.id })}
@@ -100,6 +92,13 @@ export function TicketsTable({
                           style={{ background: "var(--surface-2)", color: "var(--text-muted)" }}
                         >
                           {CATEGORY_LABEL[r.category]}
+                        </span>
+                        <span
+                          className="rounded-full px-1.5 py-0.5 text-[10px] font-medium"
+                          style={{ background: "var(--surface-2)", color: "var(--text-muted)" }}
+                          title={`Channel: ${CHANNEL_LABEL[r.channel]}`}
+                        >
+                          {CHANNEL_LABEL[r.channel]}
                         </span>
                         {r.isLate && (
                           <span

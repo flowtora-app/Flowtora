@@ -588,6 +588,7 @@ async function seedSupportTickets(
         module: tmpl.module,
         priority,
         status,
+        channel: rand(["EMAIL", "EMAIL", "EMAIL", "IN_APP", "CHAT", "PHONE", "FORUM"] as const),
         openedByUserId: tenantOwner.userId,
         assignedTo: assigned ? assigned.id : null,
         createdAt,

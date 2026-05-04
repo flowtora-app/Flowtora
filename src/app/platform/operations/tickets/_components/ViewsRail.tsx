@@ -1,11 +1,12 @@
-// Left rail of the Support Tickets page — saved views + folders.
+// Left rail of the Support Tickets page — saved views + channel folders.
 //
-// Each view is a Link that drops a `view=` query param. Selected state
-// is computed from the parent's resolved view key. Folders by channel,
-// tag, etc. are still deferred (we only have one channel today).
+// Each view is a Link that drops a `view=` query param; channel
+// folders set a `channel=` filter on top of the active view.
 
 import Link from "next/link";
 import type { SavedViewKey } from "@/server/platform/support-tickets";
+import type { SupportTicketChannel } from "@prisma/client";
+import { CHANNEL_ICON, CHANNEL_LABEL } from "./shared";
 
 interface ViewRow {
   key: SavedViewKey;
@@ -14,9 +15,13 @@ interface ViewRow {
   tone?: "default" | "accent" | "warning" | "danger";
 }
 
+const CHANNELS: SupportTicketChannel[] = ["EMAIL", "CHAT", "IN_APP", "PHONE", "FORUM"];
+
 export function ViewsRail({
   active,
   counts,
+  channelCounts,
+  activeChannel,
   buildHref,
 }: {
   active: SavedViewKey;
@@ -30,6 +35,8 @@ export function ViewsRail({
     urgentHigh: number;
     allActive: number;
   };
+  channelCounts: Record<SupportTicketChannel, number>;
+  activeChannel: SupportTicketChannel | null;
   buildHref: (overrides: Record<string, string | undefined>) => string;
 }) {
   const views: ViewRow[] = [
@@ -77,18 +84,26 @@ export function ViewsRail({
         >
           Channels
         </div>
-        <div
-          className="rounded-md border px-3 py-2 text-[11px]"
-          style={{
-            borderColor: "var(--amber-200)",
-            background: "var(--amber-50)",
-            color: "var(--amber-700)",
-          }}
-        >
-          Email is the only channel today. Chat, In-app,
-          Phone, and Forum routing are deferred until those
-          intakes ship.
-        </div>
+        <ul className="flex flex-col gap-0.5">
+          <li>
+            <ViewLink
+              href={buildHref({ channel: undefined, page: undefined })}
+              label="All channels"
+              count={undefined}
+              selected={activeChannel === null}
+            />
+          </li>
+          {CHANNELS.map((c) => (
+            <li key={c}>
+              <ViewLink
+                href={buildHref({ channel: c, page: undefined })}
+                label={`${CHANNEL_ICON[c]}  ${CHANNEL_LABEL[c]}`}
+                count={channelCounts[c]}
+                selected={activeChannel === c}
+              />
+            </li>
+          ))}
+        </ul>
       </div>
 
       <div>

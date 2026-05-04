@@ -13,6 +13,7 @@ import {
   loadTicketPreview,
   loadSavedViewCounts,
   loadTicketFilterOptions,
+  loadChannelCounts,
   SAVED_VIEW_KEYS,
   type SavedViewKey,
   type TicketFilters,
@@ -22,12 +23,15 @@ import type {
   SupportTicketPriority,
   SupportTicketCategory,
   SupportTicketModule,
+  SupportTicketChannel,
 } from "@prisma/client";
-import { DeferredNote, Kpi, formatDurationShort } from "./_components/shared";
+import { Kpi, FormError, FormOk, formatDurationShort } from "./_components/shared";
 import { ViewsRail } from "./_components/ViewsRail";
 import { TicketsToolbar } from "./_components/TicketsToolbar";
 import { TicketsTable } from "./_components/TicketsTable";
 import { TicketPreviewPane } from "./_components/TicketPreviewPane";
+import { SelectionProvider, BulkActionsBar } from "./_components/BulkActionsBar";
+import { AutoRefresh } from "./_components/AutoRefresh";
 
 export const dynamic = "force-dynamic";
 
@@ -40,6 +44,7 @@ const MODULES: SupportTicketModule[] = [
   "BILLING", "AUTH", "PROOFS", "ORDERS", "INVOICES", "QUOTES",
   "PRODUCTS", "REPORTS", "INTEGRATIONS", "PORTAL", "EMAIL", "ADMIN", "OTHER",
 ];
+const CHANNELS: SupportTicketChannel[] = ["EMAIL", "CHAT", "IN_APP", "PHONE", "FORUM"];
 
 type SP = Record<string, string | string[] | undefined>;
 
@@ -71,6 +76,9 @@ function parseFilters(sp: SP): TicketFilters {
   }
   const tenantId = asString(sp.tenant);     if (tenantId) f.tenantId = tenantId;
   const assignedTo = asString(sp.assignedTo); if (assignedTo) f.assignedTo = assignedTo;
+  const channel = asString(sp.channel);     if (channel && (CHANNELS as string[]).includes(channel)) {
+    f.channel = channel as SupportTicketChannel;
+  }
   return f;
 }
 
@@ -85,13 +93,17 @@ export default async function SupportTicketsPage({
   const page = Math.max(1, parseInt(asString(sp.page) ?? "1", 10) || 1);
   const selectedId = asString(sp.selected) ?? null;
 
-  const [kpis, list, viewCounts, options, preview] = await Promise.all([
+  const [kpis, list, viewCounts, options, preview, channelCounts] = await Promise.all([
     loadTicketKpis(),
     loadTicketList({ filters, currentUserId: ctx.userId, page, pageSize: PAGE_SIZE }),
     loadSavedViewCounts(ctx.userId),
     loadTicketFilterOptions(),
     selectedId ? loadTicketPreview(selectedId) : Promise.resolve(null),
+    loadChannelCounts(),
   ]);
+
+  const ok = asString(sp.ok);
+  const error = asString(sp.error);
 
   const totalPages = Math.max(1, Math.ceil(list.filteredTotal / PAGE_SIZE));
 
@@ -106,6 +118,7 @@ export default async function SupportTicketsPage({
     if (filters.module)     u.set("module", filters.module);
     if (filters.tenantId)   u.set("tenant", filters.tenantId);
     if (filters.assignedTo) u.set("assignedTo", filters.assignedTo);
+    if (filters.channel)    u.set("channel", filters.channel);
     if (page > 1)           u.set("page", String(page));
     if (selectedId)         u.set("selected", selectedId);
     for (const [k, v] of Object.entries(overrides)) {
@@ -118,8 +131,10 @@ export default async function SupportTicketsPage({
 
   const hasFiltersApplied = !!(
     filters.q || filters.priority || filters.status || filters.category ||
-    filters.module || filters.tenantId || filters.assignedTo
+    filters.module || filters.tenantId || filters.assignedTo || filters.channel
   );
+
+  const returnTo = buildHref({});
 
   return (
     <div className="space-y-5">
@@ -143,20 +158,20 @@ export default async function SupportTicketsPage({
           </p>
         </div>
         <div className="flex flex-wrap items-center gap-2">
+          <AutoRefresh />
           <Link
-            href="/platform/support"
+            href="/platform/operations/tickets/sla"
             className="ts-focus rounded-md px-3 py-1.5 text-[11px] font-medium"
             style={{
               background: "var(--surface-1)",
               color: "var(--text-default)",
               border: "1px solid var(--border-default)",
             }}
-            title="Legacy support queue (kept for muscle memory)"
           >
-            Legacy queue
+            SLA settings
           </Link>
           <Link
-            href="/platform/support/templates"
+            href="/platform/operations/tickets/macros"
             className="ts-focus rounded-md px-3 py-1.5 text-[11px] font-medium"
             style={{
               background: "var(--surface-1)",
@@ -165,6 +180,18 @@ export default async function SupportTicketsPage({
             }}
           >
             Macros
+          </Link>
+          <Link
+            href="/platform/support"
+            className="ts-focus rounded-md px-3 py-1.5 text-[11px] font-medium"
+            style={{
+              background: "var(--surface-1)",
+              color: "var(--text-default)",
+              border: "1px solid var(--border-default)",
+            }}
+            title="Legacy support queue"
+          >
+            Legacy
           </Link>
         </div>
       </div>
@@ -210,44 +237,44 @@ export default async function SupportTicketsPage({
         />
       </div>
 
+      <FormOk msg={ok} />
+      <FormError msg={error} />
+
       {/* ── 3-pane layout ──────────────────────────────────────────── */}
-      <div className="grid gap-4 lg:grid-cols-[220px_minmax(0,1fr)_340px]">
-        {/* Left rail */}
-        <ViewsRail
-          active={filters.view}
-          counts={viewCounts}
-          buildHref={buildHref}
-        />
-
-        {/* Center */}
-        <div className="flex flex-col gap-3">
-          <TicketsToolbar
-            view={filters.view}
-            q={filters.q}
-            status={filters.status}
-            priority={filters.priority}
-            category={filters.category}
-            mod={filters.module}
-            tenantId={filters.tenantId}
-            assignedTo={filters.assignedTo}
-            options={options}
-            resetHref={`/platform/operations/tickets?view=${filters.view}`}
-            hasFiltersApplied={hasFiltersApplied}
-          />
-
-          <DeferredNote>
-            <strong>Bulk actions, macros editor, SLA settings, AI suggested replies, and
-            real-time collision detection are deferred.</strong> Multi-select checkboxes are
-            visual placeholders — bulk assign / status / tag flows ship in a follow-up alongside
-            macro variables and the SLA targeting matrix. Reply composer + status changes are
-            live at <code>/platform/support/[id]</code>.
-          </DeferredNote>
-
-          <TicketsTable
-            rows={list.rows}
-            selectedId={selectedId}
+      <SelectionProvider>
+        <div className="grid gap-4 lg:grid-cols-[220px_minmax(0,1fr)_340px]">
+          {/* Left rail */}
+          <ViewsRail
+            active={filters.view}
+            counts={viewCounts}
+            channelCounts={channelCounts}
+            activeChannel={filters.channel ?? null}
             buildHref={buildHref}
           />
+
+          {/* Center */}
+          <div className="flex flex-col gap-3">
+            <TicketsToolbar
+              view={filters.view}
+              q={filters.q}
+              status={filters.status}
+              priority={filters.priority}
+              category={filters.category}
+              mod={filters.module}
+              tenantId={filters.tenantId}
+              assignedTo={filters.assignedTo}
+              options={options}
+              resetHref={`/platform/operations/tickets?view=${filters.view}`}
+              hasFiltersApplied={hasFiltersApplied}
+            />
+
+            <BulkActionsBar staff={options.staff} returnTo={returnTo} />
+
+            <TicketsTable
+              rows={list.rows}
+              selectedId={selectedId}
+              buildHref={buildHref}
+            />
 
           {/* Pagination */}
           {totalPages > 1 && (
@@ -270,11 +297,12 @@ export default async function SupportTicketsPage({
               </div>
             </div>
           )}
-        </div>
+          </div>
 
-        {/* Right preview */}
-        <TicketPreviewPane ticket={preview} />
-      </div>
+          {/* Right preview */}
+          <TicketPreviewPane ticket={preview} />
+        </div>
+      </SelectionProvider>
     </div>
   );
 }

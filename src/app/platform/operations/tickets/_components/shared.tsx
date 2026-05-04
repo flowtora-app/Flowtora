@@ -6,6 +6,7 @@ import type {
   SupportTicketPriority,
   SupportTicketCategory,
   SupportTicketModule,
+  SupportTicketChannel,
 } from "@prisma/client";
 
 export const STATUS_LABEL: Record<SupportTicketStatus, string> = {
@@ -45,6 +46,54 @@ export const CATEGORY_LABEL: Record<SupportTicketCategory, string> = {
   QUESTION:        "Question",
   OTHER:           "Other",
 };
+
+export const CHANNEL_LABEL: Record<SupportTicketChannel, string> = {
+  EMAIL:  "Email",
+  CHAT:   "Chat",
+  IN_APP: "In-app",
+  PHONE:  "Phone",
+  FORUM:  "Forum",
+};
+
+export const CHANNEL_ICON: Record<SupportTicketChannel, string> = {
+  EMAIL:  "@",
+  CHAT:   "💬",
+  IN_APP: "◫",
+  PHONE:  "☎",
+  FORUM:  "❡",
+};
+
+export function FormError({ msg }: { msg?: string }) {
+  if (!msg) return null;
+  return (
+    <div
+      className="rounded-md border px-3 py-2 text-[12px]"
+      style={{
+        borderColor: "var(--rose-200)",
+        background: "var(--rose-50, var(--surface-2))",
+        color: "var(--danger-fg)",
+      }}
+    >
+      {msg}
+    </div>
+  );
+}
+
+export function FormOk({ msg }: { msg?: string }) {
+  if (!msg) return null;
+  return (
+    <div
+      className="rounded-md border px-3 py-2 text-[12px]"
+      style={{
+        borderColor: "var(--emerald-200)",
+        background: "var(--emerald-50, var(--surface-2))",
+        color: "var(--success-fg)",
+      }}
+    >
+      {msg}
+    </div>
+  );
+}
 
 export const MODULE_LABEL: Record<SupportTicketModule, string> = {
   BILLING:      "Billing",

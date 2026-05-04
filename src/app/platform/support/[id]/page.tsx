@@ -10,6 +10,8 @@ import {
   updateSupportTicketAsStaff,
 } from "@/app/actions/platform";
 import { CannedReplyPicker } from "./CannedReplyPicker";
+import { AiSuggestionsPicker } from "./AiSuggestionsPicker";
+import { suggestRepliesForTicket } from "@/server/platform/support-tickets";
 
 // Phase 17 Slice D — platform-side ticket detail. Mirrors the tenant view
 // but with staff-only controls (assignment, priority, status) in a side
@@ -60,7 +62,7 @@ export default async function PlatformSupportDetailPage({
   const authorIds = Array.from(
     new Set(ticket.messages.map((m) => m.authorId).filter((x): x is string => Boolean(x))),
   );
-  const [tenant, authors, platformUsers, cannedAll] = await Promise.all([
+  const [tenant, authors, platformUsers, cannedAll, aiSuggestions] = await Promise.all([
     db.tenant.findUnique({
       where: { id: ticket.tenantId },
       select: { id: true, name: true, slug: true, plan: true, status: true },
@@ -80,6 +82,7 @@ export default async function PlatformSupportDetailPage({
       orderBy: { title: "asc" },
       select: { id: true, title: true, body: true, category: true },
     }),
+    suggestRepliesForTicket(ticket.id, 3),
   ]);
   const authorById = new Map(authors.map((a) => [a.id, a]));
 
@@ -191,6 +194,10 @@ export default async function PlatformSupportDetailPage({
           <Card>
             <CardHeader title="Reply as platform" />
             <form action={reply} className="space-y-3 px-5 py-4">
+              <AiSuggestionsPicker
+                suggestions={aiSuggestions}
+                bodyTextareaName="body"
+              />
               <CannedReplyPicker
                 templates={cannedForTicket.map((c) => ({
                   id: c.id, title: c.title, body: c.body, category: c.category,
