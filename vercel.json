@@ -7,7 +7,7 @@
     },
     {
       "path": "/api/cron/dunning",
-      "schedule": "0 * * * *"
+      "schedule": "0 7 * * *"
     },
     {
       "path": "/api/cron/purge-merged",
@@ -15,11 +15,11 @@
     },
     {
       "path": "/api/cron/activity-subscriptions",
-      "schedule": "*/5 * * * *"
+      "schedule": "0 8 * * *"
     },
     {
       "path": "/api/cron/report-deliveries",
-      "schedule": "0 * * * *"
+      "schedule": "0 9 * * *"
     },
     {
       "path": "/api/cron/onboarding-nudges",
@@ -35,7 +35,7 @@
     },
     {
       "path": "/api/cron/impersonation-expire",
-      "schedule": "*/5 * * * *"
+      "schedule": "0 10 * * *"
     },
     {
       "path": "/api/cron/platform-invites-expire",
@@ -47,7 +47,7 @@
     },
     {
       "path": "/api/cron/audit-webhooks-deliver",
-      "schedule": "*/5 * * * *"
+      "schedule": "0 11 * * *"
     }
   ]
 }
