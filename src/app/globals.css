@@ -558,11 +558,16 @@ button.underline:not([class*="ts-btn"]):not(:disabled):hover {
   justify-content: center;
   padding: 0;
   width: 36px;
+  height: 36px;
   margin-inline: auto;
 }
 .ts-nav-item.ts-nav-item--collapsed::before {
   top: 6px;
   bottom: 6px;
+}
+.ts-nav-item.ts-nav-item--collapsed .ts-nav-label,
+.ts-nav-item.ts-nav-item--collapsed .ts-nav-badge {
+  display: none;
 }
 
 .ts-nav-icon {
