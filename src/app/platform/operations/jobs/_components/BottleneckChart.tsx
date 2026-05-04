@@ -1,3 +1,5 @@
+"use client";
+
 import { BarChartCard, CHART_PALETTE } from "@/components/ui/Charts";
 import type { BottleneckRow } from "@/server/platform/operations";
 import { STATUS_LABEL } from "./shared";

@@ -1,3 +1,5 @@
+"use client";
+
 import { LineChartCard, BarChartCard, CHART_PALETTE } from "@/components/ui/Charts";
 import type { MonthlyRevenueRow, MrrMovementRow } from "@/server/platform/revenue-analytics";
 import { Kpi, SectionHeader, DeferredNote, fmtMoney } from "./shared";

@@ -1,3 +1,5 @@
+"use client";
+
 import { LineChartCard, CHART_PALETTE } from "@/components/ui/Charts";
 import type { ThroughputPoint } from "@/server/platform/operations";
 
