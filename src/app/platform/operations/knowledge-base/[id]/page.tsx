@@ -11,6 +11,8 @@ import {
   loadCategoryTree,
   loadKbArticleDetail,
   loadCategoryLookup,
+  loadRelatedArticleOptions,
+  loadArticleAnalytics,
 } from "@/server/platform/knowledge-base";
 import {
   STATUS_TONE,
@@ -39,7 +41,7 @@ export default async function KbArticleEditorPage({
   searchParams,
 }: {
   params: Promise<{ id: string }>;
-  searchParams: Promise<{ tab?: string; ok?: string; error?: string }>;
+  searchParams: Promise<{ tab?: string; ok?: string; error?: string; compareTo?: string }>;
 }) {
   const { id } = await params;
   const sp = await searchParams;
@@ -48,10 +50,12 @@ export default async function KbArticleEditorPage({
 
   const tab: EditorTab = isEditorTab(sp.tab) ? sp.tab : "content";
 
-  const [article, tree, categoryLookup] = await Promise.all([
+  const [article, tree, categoryLookup, relatedOptions, analytics] = await Promise.all([
     loadKbArticleDetail(id),
     loadCategoryTree(),
     loadCategoryLookup(),
+    loadRelatedArticleOptions(id),
+    loadArticleAnalytics(id, 30),
   ]);
   if (!article) notFound();
 
@@ -152,11 +156,11 @@ export default async function KbArticleEditorPage({
       >
         {tab === "content"      && <ContentTab article={article} categoryTree={tree} canWrite={canWrite} />}
         {tab === "seo"          && <SeoTab article={article} canWrite={canWrite} />}
-        {tab === "settings"     && <SettingsTab article={article} canWrite={canWrite} />}
-        {tab === "versions"     && <VersionsTab article={article} />}
-        {tab === "feedback"     && <FeedbackTab article={article} />}
-        {tab === "translations" && <TranslationsTab article={article} />}
-        {tab === "analytics"    && <AnalyticsTab article={article} />}
+        {tab === "settings"     && <SettingsTab article={article} canWrite={canWrite} relatedOptions={relatedOptions} />}
+        {tab === "versions"     && <VersionsTab article={article} compareId={typeof sp.compareTo === "string" ? sp.compareTo : null} />}
+        {tab === "feedback"     && <FeedbackTab article={article} canWrite={canWrite} />}
+        {tab === "translations" && <TranslationsTab article={article} canWrite={canWrite} />}
+        {tab === "analytics"    && <AnalyticsTab article={article} analytics={analytics} />}
       </div>
     </div>
   );

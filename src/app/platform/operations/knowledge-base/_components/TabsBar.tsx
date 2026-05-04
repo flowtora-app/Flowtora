@@ -5,12 +5,12 @@ import Link from "next/link";
 
 export type EditorTab = "content" | "seo" | "translations" | "settings" | "analytics" | "versions" | "feedback";
 
-const TABS: { key: EditorTab; label: string; deferred?: boolean }[] = [
+const TABS: { key: EditorTab; label: string }[] = [
   { key: "content",      label: "Content" },
   { key: "seo",          label: "SEO" },
-  { key: "translations", label: "Translations", deferred: true },
+  { key: "translations", label: "Translations" },
   { key: "settings",     label: "Settings" },
-  { key: "analytics",    label: "Analytics", deferred: true },
+  { key: "analytics",    label: "Analytics" },
   { key: "versions",     label: "Versions" },
   { key: "feedback",     label: "Feedback" },
 ];
@@ -41,18 +41,6 @@ export function TabsBar({
             aria-current={selected ? "page" : undefined}
           >
             {t.label}
-            {t.deferred && (
-              <span
-                className="ml-1.5 rounded-full px-1 py-0.5 text-[9px] font-semibold uppercase tracking-wide"
-                style={{
-                  background: "var(--amber-50, var(--surface-2))",
-                  color: "var(--warning-fg)",
-                  border: "1px solid var(--amber-200, var(--border-default))",
-                }}
-              >
-                soon
-              </span>
-            )}
           </Link>
         );
       })}

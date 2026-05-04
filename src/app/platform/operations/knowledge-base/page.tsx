@@ -13,10 +13,10 @@ import {
   type KbArticleListFilters,
 } from "@/server/platform/knowledge-base";
 import type { KbArticleStatus, KbVisibility } from "@prisma/client";
-import { db } from "@/lib/db";
-import { Kpi, DeferredNote, FormError, FormOk } from "./_components/shared";
-import { CategoriesRail } from "./_components/CategoriesRail";
+import { Kpi, FormError, FormOk } from "./_components/shared";
+import { DraggableCategoriesRail } from "./_components/DraggableCategoriesRail";
 import { ArticleListPane } from "./_components/ArticleListPane";
+import Link from "next/link";
 
 export const dynamic = "force-dynamic";
 
@@ -57,12 +57,11 @@ export default async function KbListPage({
   if (locale) filters.locale = locale;
   if (category) filters.categoryId = category; // "_uncategorized_" is a sentinel handled by the loader
 
-  const [kpis, tree, filterOpts, list, uncategorizedTotal] = await Promise.all([
+  const [kpis, tree, filterOpts, list] = await Promise.all([
     loadKbKpis(),
     loadCategoryTree(),
     loadKbFilterOptions(),
     loadKbArticleList({ filters, page, pageSize: PAGE_SIZE }),
-    db.kbArticle.count({ where: { categoryId: null } }),
   ]);
 
   const totalPages = Math.max(1, Math.ceil(list.filteredTotal / PAGE_SIZE));
@@ -163,18 +162,25 @@ export default async function KbListPage({
         />
       </div>
 
-      <DeferredNote>
-        <strong>Deferred:</strong> drag-to-reorder categories, side-by-side preview, slash-menu embeds,
-        live SEO score, translation memory + auto-translate, in-page comments queue, search analytics
-        deep-dive, and revision diff viewer. The schema captures all of it — UI ships in follow-ups.
-      </DeferredNote>
+      <div className="flex items-center justify-end">
+        <Link
+          href="/platform/operations/knowledge-base/search-analytics"
+          className="ts-focus rounded-md px-3 py-1.5 text-[11px] font-medium"
+          style={{
+            background: "var(--surface-1)",
+            color: "var(--text-default)",
+            border: "1px solid var(--border-default)",
+          }}
+        >
+          📈 Search analytics
+        </Link>
+      </div>
 
       {/* 3-column layout (categories | list) */}
       <div className="grid gap-4 lg:grid-cols-[240px_minmax(0,1fr)]">
-        <CategoriesRail
-          tree={tree}
+        <DraggableCategoriesRail
+          initial={tree}
           activeCategoryId={category}
-          totalUncategorized={uncategorizedTotal}
           buildHref={buildHref}
           canWrite={canWrite}
         />

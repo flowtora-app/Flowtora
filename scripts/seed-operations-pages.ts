@@ -94,6 +94,9 @@ async function wipeOldSeed() {
   }
   await db.kbCategory.deleteMany({ where: { slug: { startsWith: "seed-" } } });
   await db.kbSearchQuery.deleteMany({ where: { query: { startsWith: SEED_TAG } } });
+  // Article views from seed articles cascade-delete with article rows
+  // already, but if any survive we clean them here:
+  // (no-op left as a safety placeholder — viewLog rows reference articleId)
   // Announcements tagged seed.
   const oldAnn = await db.platformAnnouncement.findMany({
     where: { tags: { has: "seed" } },
@@ -884,26 +887,54 @@ async function seedKnowledgeBase(staff: { id: string; email: string; name: strin
     articleCount += 1;
   }
 
-  // Search analytics rows
+  // Search analytics rows — clicks link to actual seeded articles when
+  // results > 0. Drives the search-analytics page (most clicks, zero
+  // result, daily trend) and the per-article Analytics tab.
   const queries = [
     "stripe", "invoice not paid", "reset password", "production stages",
     "google calendar", "csv import", "tax setup", "refund customer",
     "quote pdf", "team invite", "cancel subscription", "two factor",
     "white label", "api key", "webhook",
   ];
+  const allArticles = await db.kbArticle.findMany({
+    where: { tags: { has: "seed" }, status: "PUBLISHED" },
+    select: { id: true },
+    take: 100,
+  });
   for (let i = 0; i < 200; i++) {
     const q = rand(queries);
-    const resultsCount = q === "white label" || q === "api key" ? 0 : randInt(1, 8);
+    const isZeroResult = q === "white label" || q === "api key";
+    const resultsCount = isZeroResult ? 0 : randInt(1, 8);
+    const clicked = !isZeroResult && Math.random() < 0.45 && allArticles.length > 0
+      ? rand(allArticles).id
+      : null;
     await db.kbSearchQuery.create({
       data: {
         query: `${SEED_TAG} ${q}`,
         resultsCount,
+        clickedArticleId: clicked,
         at: daysAgo(randInt(0, 29)),
       },
     });
   }
 
-  console.log(`  ✓ ${slugToId.size} categories, ${articleCount} articles, 200 search queries`);
+  // KbArticleView impressions — power the per-article analytics charts.
+  let viewLogs = 0;
+  for (const a of allArticles) {
+    const samples = randInt(20, 250);
+    for (let i = 0; i < samples; i++) {
+      await db.kbArticleView.create({
+        data: {
+          articleId: a.id,
+          source: rand(["search", "in-product", "category", "direct"] as const),
+          createdAt: daysAgo(randInt(0, 29)),
+        },
+      });
+      viewLogs += 1;
+    }
+  }
+
+  console.log(`  ✓ ${slugToId.size} categories, ${articleCount} articles, 200 search queries, ${viewLogs} view logs`);
 }
 
 /* ── Announcements (Page 35) ─────────────────────────── */

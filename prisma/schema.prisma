@@ -8235,6 +8235,21 @@ model KbArticle {
   tags              String[] @default([])
   relatedArticleIds String[] @default([])
 
+  // Page 34 — plan-restricted visibility. When `visibility = PLAN_RESTRICTED`,
+  // the listed plan slugs are eligible to read. Empty + PLAN_RESTRICTED is
+  // treated as "no plans" (effectively hidden).
+  visibilityPlans String[] @default([])
+
+  // Page 34 — in-product help triggers. Tenant-side route patterns
+  // (e.g. "/orders/[id]", "/settings/billing") that should surface a
+  // help-article link when matched. Stored as plain strings; the
+  // tenant-side widget compares with startsWith().
+  inProductPaths String[] @default([])
+
+  // Page 34 — sort order within a category. Lower numbers float to
+  // the top in lists / category landing pages.
+  sortOrder Int @default(0)
+
   createdAt DateTime @default(now())
   updatedAt DateTime @updatedAt
 
@@ -8242,11 +8257,30 @@ model KbArticle {
   revisions    KbArticleRevision[]
   feedback     KbArticleFeedback[]
   searchClicks KbSearchQuery[]
+  viewLogs     KbArticleView[]
 
   @@unique([slug, locale])
   @@index([status, updatedAt])
   @@index([categoryId, status])
   @@index([locale, status])
+  @@index([categoryId, sortOrder])
+}
+
+// Page 34 — per-impression view log (drives the Analytics tab charts).
+// The aggregated KbArticle.viewCount counter still increments for the
+// list page, but the time-series chart reads this table.
+model KbArticleView {
+  id        String   @id @default(cuid())
+  articleId String
+  /** Nullable for anonymous readers. */
+  userId    String?
+  /** Free-form referrer key — "search", "in-product", "category", "direct". */
+  source    String?
+  createdAt DateTime @default(now())
+
+  article KbArticle @relation(fields: [articleId], references: [id], onDelete: Cascade)
+
+  @@index([articleId, createdAt])
 }
 
 model KbArticleRevision {
@@ -8265,16 +8299,29 @@ model KbArticleRevision {
 }
 
 model KbArticleFeedback {
-  id        String   @id @default(cuid())
+  id        String              @id @default(cuid())
   articleId String
   helpful   Boolean
   comment   String?
   userId    String? // nullable = anonymous reader
-  createdAt DateTime @default(now())
+  /** Page 34 — triage workflow. Defaults to PENDING; staff move it to
+   *  RESOLVED (action taken) or DISMISSED (noise / spam). */
+  status    KbFeedbackStatus    @default(PENDING)
+  resolvedAt DateTime?
+  resolvedBy String?
+  resolutionNote String?
+  createdAt DateTime            @default(now())
 
   article KbArticle @relation(fields: [articleId], references: [id], onDelete: Cascade)
 
   @@index([articleId, createdAt])
+  @@index([status, createdAt])
+}
+
+enum KbFeedbackStatus {
+  PENDING
+  RESOLVED
+  DISMISSED
 }
 
 model KbSearchQuery {

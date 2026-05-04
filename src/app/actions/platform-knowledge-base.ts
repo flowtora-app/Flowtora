@@ -121,6 +121,9 @@ const saveArticleSchema = z.object({
   canonicalUrl: z.string().max(400).optional().or(z.literal("")),
   ogImageUrl: z.string().max(400).optional().or(z.literal("")),
   revisionNote: z.string().max(280).optional().or(z.literal("")),
+  visibilityPlans: z.string().optional().or(z.literal("")),
+  relatedArticleIds: z.string().optional().or(z.literal("")),
+  inProductPaths: z.string().optional().or(z.literal("")),
 });
 
 export async function saveKbArticle(formData: FormData) {
@@ -138,6 +141,12 @@ export async function saveKbArticle(formData: FormData) {
   const tagList = data.tags
     ? data.tags.split(",").map((t) => t.trim().toLowerCase()).filter(Boolean)
     : [];
+  const visibilityPlans = (data.visibilityPlans ?? "")
+    .split(/[,\n]/).map((s) => s.trim().toUpperCase()).filter(Boolean);
+  const relatedArticleIds = (data.relatedArticleIds ?? "")
+    .split(/[,\n]/).map((s) => s.trim()).filter(Boolean);
+  const inProductPaths = (data.inProductPaths ?? "")
+    .split(/[,\n]/).map((s) => s.trim()).filter(Boolean);
   await db.kbArticle.update({
     where: { id: data.id },
     data: {
@@ -153,6 +162,9 @@ export async function saveKbArticle(formData: FormData) {
       metaDescription: data.metaDescription || null,
       canonicalUrl: data.canonicalUrl || null,
       ogImageUrl: data.ogImageUrl || null,
+      visibilityPlans,
+      relatedArticleIds,
+      inProductPaths,
     },
   });
   await logPlatformAudit({
@@ -259,6 +271,151 @@ export async function createKbCategory(formData: FormData) {
   });
   revalidatePath(LIST_ROUTE);
   redirect(`${LIST_ROUTE}?category=${cat.id}&ok=category-created`);
+}
+
+/* ── Drag-to-reorder ─────────────────────────────────── */
+
+const reorderCategoriesSchema = z.object({
+  /** JSON array of {id, sortOrder, parentId} tuples. */
+  payload: z.string(),
+});
+
+export async function reorderKbCategories(formData: FormData) {
+  const ctx = await requirePlatformPermission(PERM_WRITE);
+  const parsed = reorderCategoriesSchema.safeParse(Object.fromEntries(formData.entries()));
+  if (!parsed.success) {
+    redirect(`${LIST_ROUTE}?error=${encodeURIComponent("Invalid reorder payload")}`);
+  }
+  let rows: { id: string; sortOrder: number; parentId: string | null }[];
+  try {
+    rows = JSON.parse(parsed.data.payload);
+    if (!Array.isArray(rows)) throw new Error("expected array");
+  } catch {
+    redirect(`${LIST_ROUTE}?error=${encodeURIComponent("Invalid reorder JSON")}`);
+  }
+  for (const r of rows) {
+    if (typeof r.id !== "string") continue;
+    await db.kbCategory.update({
+      where: { id: r.id },
+      data: {
+        sortOrder: typeof r.sortOrder === "number" ? r.sortOrder : 0,
+        parentId: r.parentId ?? null,
+      },
+    });
+  }
+  await logPlatformAudit({
+    userId: ctx.userId,
+    action: "platform.kb.categories_reordered",
+    entityType: "KbCategory",
+    entityId: "(many)",
+    metadata: { actor: ctx.email, count: rows.length },
+  });
+  revalidatePath(LIST_ROUTE);
+  redirect(`${LIST_ROUTE}?ok=reordered`);
+}
+
+/* ── Translation copy ────────────────────────────────── */
+
+const cloneSchema = z.object({
+  id: z.string().min(1),
+  locale: z.string().min(2).max(8),
+});
+
+export async function cloneKbArticleToLocale(formData: FormData) {
+  const ctx = await requirePlatformPermission(PERM_WRITE);
+  const parsed = cloneSchema.safeParse(Object.fromEntries(formData.entries()));
+  if (!parsed.success) {
+    redirect(`${LIST_ROUTE}?error=${encodeURIComponent(parsed.error.issues[0]?.message ?? "Invalid input")}`);
+  }
+  const src = await db.kbArticle.findUnique({
+    where: { id: parsed.data.id },
+  });
+  if (!src) {
+    redirect(`${LIST_ROUTE}?error=${encodeURIComponent("Source article not found")}`);
+  }
+  if (src.locale === parsed.data.locale) {
+    redirect(`${LIST_ROUTE}/${src.id}?error=${encodeURIComponent("That locale already exists")}`);
+  }
+  const existing = await db.kbArticle.findUnique({
+    where: { slug_locale: { slug: src.slug, locale: parsed.data.locale } },
+    select: { id: true },
+  });
+  if (existing) {
+    redirect(`${LIST_ROUTE}/${existing.id}?ok=opened-existing`);
+  }
+  const clone = await db.kbArticle.create({
+    data: {
+      slug: src.slug,
+      locale: parsed.data.locale,
+      title: src.title,
+      summary: src.summary,
+      bodyMarkdown: `<!-- Translation pending — placeholder copy from ${src.locale}. -->\n\n${src.bodyMarkdown}`,
+      categoryId: src.categoryId,
+      status: "DRAFT",
+      visibility: src.visibility,
+      featured: false,
+      authorId: ctx.userId,
+      tags: src.tags,
+      metaTitle: src.metaTitle,
+      metaDescription: src.metaDescription,
+      canonicalUrl: src.canonicalUrl,
+      ogImageUrl: src.ogImageUrl,
+      visibilityPlans: src.visibilityPlans,
+      relatedArticleIds: src.relatedArticleIds,
+      inProductPaths: src.inProductPaths,
+    },
+    select: { id: true },
+  });
+  await logPlatformAudit({
+    userId: ctx.userId,
+    action: "platform.kb.article_translation_cloned",
+    entityType: "KbArticle",
+    entityId: clone.id,
+    metadata: {
+      actor: ctx.email,
+      sourceId: src.id,
+      sourceLocale: src.locale,
+      targetLocale: parsed.data.locale,
+    },
+  });
+  revalidatePath(LIST_ROUTE);
+  redirect(`${LIST_ROUTE}/${clone.id}?ok=cloned`);
+}
+
+/* ── Feedback triage ─────────────────────────────────── */
+
+const feedbackSchema = z.object({
+  feedbackId: z.string().min(1),
+  articleId: z.string().min(1),
+  to: z.enum(["RESOLVED", "DISMISSED", "PENDING"]),
+  note: z.string().max(280).optional().or(z.literal("")),
+});
+
+export async function transitionKbFeedback(formData: FormData) {
+  const ctx = await requirePlatformPermission(PERM_WRITE);
+  const parsed = feedbackSchema.safeParse(Object.fromEntries(formData.entries()));
+  if (!parsed.success) {
+    redirect(`${LIST_ROUTE}?error=${encodeURIComponent("Invalid request")}`);
+  }
+  const { feedbackId, articleId, to, note } = parsed.data;
+  await db.kbArticleFeedback.update({
+    where: { id: feedbackId },
+    data: {
+      status: to,
+      resolvedAt: to === "PENDING" ? null : new Date(),
+      resolvedBy: to === "PENDING" ? null : ctx.userId,
+      resolutionNote: note || null,
+    },
+  });
+  await logPlatformAudit({
+    userId: ctx.userId,
+    action: `platform.kb.feedback_${to.toLowerCase()}`,
+    entityType: "KbArticleFeedback",
+    entityId: feedbackId,
+    metadata: { actor: ctx.email, articleId, note: note || undefined },
+  });
+  revalidatePath(`${LIST_ROUTE}/${articleId}`);
+  redirect(`${LIST_ROUTE}/${articleId}?tab=feedback&ok=feedback-triaged`);
 }
 
 async function categoryDepth(categoryId: string): Promise<number> {

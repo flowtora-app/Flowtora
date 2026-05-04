@@ -270,6 +270,8 @@ export interface KbArticleDetail {
   categoryId: string | null;
   status: KbArticleStatus;
   visibility: KbVisibility;
+  visibilityPlans: string[];
+  inProductPaths: string[];
   featured: boolean;
   tags: string[];
   relatedArticleIds: string[];
@@ -289,6 +291,7 @@ export interface KbArticleDetail {
   revisions: {
     id: string;
     title: string;
+    bodyMarkdown: string;
     status: KbArticleStatus;
     note: string | null;
     savedByName: string | null;
@@ -298,6 +301,9 @@ export interface KbArticleDetail {
     id: string;
     helpful: boolean;
     comment: string | null;
+    status: "PENDING" | "RESOLVED" | "DISMISSED";
+    resolutionNote: string | null;
+    resolvedAt: Date | null;
     createdAt: Date;
   }[];
   /** Other locale rows sharing this slug. */
@@ -345,6 +351,8 @@ export async function loadKbArticleDetail(id: string): Promise<KbArticleDetail |
     categoryId: a.categoryId,
     status: a.status,
     visibility: a.visibility,
+    visibilityPlans: a.visibilityPlans,
+    inProductPaths: a.inProductPaths,
     featured: a.featured,
     tags: a.tags,
     relatedArticleIds: a.relatedArticleIds,
@@ -369,6 +377,7 @@ export async function loadKbArticleDetail(id: string): Promise<KbArticleDetail |
       return {
         id: r.id,
         title: r.title,
+        bodyMarkdown: r.bodyMarkdown,
         status: r.status,
         note: r.note,
         savedByName: u ? u.name ?? u.email : null,
@@ -379,9 +388,105 @@ export async function loadKbArticleDetail(id: string): Promise<KbArticleDetail |
       id: f.id,
       helpful: f.helpful,
       comment: f.comment,
+      status: f.status,
+      resolutionNote: f.resolutionNote,
+      resolvedAt: f.resolvedAt,
       createdAt: f.createdAt,
     })),
     localeVariants,
+  };
+}
+
+/* ── Related-article picker options ──────────────────── */
+
+export interface RelatedArticleOption {
+  id: string;
+  title: string;
+  status: KbArticleStatus;
+  locale: string;
+  slug: string;
+}
+
+export async function loadRelatedArticleOptions(excludeId: string): Promise<RelatedArticleOption[]> {
+  const rows = await db.kbArticle.findMany({
+    where: { id: { not: excludeId } },
+    orderBy: [{ status: "asc" }, { title: "asc" }],
+    select: { id: true, title: true, status: true, locale: true, slug: true },
+    take: 500,
+  });
+  return rows;
+}
+
+/* ── Analytics — view trend, helpfulness, search queries ── */
+
+const DAY_MS = 86_400_000;
+
+export interface ArticleAnalytics {
+  /** Daily view count for the last 30 days (KbArticleView). */
+  viewTrend: { date: string; views: number }[];
+  /** Daily helpful/not-helpful counts. */
+  feedbackTrend: { date: string; helpful: number; not: number }[];
+  /** Top search queries that clicked through to this article. */
+  topSearches: { query: string; count: number }[];
+  /** Total views from the per-impression table (stale-tolerant). */
+  totalLoggedViews: number;
+}
+
+export async function loadArticleAnalytics(articleId: string, days = 30): Promise<ArticleAnalytics> {
+  const since = new Date(Date.now() - days * DAY_MS);
+  since.setHours(0, 0, 0, 0);
+
+  const [views, feedback, searches] = await Promise.all([
+    db.kbArticleView.findMany({
+      where: { articleId, createdAt: { gte: since } },
+      select: { createdAt: true },
+      take: 50_000,
+    }),
+    db.kbArticleFeedback.findMany({
+      where: { articleId, createdAt: { gte: since } },
+      select: { createdAt: true, helpful: true },
+      take: 5_000,
+    }),
+    db.kbSearchQuery.groupBy({
+      by: ["query"],
+      where: { clickedArticleId: articleId, at: { gte: since } },
+      _count: { _all: true },
+      orderBy: { _count: { query: "desc" } },
+      take: 10,
+    }),
+  ]);
+
+  const viewMap = new Map<string, number>();
+  const fbMap = new Map<string, { helpful: number; not: number }>();
+  for (let i = 0; i < days; i++) {
+    const d = new Date(since.getTime() + i * DAY_MS).toISOString().slice(0, 10);
+    viewMap.set(d, 0);
+    fbMap.set(d, { helpful: 0, not: 0 });
+  }
+  for (const v of views) {
+    const k = v.createdAt.toISOString().slice(0, 10);
+    viewMap.set(k, (viewMap.get(k) ?? 0) + 1);
+  }
+  for (const f of feedback) {
+    const k = f.createdAt.toISOString().slice(0, 10);
+    const cur = fbMap.get(k) ?? { helpful: 0, not: 0 };
+    if (f.helpful) cur.helpful += 1;
+    else cur.not += 1;
+    fbMap.set(k, cur);
+  }
+
+  return {
+    viewTrend: Array.from(viewMap.entries())
+      .map(([date, views]) => ({ date, views }))
+      .sort((a, b) => a.date.localeCompare(b.date)),
+    feedbackTrend: Array.from(fbMap.entries())
+      .map(([date, v]) => ({ date, ...v }))
+      .sort((a, b) => a.date.localeCompare(b.date)),
+    topSearches: searches.map((s) => ({
+      query: s.query.replace(/^\[seed\]\s*/, ""),
+      count: s._count._all,
+    })),
+    totalLoggedViews: views.length,
   };
 }
 

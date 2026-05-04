@@ -4,15 +4,23 @@
 
 import Link from "next/link";
 import type { KbArticleDetail, CategoryTreeNode } from "@/server/platform/knowledge-base";
-import { saveKbArticle, transitionKbArticle } from "@/app/actions/platform-knowledge-base";
+import {
+  saveKbArticle,
+  transitionKbArticle,
+  cloneKbArticleToLocale,
+  transitionKbFeedback,
+} from "@/app/actions/platform-knowledge-base";
 import {
   STATUS_LABEL,
   STATUS_TONE,
   VISIBILITY_LABEL,
-  DeferredNote,
   relativeFromNow,
 } from "./shared";
 import type { KbArticleStatus, KbVisibility } from "@prisma/client";
+import { MarkdownEditor } from "./MarkdownEditor";
+import { RelatedArticlesPicker } from "./RelatedArticlesPicker";
+import { renderDiff } from "./RevisionDiff";
+import { PlanRestrictionPicker } from "./PlanRestrictionPicker";
 
 const STATUSES: KbArticleStatus[] = ["DRAFT", "REVIEW", "PUBLISHED", "ARCHIVED"];
 const VISIBILITIES: KbVisibility[] = ["PUBLIC", "INTERNAL", "PLAN_RESTRICTED"];
@@ -49,18 +57,10 @@ export function ContentTab({
       <input type="hidden" name="canonicalUrl"    value={article.canonicalUrl ?? ""} />
       <input type="hidden" name="ogImageUrl"      value={article.ogImageUrl ?? ""} />
       <input type="hidden" name="tags"            value={article.tags.join(", ")} />
+      <input type="hidden" name="visibilityPlans"  value={article.visibilityPlans.join(", ")} />
+      <input type="hidden" name="relatedArticleIds" value={article.relatedArticleIds.join(", ")} />
+      <input type="hidden" name="inProductPaths"    value={article.inProductPaths.join(", ")} />
       {article.featured && <input type="hidden" name="featured" value="on" />}
-
-      <Field label="Title">
-        <input
-          name="title"
-          required
-          defaultValue={article.title}
-          disabled={!canWrite}
-          className="ts-focus w-full rounded-md px-3 py-2 text-[14px] font-semibold outline-none"
-          style={inputStyle()}
-        />
-      </Field>
 
       <div className="grid gap-3 md:grid-cols-2">
         <Field label="Category">
@@ -83,27 +83,21 @@ export function ContentTab({
         </Field>
       </div>
 
-      <Field label="Summary" help="One-line preview shown in lists, search, and SEO meta description fallback.">
-        <input
-          name="summary"
-          defaultValue={article.summary ?? ""}
-          maxLength={400}
-          disabled={!canWrite}
-          className="ts-focus w-full rounded-md px-3 py-2 text-[12px] outline-none"
-          style={inputStyle()}
-        />
-      </Field>
-
-      <Field label="Body (Markdown)" help="Plain Markdown. Slash-menu embeds, side-by-side preview, and the live SEO score are deferred.">
-        <textarea
-          name="bodyMarkdown"
-          defaultValue={article.bodyMarkdown}
-          rows={20}
-          disabled={!canWrite}
-          className="ts-focus w-full rounded-md px-3 py-2 font-mono text-[12px] outline-none"
-          style={{ ...inputStyle(), lineHeight: 1.5 }}
-        />
-      </Field>
+      {/* Live editor with toolbar + preview + SEO score */}
+      <MarkdownEditor
+        initial={{
+          id: article.id,
+          slug: article.slug,
+          locale: article.locale,
+          title: article.title,
+          summary: article.summary ?? "",
+          bodyMarkdown: article.bodyMarkdown,
+          metaTitle: article.metaTitle ?? "",
+          metaDescription: article.metaDescription ?? "",
+          canonicalUrl: article.canonicalUrl ?? "",
+          ogImageUrl: article.ogImageUrl ?? "",
+        }}
+      />
 
       <Field label="Revision note" help="Optional — captured in the version history.">
         <input
@@ -189,9 +183,29 @@ export function SeoTab({ article, canWrite }: { article: KbArticleDetail; canWri
           />
         </Field>
       </div>
-      <DeferredNote>
-        <strong>Live SEO score, schema generator, and the OG image preview</strong> are deferred.
-      </DeferredNote>
+      {article.ogImageUrl && (
+        <div className="flex flex-col gap-1">
+          <span className="text-[10px] font-medium uppercase tracking-wide" style={{ color: "var(--text-muted)" }}>
+            OG image preview
+          </span>
+          <div
+            className="overflow-hidden rounded-md border"
+            style={{
+              background: "var(--surface-1)",
+              borderColor: "var(--border-subtle)",
+              maxWidth: 600,
+              aspectRatio: "1.91 / 1",
+            }}
+          >
+            {/* eslint-disable-next-line @next/next/no-img-element */}
+            <img
+              src={article.ogImageUrl}
+              alt="OG preview"
+              style={{ width: "100%", height: "100%", objectFit: "cover" }}
+            />
+          </div>
+        </div>
+      )}
       {canWrite && (
         <div className="flex justify-end">
           <button
@@ -210,10 +224,11 @@ export function SeoTab({ article, canWrite }: { article: KbArticleDetail; canWri
 /* ── Settings tab ─────────────────────────────────────── */
 
 export function SettingsTab({
-  article, canWrite,
+  article, canWrite, relatedOptions,
 }: {
   article: KbArticleDetail;
   canWrite: boolean;
+  relatedOptions: { id: string; title: string; status: string; locale: string; slug: string }[];
 }) {
   return (
     <form action={saveKbArticle} className="flex flex-col gap-3">
@@ -234,6 +249,13 @@ export function SettingsTab({
             <option key={v} value={v}>{VISIBILITY_LABEL[v]}</option>
           ))}
         </Select>
+      </Field>
+      <Field label="Plan restriction" help="When visibility = Plan-restricted, only these plans see the article.">
+        <PlanRestrictionPicker
+          initialPlans={article.visibilityPlans}
+          name="visibilityPlans"
+          disabled={!canWrite}
+        />
       </Field>
       <Field label="Featured" help="Pinned to the top of category and home pages.">
         <label className="flex items-center gap-2 text-[12px]" style={{ color: "var(--text-default)" }}>
@@ -256,10 +278,24 @@ export function SettingsTab({
           style={inputStyle()}
         />
       </Field>
-      <DeferredNote>
-        <strong>Plan-restriction picker and related-articles selector are deferred.</strong>{" "}
-        Visibility = <code>PLAN_RESTRICTED</code> reads as &quot;hidden&quot; until the plan picker ships.
-      </DeferredNote>
+      <Field label="Related articles" help="Surfaced as 'See also' on the public page.">
+        <RelatedArticlesPicker
+          options={relatedOptions}
+          initialIds={article.relatedArticleIds}
+          name="relatedArticleIds"
+          disabled={!canWrite}
+        />
+      </Field>
+      <Field label="In-product help triggers" help="Comma-separated tenant-app routes (e.g. /orders, /settings/billing). The help-tip widget on those pages will surface this article.">
+        <input
+          name="inProductPaths"
+          defaultValue={article.inProductPaths.join(", ")}
+          disabled={!canWrite}
+          placeholder="/orders, /settings/billing"
+          className="ts-focus w-full rounded-md px-3 py-2 text-[12px] outline-none"
+          style={inputStyle()}
+        />
+      </Field>
       {canWrite && (
         <div className="flex justify-end">
           <button
@@ -277,13 +313,20 @@ export function SettingsTab({
 
 /* ── Versions tab ─────────────────────────────────────── */
 
-export function VersionsTab({ article }: { article: KbArticleDetail }) {
+export function VersionsTab({
+  article, compareId,
+}: {
+  article: KbArticleDetail;
+  compareId: string | null;
+}) {
+  // Diff target is the requested revision id, falling back to the most
+  // recent. The "current" body is article.bodyMarkdown.
+  const target = compareId
+    ? article.revisions.find((r) => r.id === compareId) ?? article.revisions[0]
+    : article.revisions[0];
+
   return (
-    <div className="flex flex-col gap-3">
-      <DeferredNote>
-        <strong>Side-by-side diff is deferred.</strong> The list below shows every saved revision; the
-        full body is captured but not yet rendered as a diff.
-      </DeferredNote>
+    <div className="flex flex-col gap-4">
       {article.revisions.length === 0 ? (
         <div
           className="rounded-lg border p-6 text-center text-[12px]"
@@ -292,37 +335,66 @@ export function VersionsTab({ article }: { article: KbArticleDetail }) {
           No revisions yet — every save records one.
         </div>
       ) : (
-        <ul
-          className="overflow-hidden rounded-lg"
-          style={{ background: "var(--surface-1)", border: "1px solid var(--border-subtle)" }}
-        >
-          {article.revisions.map((r, idx) => {
-            const tone = STATUS_TONE[r.status];
-            return (
-              <li
-                key={r.id}
-                className="flex items-start gap-3 px-3 py-2.5"
-                style={{ borderTop: idx === 0 ? "none" : "1px solid var(--border-subtle)" }}
-              >
-                <span
-                  className="mt-0.5 shrink-0 rounded-full px-1.5 py-0.5 text-[10px] font-semibold uppercase tracking-wide"
-                  style={{ background: tone.bg, color: tone.fg }}
+        <>
+          <ul
+            className="overflow-hidden rounded-lg"
+            style={{ background: "var(--surface-1)", border: "1px solid var(--border-subtle)" }}
+          >
+            {article.revisions.map((r, idx) => {
+              const tone = STATUS_TONE[r.status];
+              const isActive = target?.id === r.id;
+              return (
+                <li
+                  key={r.id}
+                  style={{
+                    borderTop: idx === 0 ? "none" : "1px solid var(--border-subtle)",
+                    background: isActive ? "var(--surface-2)" : undefined,
+                  }}
                 >
-                  {STATUS_LABEL[r.status]}
+                  <Link
+                    href={`?tab=versions&compareTo=${r.id}`}
+                    className="flex items-start gap-3 px-3 py-2.5 transition-colors"
+                  >
+                    <span
+                      className="mt-0.5 shrink-0 rounded-full px-1.5 py-0.5 text-[10px] font-semibold uppercase tracking-wide"
+                      style={{ background: tone.bg, color: tone.fg }}
+                    >
+                      {STATUS_LABEL[r.status]}
+                    </span>
+                    <div className="min-w-0 flex-1">
+                      <div className="truncate text-[12px] font-medium" style={{ color: "var(--text-default)" }}>
+                        {r.title}
+                      </div>
+                      <div className="mt-0.5 text-[11px]" style={{ color: "var(--text-muted)" }}>
+                        {relativeFromNow(r.createdAt)} · {r.savedByName ?? "system"}
+                        {r.note ? ` · ${r.note}` : ""}
+                      </div>
+                    </div>
+                    {isActive && (
+                      <span className="text-[10px] uppercase tracking-wide" style={{ color: "var(--accent-primary)" }}>
+                        ▶ comparing
+                      </span>
+                    )}
+                  </Link>
+                </li>
+              );
+            })}
+          </ul>
+
+          {target && (
+            <div className="flex flex-col gap-2">
+              <div className="flex items-baseline justify-between">
+                <h3 className="text-[12px] font-semibold" style={{ color: "var(--text-default)" }}>
+                  Diff — {target.title} → current
+                </h3>
+                <span className="text-[10px]" style={{ color: "var(--text-muted)" }}>
+                  Lines added are green, removed are red, context is muted.
                 </span>
-                <div className="min-w-0 flex-1">
-                  <div className="truncate text-[12px] font-medium" style={{ color: "var(--text-default)" }}>
-                    {r.title}
-                  </div>
-                  <div className="mt-0.5 text-[11px]" style={{ color: "var(--text-muted)" }}>
-                    {relativeFromNow(r.createdAt)} · {r.savedByName ?? "system"}
-                    {r.note ? ` · ${r.note}` : ""}
-                  </div>
-                </div>
-              </li>
-            );
-          })}
-        </ul>
+              </div>
+              {renderDiff(target.bodyMarkdown, article.bodyMarkdown)}
+            </div>
+          )}
+        </>
       )}
     </div>
   );
@@ -330,36 +402,65 @@ export function VersionsTab({ article }: { article: KbArticleDetail }) {
 
 /* ── Feedback tab ─────────────────────────────────────── */
 
-export function FeedbackTab({ article }: { article: KbArticleDetail }) {
+export function FeedbackTab({ article, canWrite }: { article: KbArticleDetail; canWrite: boolean }) {
   const total = article.helpfulUp + article.helpfulDown;
   const pct = total === 0 ? null : article.helpfulUp / total;
+  const pending = article.feedback.filter((f) => f.status === "PENDING");
+  const resolved = article.feedback.filter((f) => f.status !== "PENDING");
   return (
     <div className="flex flex-col gap-3">
       <div
-        className="grid grid-cols-3 gap-3 rounded-lg border p-3"
+        className="grid grid-cols-4 gap-3 rounded-lg border p-3"
         style={{ background: "var(--surface-1)", borderColor: "var(--border-subtle)" }}
       >
         <Stat label="Helpful" value={article.helpfulUp.toLocaleString()} tone="good" />
         <Stat label="Not helpful" value={article.helpfulDown.toLocaleString()} tone={article.helpfulDown > 0 ? "danger" : "default"} />
         <Stat label="Helpfulness" value={pct == null ? "—" : `${Math.round(pct * 100)}%`} tone={pct == null ? "default" : pct >= 0.8 ? "good" : pct >= 0.5 ? "warning" : "danger"} />
+        <Stat label="Pending triage" value={pending.length.toLocaleString()} tone={pending.length > 0 ? "warning" : "default"} />
       </div>
-      <DeferredNote>
-        <strong>Triage workflow (resolve, escalate, ignore) is deferred.</strong> Comments are
-        captured but no actions are wired up.
-      </DeferredNote>
-      {article.feedback.length === 0 ? (
-        <div
-          className="rounded-lg border p-6 text-center text-[12px]"
-          style={{ background: "var(--surface-1)", borderColor: "var(--border-subtle)", color: "var(--text-muted)" }}
-        >
-          No reader feedback yet.
-        </div>
-      ) : (
-        <ul
-          className="overflow-hidden rounded-lg"
-          style={{ background: "var(--surface-1)", border: "1px solid var(--border-subtle)" }}
-        >
-          {article.feedback.map((f, idx) => (
+
+      <FeedbackList title="Pending triage" items={pending} canWrite={canWrite} articleId={article.id} />
+      {resolved.length > 0 && (
+        <FeedbackList title="Resolved & dismissed" items={resolved} canWrite={false} articleId={article.id} />
+      )}
+    </div>
+  );
+}
+
+function FeedbackList({
+  title, items, canWrite, articleId,
+}: {
+  title: string;
+  items: KbArticleDetail["feedback"];
+  canWrite: boolean;
+  articleId: string;
+}) {
+  if (items.length === 0) {
+    return (
+      <div
+        className="rounded-lg border p-6 text-center text-[12px]"
+        style={{ background: "var(--surface-1)", borderColor: "var(--border-subtle)", color: "var(--text-muted)" }}
+      >
+        <div className="mb-1 text-[11px] font-semibold uppercase tracking-wider">{title}</div>
+        Nothing here.
+      </div>
+    );
+  }
+  return (
+    <div className="flex flex-col gap-1">
+      <h3 className="px-1 text-[11px] font-semibold uppercase tracking-wider" style={{ color: "var(--text-muted)" }}>
+        {title}
+      </h3>
+      <ul
+        className="overflow-hidden rounded-lg"
+        style={{ background: "var(--surface-1)", border: "1px solid var(--border-subtle)" }}
+      >
+        {items.map((f, idx) => {
+          const statusTone =
+            f.status === "RESOLVED"  ? { bg: "var(--success-surface)", fg: "var(--success-fg)" } :
+            f.status === "DISMISSED" ? { bg: "var(--surface-2)",       fg: "var(--text-faint)" } :
+                                        { bg: "var(--accent-surface)",  fg: "var(--accent-primary)" };
+          return (
             <li
               key={f.id}
               className="px-3 py-2.5"
@@ -374,6 +475,12 @@ export function FeedbackTab({ article }: { article: KbArticleDetail }) {
                 >
                   {f.helpful ? "Helpful" : "Not helpful"}
                 </span>
+                <span
+                  className="rounded-full px-1.5 py-0.5 text-[10px] font-medium uppercase tracking-wide"
+                  style={{ background: statusTone.bg, color: statusTone.fg }}
+                >
+                  {f.status}
+                </span>
                 <span className="text-[10px]" style={{ color: "var(--text-faint)" }}>
                   {relativeFromNow(f.createdAt)}
                 </span>
@@ -383,30 +490,88 @@ export function FeedbackTab({ article }: { article: KbArticleDetail }) {
                   {f.comment}
                 </div>
               )}
+              {f.resolutionNote && (
+                <div className="mt-1 text-[11px]" style={{ color: "var(--text-muted)" }}>
+                  Resolution: {f.resolutionNote}
+                </div>
+              )}
+              {canWrite && (
+                <div className="mt-2 flex flex-wrap items-center gap-2">
+                  <FeedbackTriageForm
+                    feedbackId={f.id}
+                    articleId={articleId}
+                    to="RESOLVED"
+                    label="Mark resolved"
+                    tone="good"
+                  />
+                  <FeedbackTriageForm
+                    feedbackId={f.id}
+                    articleId={articleId}
+                    to="DISMISSED"
+                    label="Dismiss"
+                    tone="muted"
+                  />
+                </div>
+              )}
             </li>
-          ))}
-        </ul>
-      )}
+          );
+        })}
+      </ul>
     </div>
+  );
+}
+
+function FeedbackTriageForm({
+  feedbackId, articleId, to, label, tone,
+}: {
+  feedbackId: string;
+  articleId: string;
+  to: "RESOLVED" | "DISMISSED" | "PENDING";
+  label: string;
+  tone: "good" | "muted" | "danger";
+}) {
+  const palette =
+    tone === "good"   ? { bg: "var(--success-surface)", fg: "var(--success-fg)", border: "var(--emerald-200, var(--border-default))" } :
+    tone === "danger" ? { bg: "var(--rose-50, var(--surface-2))", fg: "var(--danger-fg)", border: "var(--rose-200, var(--border-default))" } :
+                         { bg: "var(--surface-1)", fg: "var(--text-muted)", border: "var(--border-default)" };
+  return (
+    <form action={transitionKbFeedback}>
+      <input type="hidden" name="feedbackId" value={feedbackId} />
+      <input type="hidden" name="articleId"  value={articleId} />
+      <input type="hidden" name="to"         value={to} />
+      <button
+        type="submit"
+        className="ts-focus rounded-md px-2 py-1 text-[11px] font-medium"
+        style={{ background: palette.bg, color: palette.fg, border: `1px solid ${palette.border}` }}
+      >
+        {label}
+      </button>
+    </form>
   );
 }
 
 /* ── Translations tab ─────────────────────────────────── */
 
-export function TranslationsTab({ article }: { article: KbArticleDetail }) {
+const COMMON_LOCALES = ["en", "es", "fr", "de", "pt-BR", "ja", "zh-CN"];
+
+export function TranslationsTab({
+  article, canWrite,
+}: {
+  article: KbArticleDetail;
+  canWrite: boolean;
+}) {
+  const usedLocales = new Set([article.locale, ...article.localeVariants.map((v) => v.locale)]);
+  const suggestedLocales = COMMON_LOCALES.filter((l) => !usedLocales.has(l));
+
   return (
     <div className="flex flex-col gap-3">
-      <DeferredNote>
-        <strong>Translation memory and auto-translate are deferred.</strong> Below is the list of
-        existing locale variants for this slug; you can open each to author it independently.
-      </DeferredNote>
       {article.localeVariants.length === 0 ? (
         <div
           className="rounded-lg border p-6 text-center text-[12px]"
           style={{ background: "var(--surface-1)", borderColor: "var(--border-subtle)", color: "var(--text-muted)" }}
         >
-          No other locales for this slug yet. Create a new article and reuse the slug{" "}
-          <code>{article.slug}</code> with a different locale.
+          No other locales for this slug yet.{" "}
+          {canWrite && <>Use the &quot;Clone to locale&quot; form below to spin up a placeholder copy.</>}
         </div>
       ) : (
         <ul
@@ -444,32 +609,159 @@ export function TranslationsTab({ article }: { article: KbArticleDetail }) {
           })}
         </ul>
       )}
+
+      {canWrite && (
+        <form
+          action={cloneKbArticleToLocale}
+          className="flex flex-wrap items-end gap-2 rounded-lg border p-3"
+          style={{ background: "var(--surface-1)", borderColor: "var(--border-subtle)" }}
+        >
+          <input type="hidden" name="id" value={article.id} />
+          <label className="flex flex-col gap-1">
+            <span className="text-[10px] font-medium uppercase tracking-wide" style={{ color: "var(--text-muted)" }}>
+              Clone to locale
+            </span>
+            <select
+              name="locale"
+              required
+              defaultValue=""
+              className="ts-focus rounded-md px-2 py-1.5 text-[12px] outline-none"
+              style={inputStyle()}
+            >
+              <option value="" disabled>— Pick a locale —</option>
+              {suggestedLocales.map((l) => <option key={l} value={l}>{l}</option>)}
+              <option value="custom">Other (free-form)…</option>
+            </select>
+          </label>
+          <button
+            type="submit"
+            className="ts-focus rounded-md px-3 py-1.5 text-[12px] font-semibold"
+            style={{ background: "var(--accent-primary)", color: "var(--accent-fg)" }}
+          >
+            Clone draft
+          </button>
+          <span className="text-[11px]" style={{ color: "var(--text-faint)" }}>
+            Body is copied as a placeholder for the translator to overwrite.
+          </span>
+        </form>
+      )}
     </div>
   );
 }
 
 /* ── Analytics tab ────────────────────────────────────── */
 
-export function AnalyticsTab({ article }: { article: KbArticleDetail }) {
+export function AnalyticsTab({
+  article, analytics,
+}: {
+  article: KbArticleDetail;
+  analytics: {
+    viewTrend: { date: string; views: number }[];
+    feedbackTrend: { date: string; helpful: number; not: number }[];
+    topSearches: { query: string; count: number }[];
+    totalLoggedViews: number;
+  };
+}) {
   const total = article.helpfulUp + article.helpfulDown;
   const pct = total === 0 ? null : article.helpfulUp / total;
+  const maxView = Math.max(1, ...analytics.viewTrend.map((p) => p.views));
+  const maxFb = Math.max(1, ...analytics.feedbackTrend.map((p) => p.helpful + p.not));
   return (
     <div className="flex flex-col gap-3">
-      <DeferredNote>
-        <strong>Charts deferred:</strong> view trend, helpfulness over time, avg time on page,
-        in-product help triggers, search queries that led here. The KPIs below are lifetime
-        counters; the charts ship in the analytics rollout.
-      </DeferredNote>
       <div
-        className="grid grid-cols-3 gap-3 rounded-lg border p-3"
+        className="grid grid-cols-2 gap-3 rounded-lg border p-3 md:grid-cols-4"
         style={{ background: "var(--surface-1)", borderColor: "var(--border-subtle)" }}
       >
         <Stat label="Lifetime views" value={article.viewCount.toLocaleString()} />
+        <Stat label="Logged views · 30d" value={analytics.totalLoggedViews.toLocaleString()} />
         <Stat label="Helpfulness" value={pct == null ? "—" : `${Math.round(pct * 100)}%`} />
         <Stat
           label="Last published"
           value={article.publishedAt ? relativeFromNow(article.publishedAt) : "—"}
         />
+      </div>
+
+      <div
+        className="rounded-lg border p-3"
+        style={{ background: "var(--surface-1)", borderColor: "var(--border-subtle)" }}
+      >
+        <h3 className="mb-2 text-[12px] font-semibold" style={{ color: "var(--text-default)" }}>
+          View trend · last 30 days
+        </h3>
+        <div className="flex h-24 items-end gap-[2px]">
+          {analytics.viewTrend.map((p) => (
+            <div
+              key={p.date}
+              className="flex-1 rounded-t-sm"
+              style={{
+                background: "var(--accent-primary)",
+                opacity: 0.85,
+                height: `${Math.max(2, (p.views / maxView) * 100)}%`,
+              }}
+              title={`${p.date}: ${p.views} views`}
+            />
+          ))}
+        </div>
+      </div>
+
+      <div
+        className="rounded-lg border p-3"
+        style={{ background: "var(--surface-1)", borderColor: "var(--border-subtle)" }}
+      >
+        <h3 className="mb-2 text-[12px] font-semibold" style={{ color: "var(--text-default)" }}>
+          Helpfulness · last 30 days
+        </h3>
+        <div className="flex h-20 items-end gap-[2px]">
+          {analytics.feedbackTrend.map((p) => {
+            const total = p.helpful + p.not;
+            const helpfulPart = total === 0 ? 0 : (p.helpful / maxFb) * 100;
+            const notPart = total === 0 ? 0 : (p.not / maxFb) * 100;
+            return (
+              <div key={p.date} className="flex flex-1 flex-col-reverse" title={`${p.date}: 👍 ${p.helpful} · 👎 ${p.not}`}>
+                <div className="rounded-t-sm" style={{ background: "var(--success-fg)", height: `${helpfulPart}%`, minHeight: total === 0 ? 0 : 1 }} />
+                <div style={{ background: "var(--danger-fg)", height: `${notPart}%`, minHeight: total === 0 ? 0 : 1 }} />
+              </div>
+            );
+          })}
+        </div>
+        <div className="mt-2 flex items-center gap-3 text-[10px]" style={{ color: "var(--text-muted)" }}>
+          <span><span className="inline-block h-2 w-2 rounded-sm align-middle" style={{ background: "var(--success-fg)" }} /> Helpful</span>
+          <span><span className="inline-block h-2 w-2 rounded-sm align-middle" style={{ background: "var(--danger-fg)" }} /> Not helpful</span>
+        </div>
+      </div>
+
+      <div
+        className="rounded-lg border p-3"
+        style={{ background: "var(--surface-1)", borderColor: "var(--border-subtle)" }}
+      >
+        <h3 className="mb-2 text-[12px] font-semibold" style={{ color: "var(--text-default)" }}>
+          Top searches that landed here · last 30 days
+        </h3>
+        {analytics.topSearches.length === 0 ? (
+          <p className="text-[11px]" style={{ color: "var(--text-muted)" }}>
+            No search clicks recorded.
+          </p>
+        ) : (
+          <ul className="flex flex-col gap-1">
+            {analytics.topSearches.map((s) => (
+              <li key={s.query} className="flex items-baseline justify-between text-[11px]">
+                <span style={{ color: "var(--text-default)" }}>{s.query || <em>(empty)</em>}</span>
+                <span className="tabular-nums" style={{ color: "var(--text-muted)" }}>{s.count}</span>
+              </li>
+            ))}
+          </ul>
+        )}
+      </div>
+
+      <div className="text-[11px]" style={{ color: "var(--text-muted)" }}>
+        In-product help triggers active on:{" "}
+        {article.inProductPaths.length === 0
+          ? <span style={{ color: "var(--text-faint)" }}>none</span>
+          : article.inProductPaths.map((p) => (
+              <code key={p} className="ml-1 rounded-sm px-1.5 py-0.5" style={{ background: "var(--surface-2)", color: "var(--text-default)" }}>
+                {p}
+              </code>
+            ))}
       </div>
     </div>
   );
