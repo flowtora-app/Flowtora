@@ -77,6 +77,7 @@ const NAV_ITEMS: NavItem[] = [
   { href: "/platform/operations/bugs",              label: "Bug Reports",          icon: "Attention" },
   // Pages 38-42 — marketing
   { href: "/platform/marketing/landing-pages",      label: "Landing Pages",        icon: "Globe" },
+  { href: "/platform/marketing/campaigns",          label: "Email Campaigns",      icon: "Megaphone" },
 ];
 
 const COLLAPSE_KEY = "flowtora.platform-nav.collapsed";

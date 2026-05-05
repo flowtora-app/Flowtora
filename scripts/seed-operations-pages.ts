@@ -23,6 +23,7 @@ import type {
   FeatureRequestStatus, EngineeringEffort, VoteDirection,
   BugSeverity, BugStatus, BugEnvironment, BugFrequency,
   LandingPageStatus, LandingPageDevice, LandingPageMetric,
+  EmailRecipientStatus,
 } from "@prisma/client";
 import { defaultBlock } from "../src/lib/lp-blocks";
 
@@ -59,6 +60,7 @@ async function main() {
   await seedFeatureRequests(platformUsers, tenants); // Page 36
   await seedBugs(platformUsers, tenants);            // Page 37
   await seedLandingPages(platformUsers);             // Page 38
+  await seedEmailCampaigns(platformUsers);           // Page 39
 
   console.log("\n✓ Seed complete.\n");
   await db.$disconnect();
@@ -142,6 +144,17 @@ async function wipeOldSeed() {
   }
   await db.landingPageDomain.deleteMany({ where: { hostname: { startsWith: "seed-" } } });
   await db.landingPageTemplate.deleteMany({ where: { name: { startsWith: "[seed]" } } });
+  // Email campaigns + templates + audiences tagged seed.
+  const oldCampaigns = await db.emailCampaign.findMany({
+    where: { name: { startsWith: "[seed]" } },
+    select: { id: true },
+  });
+  if (oldCampaigns.length) {
+    await db.emailCampaign.deleteMany({ where: { id: { in: oldCampaigns.map((c) => c.id) } } });
+    console.log(`  deleted ${oldCampaigns.length} email campaigns`);
+  }
+  await db.emailTemplate.deleteMany({ where: { name: { startsWith: "[seed]" } } });
+  await db.emailAudience.deleteMany({ where: { name: { startsWith: "[seed]" } } });
   // Customers tagged seed (after orders are gone).
   await db.customer.deleteMany({ where: { tags: { has: "seed" } } });
   // Products tagged seed (use description marker since Product has no tags array).
@@ -1985,6 +1998,298 @@ async function seedLandingPages(staff: { id: string }[]) {
   }
 
   console.log(`  ✓ ${pageCount} landing pages, ${visitCount} visits, ${submissionCount} form submissions, 1 domain, 1 template`);
+}
+
+/* ── Email Campaigns (Page 39) ───────────────────────── */
+
+async function seedEmailCampaigns(staff: { id: string }[]) {
+  console.log("\n── Seeding email campaigns (Page 39)…");
+
+  // Audiences
+  const audOwners = await db.emailAudience.create({
+    data: {
+      name: "[seed] Active owners on Growth+",
+      description: "Tenant owners on Growth or Pro who logged in in the last 30 days.",
+      filter: {
+        plans: ["GROWTH", "PRO"],
+        tenantStatuses: ["ACTIVE"],
+        memberRoles: ["OWNER"],
+      } as never,
+      estimatedSize: 0,
+      estimatedAt: daysAgo(2),
+    },
+  });
+  await db.emailAudience.create({
+    data: {
+      name: "[seed] Beta cohort",
+      description: "Owners + admins flagged as beta.",
+      filter: { cohorts: ["BETA"], memberRoles: ["OWNER", "ADMIN"] } as never,
+      estimatedSize: 0,
+    },
+  });
+
+  // Templates
+  const tmpl = await db.emailTemplate.create({
+    data: {
+      name: "[seed] Onboarding nudge",
+      description: "Friendly check-in for new tenants",
+      category: "Onboarding",
+      bodyMarkdown: "## Hi {{firstName}},\n\nIt's been a week since {{tenantName}} started using Flowtora. A few quick wins from shops at your stage:\n\n- Connect Stripe so quotes auto-generate invoices\n- Import your customer list (CSV)\n- Brand your storefront\n\n[Open dashboard](https://flowtora.com/dashboard)",
+      bodyHtml: "<p>Placeholder — saved by the action wrapper on next save.</p>",
+    },
+  });
+
+  void audOwners;
+  void tmpl;
+
+  const CAMPAIGNS = [
+    {
+      name: "[seed] Q3 onboarding nudge",
+      type: "ONE_OFF" as const,
+      status: "SENT" as const,
+      fromName: "Hugo at Flowtora",
+      fromEmail: "hugo@flowtora.com",
+      replyToEmail: "support@flowtora.com",
+      previewText: "A few quick wins from shops at your stage.",
+      bodyMarkdown: "## Hi {{firstName}},\n\nA few **quick wins** from shops at your stage:\n\n- Connect Stripe so quotes auto-generate invoices\n- Import your customer list (CSV)\n- Brand your storefront\n\n[Open dashboard](https://flowtora.com/dashboard)\n\nReplies come straight to me.",
+      audienceFilter: { plans: ["STARTER", "GROWTH"], tenantStatuses: ["ACTIVE"], memberRoles: ["OWNER"] } as SegmentFilterSeed,
+      utmSource: "campaign", utmMedium: "email", utmCampaign: "q3-onboarding-nudge",
+      conversionGoal: "url:/dashboard",
+      variants: [
+        { label: "A", subject: "Two things shops typically miss in week 1", weightPct: 50 },
+        { label: "B", subject: "Quick wins for {{tenantName}}", weightPct: 50 },
+      ],
+      simulate: { recipients: 240, openRate: 0.42, clickRate: 0.10, bounceRate: 0.015, unsubRate: 0.005 },
+    },
+    {
+      name: "[seed] Summer promo — 30% off",
+      type: "ONE_OFF" as const,
+      status: "SENT" as const,
+      fromName: "Flowtora",
+      fromEmail: "promos@flowtora.com",
+      replyToEmail: "support@flowtora.com",
+      previewText: "30% off the Pro plan for the next 14 days.",
+      bodyMarkdown: "## Save 30% on Pro\n\n{{firstName}}, claim **30% off** your first 6 months on Pro — multi-location, API access, premium support.\n\n[Claim my discount](https://flowtora.com/pricing?utm_source=email&utm_campaign=summer-promo)\n\nOffer ends in 14 days.",
+      audienceFilter: { plans: ["GROWTH"], tenantStatuses: ["ACTIVE"], memberRoles: ["OWNER", "ADMIN"] } as SegmentFilterSeed,
+      utmSource: "campaign", utmMedium: "email", utmCampaign: "summer-promo",
+      variants: [
+        { label: "A", subject: "30% off Pro — 14 days", weightPct: 33 },
+        { label: "B", subject: "Save 30% on multi-location billing", weightPct: 33 },
+        { label: "C", subject: "{{tenantName}}, ready for Pro?", weightPct: 34 },
+      ],
+      simulate: { recipients: 420, openRate: 0.38, clickRate: 0.14, bounceRate: 0.025, unsubRate: 0.008 },
+    },
+    {
+      name: "[seed] Mobile app launch",
+      type: "ONE_OFF" as const,
+      status: "SCHEDULED" as const,
+      fromName: "Flowtora Product",
+      fromEmail: "product@flowtora.com",
+      previewText: "iPad layout, offline proof signing, redesigned customer detail.",
+      bodyMarkdown: "## Mobile v2.4 — out tomorrow\n\nWe rebuilt the mobile experience around the way installers actually work in the field.\n\n- iPad-class layout\n- Offline proof signing\n- Redesigned customer detail\n\n[Update on App Store](https://apps.apple.com/) · [Read the changelog](/changelog)",
+      audienceFilter: { tenantStatuses: ["ACTIVE"], memberRoles: ["OWNER", "ADMIN"] } as SegmentFilterSeed,
+      utmCampaign: "mobile-2-4-launch",
+      scheduledAt: new Date(Date.now() + 2 * DAY),
+      variants: [],
+      simulate: null,
+    },
+    {
+      name: "[seed] Weekly digest",
+      type: "RECURRING" as const,
+      status: "DRAFT" as const,
+      fromName: "Flowtora Weekly",
+      fromEmail: "weekly@flowtora.com",
+      previewText: "What you missed this week — quick reads, no fluff.",
+      bodyMarkdown: "## This week on Flowtora\n\n- New report: rolling 30d gross margin\n- Production board now supports drag-to-reschedule\n- Help center search got 3× faster\n\nAs always, [hit reply](mailto:weekly@flowtora.com) with feedback.",
+      audienceFilter: { tenantStatuses: ["ACTIVE"], memberRoles: ["OWNER"] } as SegmentFilterSeed,
+      utmCampaign: "weekly-digest",
+      recurrenceRule: "FREQ=WEEKLY;BYDAY=TU",
+      variants: [],
+      simulate: null,
+    },
+  ];
+
+  let campaignCount = 0;
+  let recipientCount = 0;
+  let clickCount = 0;
+  for (const tmpl of CAMPAIGNS) {
+    const author = rand(staff);
+    const createdAt = daysAgo(randInt(8, 45));
+    const completedSendingAt = tmpl.status === "SENT" ? daysAgo(randInt(0, 14)) : null;
+    const startedSendingAt = tmpl.status === "SENT" ? new Date((completedSendingAt ?? new Date()).getTime() - 30 * 60_000) : null;
+
+    const audienceSize = tmpl.simulate?.recipients ?? 0;
+    const innerHtml = renderEmailMarkdownInline(tmpl.bodyMarkdown);
+    const fullHtml = wrapEmail(innerHtml, tmpl.previewText);
+    const text = tmpl.bodyMarkdown.replace(/[#*`>_]/g, "").replace(/\[([^\]]+)\]\(([^)]+)\)/g, "$1 ($2)");
+
+    const c = await db.emailCampaign.create({
+      data: {
+        name: tmpl.name,
+        type: tmpl.type,
+        status: tmpl.status,
+        fromName: tmpl.fromName,
+        fromEmail: tmpl.fromEmail,
+        replyToEmail: tmpl.replyToEmail ?? null,
+        previewText: tmpl.previewText ?? null,
+        bodyMarkdown: tmpl.bodyMarkdown,
+        bodyHtml: fullHtml,
+        bodyText: text,
+        audienceFilter: tmpl.audienceFilter as never,
+        audienceSize,
+        utmSource: tmpl.utmSource ?? null,
+        utmMedium: tmpl.utmMedium ?? null,
+        utmCampaign: tmpl.utmCampaign ?? null,
+        conversionGoal: (tmpl as { conversionGoal?: string }).conversionGoal ?? null,
+        sendStrategy: (tmpl as { scheduledAt?: Date }).scheduledAt ? "SCHEDULED" : "IMMEDIATE",
+        scheduledAt: (tmpl as { scheduledAt?: Date }).scheduledAt ?? null,
+        recurrenceRule: (tmpl as { recurrenceRule?: string }).recurrenceRule ?? null,
+        startedSendingAt,
+        completedSendingAt,
+        authorId: author.id,
+        createdAt,
+      },
+      select: { id: true },
+    });
+    campaignCount += 1;
+
+    // Variants
+    for (const v of tmpl.variants) {
+      await db.emailCampaignSubjectVariant.create({
+        data: {
+          campaignId: c.id,
+          label: v.label,
+          subject: v.subject,
+          weightPct: v.weightPct,
+          sentCount: tmpl.simulate ? Math.round(audienceSize * (v.weightPct / 100)) : 0,
+          openedCount: tmpl.simulate ? Math.round(audienceSize * (v.weightPct / 100) * tmpl.simulate.openRate) : 0,
+          clickedCount: tmpl.simulate ? Math.round(audienceSize * (v.weightPct / 100) * tmpl.simulate.clickRate) : 0,
+        },
+      });
+    }
+
+    // Simulated recipients + click events.
+    if (tmpl.simulate) {
+      const sim = tmpl.simulate;
+      for (let i = 0; i < sim.recipients; i++) {
+        const sentAt = new Date((completedSendingAt ?? new Date()).getTime() - randInt(0, 30 * 60_000));
+        const r = Math.random();
+        let status: EmailRecipientStatus = "DELIVERED";
+        const data: Record<string, unknown> = { sentAt, deliveredAt: new Date(sentAt.getTime() + 60_000) };
+        if (r < sim.bounceRate) {
+          status = "BOUNCED";
+          data.bouncedAt = new Date(sentAt.getTime() + 30_000);
+          data.deliveredAt = null;
+          data.failureReason = "5.1.1 user unknown";
+        } else if (r < sim.bounceRate + 0.001) {
+          status = "COMPLAINED";
+          data.complainedAt = new Date(sentAt.getTime() + 5 * 60_000);
+        } else if (r < sim.bounceRate + sim.unsubRate) {
+          status = "UNSUBSCRIBED";
+          data.unsubscribedAt = new Date(sentAt.getTime() + 10 * 60_000);
+        } else if (Math.random() < sim.openRate) {
+          const openedAt = new Date(sentAt.getTime() + randInt(2, 60) * 60_000);
+          data.openedAt = openedAt;
+          status = "OPENED";
+          if (Math.random() < (sim.clickRate / sim.openRate)) {
+            const clickedAt = new Date(openedAt.getTime() + randInt(1, 10) * 60_000);
+            data.clickedAt = clickedAt;
+            status = "CLICKED";
+          }
+        }
+        const created = await db.emailCampaignRecipient.create({
+          data: {
+            campaignId: c.id,
+            email: `seed-recipient+${c.id.slice(-4)}-${i}@example.com`,
+            trackingToken: `seed-${c.id.slice(-6)}-${i}-${Math.random().toString(36).slice(2, 8)}`,
+            status,
+            sentAt: data.sentAt as Date | null,
+            deliveredAt: (data.deliveredAt as Date | null | undefined) ?? null,
+            openedAt: (data.openedAt as Date | undefined) ?? null,
+            clickedAt: (data.clickedAt as Date | undefined) ?? null,
+            bouncedAt: (data.bouncedAt as Date | undefined) ?? null,
+            unsubscribedAt: (data.unsubscribedAt as Date | undefined) ?? null,
+            complainedAt: (data.complainedAt as Date | undefined) ?? null,
+            failureReason: (data.failureReason as string | undefined) ?? null,
+          },
+          select: { id: true },
+        });
+        recipientCount += 1;
+        if (status === "CLICKED") {
+          await db.emailCampaignClickEvent.create({
+            data: {
+              campaignId: c.id,
+              recipientId: created.id,
+              href: rand(["https://flowtora.com/dashboard", "https://flowtora.com/pricing", "https://flowtora.com/changelog", "https://apps.apple.com/"]),
+              clickedAt: data.clickedAt as Date,
+            },
+          });
+          clickCount += 1;
+        }
+      }
+    }
+  }
+
+  console.log(`  ✓ ${campaignCount} email campaigns, ${recipientCount} recipients, ~${clickCount} click events, 2 audiences, 1 template`);
+}
+
+interface SegmentFilterSeed {
+  plans?: string[];
+  tenantStatuses?: string[];
+  cohorts?: string[];
+  memberRoles?: string[];
+  tagsAny?: string[];
+  regions?: string[];
+}
+
+function renderEmailMarkdownInline(md: string): string {
+  const escMap: Record<string, string> = { "&": "&amp;", "<": "&lt;", ">": "&gt;", '"': "&quot;", "'": "&#39;" };
+  const esc = (s: string) => s.replace(/[&<>"']/g, (c) => escMap[c] ?? c);
+  if (!md.trim()) return "";
+  const lines = md.replace(/\r\n/g, "\n").split("\n");
+  const out: string[] = [];
+  let i = 0;
+  while (i < lines.length) {
+    const line = lines[i] ?? "";
+    if (!line.trim()) { i += 1; continue; }
+    const h = line.match(/^(#{1,3})\s+(.+)$/);
+    if (h) {
+      const level = h[1]!.length;
+      out.push(`<h${level} style="margin:24px 0 12px;font-size:${level === 1 ? 24 : level === 2 ? 20 : 16}px;color:#0f172a;">${inline(esc(h[2]!))}</h${level}>`);
+      i += 1; continue;
+    }
+    if (/^[-*+]\s/.test(line)) {
+      const items: string[] = [];
+      while (i < lines.length && /^[-*+]\s/.test(lines[i] ?? "")) {
+        items.push(esc(lines[i]!.replace(/^[-*+]\s/, "")));
+        i += 1;
+      }
+      out.push(`<ul style="margin:0 0 16px 16px;color:#0f172a;font-size:14px;line-height:1.6;">${items.map((it) => `<li>${inline(it)}</li>`).join("")}</ul>`);
+      continue;
+    }
+    const buf: string[] = [];
+    while (i < lines.length && lines[i]!.trim() && !/^(#{1,3}\s|[-*+]\s)/.test(lines[i] ?? "")) {
+      buf.push(esc(lines[i] ?? ""));
+      i += 1;
+    }
+    out.push(`<p style="margin:0 0 16px;color:#0f172a;font-size:14px;line-height:1.6;">${inline(buf.join(" "))}</p>`);
+  }
+  return out.join("\n");
+}
+
+function inline(s: string): string {
+  return s
+    .replace(/\[([^\]]+)\]\(([^)\s]+)\)/g, '<a href="$2" style="color:#2563eb;text-decoration:underline;">$1</a>')
+    .replace(/\*\*([^*]+)\*\*/g, "<strong>$1</strong>")
+    .replace(/(?<!\*)\*([^*]+)\*/g, "<em>$1</em>");
+}
+
+function wrapEmail(innerHtml: string, previewText: string | null | undefined): string {
+  const preview = previewText
+    ? `<div style="display:none;visibility:hidden;opacity:0;max-height:0;max-width:0;color:transparent;font-size:0;line-height:0;">${previewText.replace(/[<&>]/g, "")}</div>`
+    : "";
+  const unsub = `<p style="margin:24px 0 8px;color:#94a3b8;font-size:11px;text-align:center;">You're receiving this because you have a Flowtora account. <a href="{{unsubscribe_url}}" style="color:#94a3b8;">Unsubscribe</a>.</p>`;
+  return `<!doctype html><html><head><meta charset="utf-8"><title>Flowtora</title></head><body style="margin:0;padding:0;background:#f8fafc;font-family:ui-sans-serif,system-ui,-apple-system,'Segoe UI',Roboto,sans-serif;">${preview}<table role="presentation" width="100%" cellpadding="0" cellspacing="0" border="0" style="background:#f8fafc;padding:24px 0;"><tr><td align="center"><table role="presentation" width="600" cellpadding="0" cellspacing="0" border="0" style="background:#ffffff;border-radius:12px;padding:32px;max-width:600px;">${innerHtml}${unsub}</table></td></tr></table></body></html>`;
 }
 
 main().catch((e) => {

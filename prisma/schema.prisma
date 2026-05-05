@@ -8256,6 +8256,212 @@ enum SupportTicketModule {
 }
 
 // ────────────────────────────────────────────────────────────
+// Page 39 — Email Campaigns.
+// ────────────────────────────────────────────────────────────
+
+enum EmailCampaignType {
+  ONE_OFF
+  RECURRING
+}
+
+enum EmailCampaignStatus {
+  DRAFT
+  SCHEDULED
+  SENDING
+  SENT
+  PAUSED
+  ARCHIVED
+}
+
+enum EmailSendStrategy {
+  IMMEDIATE  // start sending the moment the campaign goes SCHEDULED → SENDING
+  SCHEDULED  // honor scheduledAt
+  OPTIMIZED  // per-recipient send-time optimization
+}
+
+enum EmailRecipientStatus {
+  QUEUED
+  SENT
+  DELIVERED
+  OPENED
+  CLICKED
+  BOUNCED
+  UNSUBSCRIBED
+  COMPLAINED
+  FAILED
+}
+
+model EmailCampaign {
+  id   String @id @default(cuid())
+  name String
+  type EmailCampaignType   @default(ONE_OFF)
+  status EmailCampaignStatus @default(DRAFT)
+  language String @default("en")
+
+  // Audience — segment DSL JSON. The evaluator in
+  // server/platform/email-campaigns.ts walks this against tenants/users.
+  audienceFilter Json @default("{}")
+  /** Computed at schedule time; updated whenever the filter changes. */
+  audienceSize   Int  @default(0)
+
+  // Sender
+  fromName     String?
+  fromEmail    String?
+  replyToEmail String?
+
+  // Content
+  previewText  String?
+  bodyMarkdown String   @default("") // source-of-truth when block editor used
+  bodyHtml     String   @default("") // rendered + sanitized
+  bodyText     String   @default("") // plaintext fallback
+  templateId   String?
+
+  // Tracking + UTM
+  utmSource   String?
+  utmMedium   String?
+  utmCampaign String?
+  /** Free-form goal — "signup" / "url:/pricing" / "tag:converted". */
+  conversionGoal String?
+
+  // Schedule
+  sendStrategy   EmailSendStrategy @default(IMMEDIATE)
+  scheduledAt    DateTime?
+  /** RFC-5545-ish RRULE for recurring campaigns. Free-form when type=RECURRING. */
+  recurrenceRule String?
+
+  // Lifecycle
+  startedSendingAt   DateTime?
+  completedSendingAt DateTime?
+  pausedAt           DateTime?
+
+  authorId  String?
+  createdAt DateTime @default(now())
+  updatedAt DateTime @updatedAt
+
+  template    EmailTemplate? @relation(fields: [templateId], references: [id], onDelete: SetNull)
+  variants    EmailCampaignSubjectVariant[]
+  recipients  EmailCampaignRecipient[]
+  clickEvents EmailCampaignClickEvent[]
+
+  @@index([status, updatedAt])
+  @@index([type, status])
+}
+
+model EmailCampaignSubjectVariant {
+  id         String @id @default(cuid())
+  campaignId String
+  /** "A" / "B" / "C" — up to 3 enforced by the API. */
+  label      String
+  subject    String
+  previewText String?
+  weightPct   Int     @default(50)
+
+  // Denormalized stats — source of truth is EmailCampaignRecipient timestamps.
+  sentCount    Int @default(0)
+  openedCount  Int @default(0)
+  clickedCount Int @default(0)
+
+  createdAt DateTime @default(now())
+
+  campaign EmailCampaign @relation(fields: [campaignId], references: [id], onDelete: Cascade)
+
+  @@unique([campaignId, label])
+  @@index([campaignId])
+}
+
+model EmailCampaignRecipient {
+  id         String @id @default(cuid())
+  campaignId String
+  variantId  String?
+
+  /** Denormalized — recipients can outlive a tenant deletion. */
+  tenantId String?
+  userId   String?
+  email    String
+
+  status EmailRecipientStatus @default(QUEUED)
+
+  // Per-event timestamps. Multiple events can fire (sent → opened → clicked);
+  // we keep the latest of each.
+  sentAt         DateTime?
+  deliveredAt    DateTime?
+  openedAt       DateTime?
+  clickedAt      DateTime?
+  bouncedAt      DateTime?
+  unsubscribedAt DateTime?
+  complainedAt   DateTime?
+  failedAt       DateTime?
+  failureReason  String?
+
+  /** Send-time optimizer's per-recipient slot. */
+  scheduledForAt DateTime?
+  /** Personalization snapshot. */
+  mergeData      Json @default("{}")
+
+  /** Open-tracking pixel + click-redirect token — random per recipient. */
+  trackingToken String @unique
+
+  createdAt DateTime @default(now())
+  updatedAt DateTime @updatedAt
+
+  campaign EmailCampaign @relation(fields: [campaignId], references: [id], onDelete: Cascade)
+
+  @@index([campaignId, status])
+  @@index([campaignId, email])
+  @@index([variantId])
+}
+
+model EmailCampaignClickEvent {
+  id          String   @id @default(cuid())
+  campaignId  String
+  recipientId String
+  href        String
+  /** Optional position hint from the body — used for the click heatmap. */
+  blockIndex  Int?
+  clickedAt   DateTime @default(now())
+  userAgent   String?
+  ipAddress   String?
+
+  campaign EmailCampaign @relation(fields: [campaignId], references: [id], onDelete: Cascade)
+
+  @@index([campaignId, href])
+  @@index([recipientId])
+}
+
+model EmailAudience {
+  id          String  @id @default(cuid())
+  name        String
+  description String?
+  filter      Json
+  estimatedSize Int   @default(0)
+  estimatedAt   DateTime?
+
+  createdAt DateTime @default(now())
+  updatedAt DateTime @updatedAt
+}
+
+model EmailTemplate {
+  id           String  @id @default(cuid())
+  name         String
+  description  String?
+  category     String?
+  thumbnailUrl String?
+  bodyHtml     String
+  bodyMarkdown String?
+
+  createdAt DateTime @default(now())
+  updatedAt DateTime @updatedAt
+
+  campaigns EmailCampaign[]
+}
+
+model EmailUnsubscribe {
+  email     String   @id
+  reason    String?
+  createdAt DateTime @default(now())
+}
+
+// ────────────────────────────────────────────────────────────
 // Page 38 — Landing Pages CMS.
 // ────────────────────────────────────────────────────────────
 
