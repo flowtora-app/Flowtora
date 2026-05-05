@@ -8256,6 +8256,166 @@ enum SupportTicketModule {
 }
 
 // ────────────────────────────────────────────────────────────
+// Page 40 — Lifecycle / Drip Sequences.
+// ────────────────────────────────────────────────────────────
+
+enum SequenceStatus {
+  DRAFT
+  ACTIVE
+  PAUSED
+  ARCHIVED
+}
+
+enum SequenceTriggerType {
+  SIGNUP
+  PLAN_STARTED
+  PLAN_CHANGED
+  FAILED_PAYMENT
+  TRIAL_ENDING
+  DAYS_INACTIVE
+  FEATURE_FIRST_USE
+  CUSTOM_EVENT
+  TAG_ADDED
+  WEBHOOK
+}
+
+enum SequenceStepKind {
+  SEND_EMAIL
+  SEND_SMS
+  SEND_IN_APP
+  NOTIFY_CSM
+  ADD_TAG
+  REMOVE_TAG
+  MOVE_TO_PLAN
+  APPLY_COUPON
+  WEBHOOK_OUT
+  BRANCH
+  WAIT
+  SPLIT
+}
+
+enum SequenceEnrollmentStatus {
+  ACTIVE
+  COMPLETED
+  EXITED
+}
+
+model Sequence {
+  id          String         @id @default(cuid())
+  name        String
+  description String?
+  status      SequenceStatus @default(DRAFT)
+
+  triggerType   SequenceTriggerType
+  /** Free-form trigger config — daysBefore / featureKey / eventName / tag / webhookSecret. */
+  triggerConfig Json                @default("{}")
+
+  /** Goal expression, e.g. "tag:converted" / "url:/dashboard" / "plan:GROWTH" / "event:subscription_paid". */
+  conversionGoal String?
+  exitOnGoal     Boolean @default(true)
+
+  authorId    String?
+  createdAt   DateTime  @default(now())
+  updatedAt   DateTime  @updatedAt
+  publishedAt DateTime?
+  pausedAt    DateTime?
+
+  // Denormalized counters for the list page.
+  totalEnrolled  Int @default(0)
+  activeEnrolled Int @default(0)
+  totalConverted Int @default(0)
+
+  steps       SequenceStep[]
+  enrollments SequenceEnrollment[]
+
+  @@index([status, updatedAt])
+  @@index([triggerType])
+}
+
+model SequenceStep {
+  id         String @id @default(cuid())
+  sequenceId String
+
+  position     Int
+  parentStepId String?
+  branchKey    String?
+
+  kind   SequenceStepKind
+  config Json             @default("{}")
+  title  String?
+
+  enteredCount   Int @default(0)
+  exitedCount    Int @default(0)
+  convertedCount Int @default(0)
+
+  createdAt DateTime @default(now())
+  updatedAt DateTime @updatedAt
+
+  sequence Sequence       @relation(fields: [sequenceId], references: [id], onDelete: Cascade)
+  parent   SequenceStep?  @relation("StepChildren", fields: [parentStepId], references: [id], onDelete: SetNull)
+  children SequenceStep[] @relation("StepChildren")
+  events   SequenceStepEvent[]
+
+  @@index([sequenceId, position])
+  @@index([parentStepId])
+}
+
+model SequenceEnrollment {
+  id         String @id @default(cuid())
+  sequenceId String
+
+  tenantId String?
+  userId   String?
+
+  status        SequenceEnrollmentStatus @default(ACTIVE)
+  currentStepId String?
+
+  enrolledAt  DateTime  @default(now())
+  completedAt DateTime?
+  exitedAt    DateTime?
+  exitReason  String?
+
+  triggerPayload Json @default("{}")
+
+  sequence Sequence            @relation(fields: [sequenceId], references: [id], onDelete: Cascade)
+  events   SequenceStepEvent[]
+
+  @@unique([sequenceId, tenantId, userId])
+  @@index([sequenceId, status])
+  @@index([currentStepId])
+}
+
+model SequenceStepEvent {
+  id           String @id @default(cuid())
+  enrollmentId String
+  stepId       String
+
+  event      String
+  payload    Json     @default("{}")
+  occurredAt DateTime @default(now())
+
+  enrollment SequenceEnrollment @relation(fields: [enrollmentId], references: [id], onDelete: Cascade)
+  step       SequenceStep       @relation(fields: [stepId], references: [id], onDelete: Cascade)
+
+  @@index([enrollmentId, occurredAt])
+  @@index([stepId, event])
+}
+
+model SequenceTemplate {
+  id            String              @id @default(cuid())
+  name          String
+  description   String?
+  category      String?
+  triggerType   SequenceTriggerType
+  triggerConfig Json                @default("{}")
+  blueprint     Json
+  thumbnailUrl  String?
+
+  createdAt DateTime @default(now())
+  updatedAt DateTime @updatedAt
+}
+
+// ────────────────────────────────────────────────────────────
 // Page 39 — Email Campaigns.
 // ────────────────────────────────────────────────────────────
 

@@ -61,6 +61,7 @@ async function main() {
   await seedBugs(platformUsers, tenants);            // Page 37
   await seedLandingPages(platformUsers);             // Page 38
   await seedEmailCampaigns(platformUsers);           // Page 39
+  await seedSequences(platformUsers, tenants);       // Page 40
 
   console.log("\n✓ Seed complete.\n");
   await db.$disconnect();
@@ -155,6 +156,16 @@ async function wipeOldSeed() {
   }
   await db.emailTemplate.deleteMany({ where: { name: { startsWith: "[seed]" } } });
   await db.emailAudience.deleteMany({ where: { name: { startsWith: "[seed]" } } });
+  // Sequences tagged seed.
+  const oldSequences = await db.sequence.findMany({
+    where: { name: { startsWith: "[seed]" } },
+    select: { id: true },
+  });
+  if (oldSequences.length) {
+    await db.sequence.deleteMany({ where: { id: { in: oldSequences.map((s) => s.id) } } });
+    console.log(`  deleted ${oldSequences.length} sequences`);
+  }
+  // Templates aren't tagged — leave them for the prebuilt loader to manage.
   // Customers tagged seed (after orders are gone).
   await db.customer.deleteMany({ where: { tags: { has: "seed" } } });
   // Products tagged seed (use description marker since Product has no tags array).
@@ -2290,6 +2301,210 @@ function wrapEmail(innerHtml: string, previewText: string | null | undefined): s
     : "";
   const unsub = `<p style="margin:24px 0 8px;color:#94a3b8;font-size:11px;text-align:center;">You're receiving this because you have a Flowtora account. <a href="{{unsubscribe_url}}" style="color:#94a3b8;">Unsubscribe</a>.</p>`;
   return `<!doctype html><html><head><meta charset="utf-8"><title>Flowtora</title></head><body style="margin:0;padding:0;background:#f8fafc;font-family:ui-sans-serif,system-ui,-apple-system,'Segoe UI',Roboto,sans-serif;">${preview}<table role="presentation" width="100%" cellpadding="0" cellspacing="0" border="0" style="background:#f8fafc;padding:24px 0;"><tr><td align="center"><table role="presentation" width="600" cellpadding="0" cellspacing="0" border="0" style="background:#ffffff;border-radius:12px;padding:32px;max-width:600px;">${innerHtml}${unsub}</table></td></tr></table></body></html>`;
+}
+
+/* ── Lifecycle / Drip Sequences (Page 40) ────────────── */
+
+async function seedSequences(staff: { id: string }[], tenants: { id: string; name: string }[]) {
+  console.log("\n── Seeding sequences (Page 40)…");
+
+  // Install pre-built templates if not already there.
+  const { PREBUILT_TEMPLATES } = await import("../src/lib/sequence-steps");
+  let templateCount = 0;
+  for (const t of PREBUILT_TEMPLATES) {
+    const existing = await db.sequenceTemplate.findFirst({
+      where: { name: t.name },
+      select: { id: true },
+    });
+    if (existing) continue;
+    await db.sequenceTemplate.create({
+      data: {
+        name: t.name,
+        description: t.description,
+        category: t.category,
+        triggerType: t.triggerType,
+        triggerConfig: t.triggerConfig as never,
+        blueprint: t.blueprint as never,
+      },
+    });
+    templateCount += 1;
+  }
+
+  // Build a few realistic seeded sequences using the prebuilt blueprints.
+  const SEED_PLANS = [
+    {
+      tmpl: PREBUILT_TEMPLATES[0]!, // Onboarding
+      name: "[seed] Onboarding (active)",
+      status: "ACTIVE" as const,
+      enrollments: 18,
+      conversionRate: 0.55,
+    },
+    {
+      tmpl: PREBUILT_TEMPLATES[1]!, // Trial conversion
+      name: "[seed] Trial conversion",
+      status: "ACTIVE" as const,
+      enrollments: 12,
+      conversionRate: 0.33,
+    },
+    {
+      tmpl: PREBUILT_TEMPLATES[2]!, // Win-back
+      name: "[seed] Win-back (paused)",
+      status: "PAUSED" as const,
+      enrollments: 6,
+      conversionRate: 0.16,
+    },
+    {
+      tmpl: PREBUILT_TEMPLATES[3]!, // Feature adoption
+      name: "[seed] Production board adoption",
+      status: "DRAFT" as const,
+      enrollments: 0,
+      conversionRate: 0,
+    },
+  ];
+
+  let seqCount = 0;
+  let stepCount = 0;
+  let enrollmentCount = 0;
+  let eventCount = 0;
+
+  for (const plan of SEED_PLANS) {
+    const created = await db.sequence.create({
+      data: {
+        name: plan.name,
+        description: plan.tmpl.description,
+        triggerType: plan.tmpl.triggerType,
+        triggerConfig: plan.tmpl.triggerConfig as never,
+        status: plan.status,
+        publishedAt: plan.status === "ACTIVE" || plan.status === "PAUSED" ? daysAgo(randInt(7, 30)) : null,
+        pausedAt: plan.status === "PAUSED" ? daysAgo(randInt(1, 5)) : null,
+        conversionGoal: plan.tmpl.triggerType === "TRIAL_ENDING" ? "tag:trial-converted"
+                       : plan.tmpl.triggerType === "DAYS_INACTIVE" ? "event:logged_in"
+                       : null,
+        authorId: rand(staff).id,
+      },
+      select: { id: true },
+    });
+    seqCount += 1;
+
+    // Materialize blueprint into steps with parent linkage.
+    const idByPosition = new Map<number, string>();
+    let lastBranchPos: number | null = null;
+    let lastLinearPos: number | null = null;
+    const stepIdsByEntry: string[] = [];
+    for (let i = 0; i < plan.tmpl.blueprint.length; i++) {
+      const node = plan.tmpl.blueprint[i]!;
+      let parentId: string | null = null;
+      let branchKey: string | null = null;
+      if (node.branchKey) {
+        parentId = lastBranchPos != null ? idByPosition.get(lastBranchPos) ?? null : null;
+        branchKey = node.branchKey;
+      } else {
+        parentId = lastLinearPos != null ? idByPosition.get(lastLinearPos) ?? null : null;
+      }
+      const stepRow = await db.sequenceStep.create({
+        data: {
+          sequenceId: created.id,
+          position: i,
+          parentStepId: parentId,
+          branchKey,
+          kind: node.kind,
+          config: (node.config ?? {}) as never,
+          title: node.title ?? null,
+        },
+        select: { id: true },
+      });
+      idByPosition.set(i, stepRow.id);
+      stepIdsByEntry.push(stepRow.id);
+      stepCount += 1;
+      if (node.kind === "BRANCH" || node.kind === "SPLIT") lastBranchPos = i;
+      if (!node.branchKey) lastLinearPos = i;
+    }
+
+    // Seeded enrollments — distribute across step positions.
+    const tenantSubset = sample(tenants, Math.min(plan.enrollments, tenants.length));
+    for (let i = 0; i < plan.enrollments; i++) {
+      const enrolledAt = daysAgo(randInt(1, 21));
+      const isCompleted = Math.random() < plan.conversionRate;
+      const isExited = !isCompleted && Math.random() < 0.15;
+      const tenantPick = tenantSubset[i % tenantSubset.length] ?? rand(tenants);
+      const currentStepIdx = isCompleted || isExited ? stepIdsByEntry.length - 1 : randInt(0, Math.max(0, stepIdsByEntry.length - 2));
+      const enrollment = await db.sequenceEnrollment.create({
+        data: {
+          sequenceId: created.id,
+          tenantId: tenantPick.id,
+          enrolledAt,
+          status: isCompleted ? "COMPLETED" : isExited ? "EXITED" : "ACTIVE",
+          currentStepId: isCompleted || isExited ? null : stepIdsByEntry[currentStepIdx] ?? null,
+          completedAt: isCompleted ? daysAgo(randInt(0, 3)) : null,
+          exitedAt: isExited ? daysAgo(randInt(0, 5)) : null,
+          exitReason: isExited ? rand(["unsubscribed", "manual exit", "goal mismatch"]) : null,
+        },
+        select: { id: true },
+      });
+      enrollmentCount += 1;
+
+      // Generate step events along the path the enrollee walked through.
+      const reachedIdx = isCompleted ? stepIdsByEntry.length - 1 : currentStepIdx;
+      for (let k = 0; k <= reachedIdx; k++) {
+        const stepId = stepIdsByEntry[k];
+        if (!stepId) continue;
+        await db.sequenceStepEvent.create({
+          data: {
+            enrollmentId: enrollment.id,
+            stepId,
+            event: "entered",
+            occurredAt: new Date(enrolledAt.getTime() + k * 6 * 3_600_000),
+          },
+        });
+        eventCount += 1;
+        if (k < reachedIdx) {
+          await db.sequenceStepEvent.create({
+            data: {
+              enrollmentId: enrollment.id,
+              stepId,
+              event: "completed",
+              occurredAt: new Date(enrolledAt.getTime() + (k * 6 + 3) * 3_600_000),
+            },
+          });
+          eventCount += 1;
+        }
+      }
+
+      // Bump per-step entered/converted counters
+      for (let k = 0; k <= reachedIdx; k++) {
+        const stepId = stepIdsByEntry[k];
+        if (!stepId) continue;
+        await db.sequenceStep.update({
+          where: { id: stepId },
+          data: { enteredCount: { increment: 1 } },
+        });
+      }
+      if (isCompleted) {
+        const lastStep = stepIdsByEntry[stepIdsByEntry.length - 1];
+        if (lastStep) {
+          await db.sequenceStep.update({
+            where: { id: lastStep },
+            data: { convertedCount: { increment: 1 } },
+          });
+        }
+      }
+    }
+
+    // Update aggregate counters on the sequence.
+    const completed = Math.round(plan.enrollments * plan.conversionRate);
+    const exited = Math.round(plan.enrollments * 0.15);
+    const active = plan.enrollments - completed - exited;
+    await db.sequence.update({
+      where: { id: created.id },
+      data: {
+        totalEnrolled: plan.enrollments,
+        activeEnrolled: Math.max(0, active),
+        totalConverted: completed,
+      },
+    });
+  }
+
+  console.log(`  ✓ ${seqCount} sequences, ${stepCount} steps, ${enrollmentCount} enrollments, ${eventCount} events, ${templateCount} new templates`);
 }
 
 main().catch((e) => {
