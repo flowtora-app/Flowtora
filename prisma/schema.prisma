@@ -8256,6 +8256,227 @@ enum SupportTicketModule {
 }
 
 // ────────────────────────────────────────────────────────────
+// Page 38 — Landing Pages CMS.
+// ────────────────────────────────────────────────────────────
+
+enum LandingPageStatus {
+  DRAFT
+  SCHEDULED
+  LIVE
+  ARCHIVED
+}
+
+enum LandingPageDevice {
+  DESKTOP
+  TABLET
+  MOBILE
+}
+
+enum LandingPageMetric {
+  SIGNUP        // form submission counted as signup
+  CLICK         // click on a primary CTA
+  SCROLL_DEPTH  // ≥75% scroll
+  TIME_ON_PAGE  // ≥30s on page
+  CONVERSION    // generic conversion event
+}
+
+enum LandingPageDomainStatus {
+  PENDING_VERIFICATION
+  VERIFIED
+  ERROR
+}
+
+model LandingPage {
+  id   String @id @default(cuid())
+  /** Sub-path under /lp — leading slash optional, normalized at write time. */
+  path String @unique
+  title String
+  /** Short description shown in the list table; not the SEO meta. */
+  description String?
+
+  /** Block-based content (array of blocks). See lib/lp-blocks.ts for the type. */
+  blocks Json @default("[]")
+
+  /** Code-mode override. When non-null, replaces block rendering. */
+  customHtml String?
+  customCss  String?
+  customJs   String?
+
+  // SEO
+  metaTitle       String?
+  metaDescription String?
+  ogImageUrl      String?
+  schemaJsonLd    String?
+  canonicalUrl    String?
+
+  status      LandingPageStatus @default(DRAFT)
+  publishAt   DateTime?
+  publishedAt DateTime?
+  archivedAt  DateTime?
+
+  authorId String?
+
+  /** Custom domain mapping — when set, the page is also reachable at the matched domain. */
+  customDomainId String?
+
+  // A/B test config
+  abTestPrimaryMetric LandingPageMetric?
+  abTestStartedAt     DateTime?
+  abTestWinnerLabel   String?
+
+  // Form-side schema — JSON description of what fields the form on the
+  // page collects, so the submission viewer can render columns correctly.
+  formSchema Json @default("[]")
+
+  createdAt DateTime @default(now())
+  updatedAt DateTime @updatedAt
+
+  variants    LandingPageVariant[]
+  visits      LandingPageVisit[]
+  submissions LandingPageFormSubmission[]
+  revisions   LandingPageRevision[]
+  customDomain LandingPageDomain? @relation(fields: [customDomainId], references: [id], onDelete: SetNull)
+
+  @@index([status, updatedAt])
+  @@index([authorId])
+}
+
+model LandingPageVariant {
+  id     String @id @default(cuid())
+  pageId String
+
+  label       String // "A" / "B" / "control"
+  blocks      Json    @default("[]")
+  customHtml  String?
+  customCss   String?
+  trafficPct  Int     @default(50)
+
+  // Aggregated stats — denormalized counters maintained by the tracking
+  // endpoint. Source of truth is LandingPageVisit/LandingPageFormSubmission.
+  visitCount      Int @default(0)
+  conversionCount Int @default(0)
+
+  createdAt DateTime @default(now())
+  updatedAt DateTime @updatedAt
+
+  page LandingPage @relation(fields: [pageId], references: [id], onDelete: Cascade)
+
+  @@unique([pageId, label])
+  @@index([pageId])
+}
+
+model LandingPageVisit {
+  id       String @id @default(cuid())
+  pageId   String
+  variantId String?
+
+  /** Anonymous session id — 32-char random; clients persist via cookie. */
+  sessionId    String
+  /** UTM source / referrer host. */
+  source       String?
+  utmSource    String?
+  utmMedium    String?
+  utmCampaign  String?
+  device       LandingPageDevice  @default(DESKTOP)
+  /** Set true if the session left in <5s without scrolling. */
+  bounced      Boolean            @default(false)
+  /** 0..100. */
+  scrollDepth  Int                @default(0)
+  /** Seconds. */
+  timeOnPage   Int?
+  /** Set when a conversion goal fired in-session. */
+  converted    Boolean            @default(false)
+  /** Optional country code from the request IP geolookup. */
+  country      String?
+
+  createdAt DateTime @default(now())
+
+  page LandingPage @relation(fields: [pageId], references: [id], onDelete: Cascade)
+
+  @@index([pageId, createdAt])
+  @@index([variantId])
+  @@index([sessionId])
+}
+
+model LandingPageFormSubmission {
+  id     String @id @default(cuid())
+  pageId String
+
+  /** Submitted form payload — schema lives on LandingPage.formSchema. */
+  payload   Json
+  /** Lifted out of payload when present, for the list view. */
+  email     String?
+  /** Source URL the form was submitted from. */
+  source    String?
+  utm       Json    @default("{}")
+  /** Reviewer triage — "new" / "reviewed" / "spam" / "converted". */
+  status    String  @default("new")
+  ipAddress String?
+  userAgent String?
+
+  reviewedByUserId String?
+  reviewedAt       DateTime?
+
+  createdAt DateTime @default(now())
+
+  page LandingPage @relation(fields: [pageId], references: [id], onDelete: Cascade)
+
+  @@index([pageId, createdAt])
+  @@index([status])
+}
+
+model LandingPageRevision {
+  id     String @id @default(cuid())
+  pageId String
+
+  // Snapshot of all editable surfaces at save time.
+  blocks          Json
+  customHtml      String?
+  customCss       String?
+  customJs        String?
+  metaTitle       String?
+  metaDescription String?
+  ogImageUrl      String?
+  formSchema      Json    @default("[]")
+
+  savedByUserId String?
+  note          String?
+  createdAt     DateTime @default(now())
+
+  page LandingPage @relation(fields: [pageId], references: [id], onDelete: Cascade)
+
+  @@index([pageId, createdAt])
+}
+
+model LandingPageDomain {
+  id       String                  @id @default(cuid())
+  hostname String                  @unique
+  status   LandingPageDomainStatus @default(PENDING_VERIFICATION)
+  /** Token shown to the admin so they can add the matching DNS TXT. */
+  verificationToken String
+  verifiedAt        DateTime?
+  errorMessage      String?
+
+  createdAt DateTime @default(now())
+  updatedAt DateTime @updatedAt
+
+  pages LandingPage[]
+}
+
+model LandingPageTemplate {
+  id           String  @id @default(cuid())
+  name         String
+  description  String?
+  thumbnailUrl String?
+  /** Same block JSON shape used on LandingPage.blocks. */
+  blocks       Json
+  category     String?
+
+  createdAt DateTime @default(now())
+  updatedAt DateTime @updatedAt
+}
+
+// ────────────────────────────────────────────────────────────
 // Page 37 — Bug Reports / Engineering bug tracker.
 // ────────────────────────────────────────────────────────────
 

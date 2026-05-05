@@ -22,7 +22,9 @@ import type {
   ChangelogCategory,
   FeatureRequestStatus, EngineeringEffort, VoteDirection,
   BugSeverity, BugStatus, BugEnvironment, BugFrequency,
+  LandingPageStatus, LandingPageDevice, LandingPageMetric,
 } from "@prisma/client";
+import { defaultBlock } from "../src/lib/lp-blocks";
 
 const SEED_TAG = "[seed]";
 const DAY = 86_400_000;
@@ -56,6 +58,7 @@ async function main() {
   await seedAnnouncements(platformUsers, tenants);  // Page 35
   await seedFeatureRequests(platformUsers, tenants); // Page 36
   await seedBugs(platformUsers, tenants);            // Page 37
+  await seedLandingPages(platformUsers);             // Page 38
 
   console.log("\n✓ Seed complete.\n");
   await db.$disconnect();
@@ -128,6 +131,17 @@ async function wipeOldSeed() {
     await db.bug.deleteMany({ where: { id: { in: oldBugs.map((b) => b.id) } } });
     console.log(`  deleted ${oldBugs.length} bugs`);
   }
+  // Landing pages — paths under /lp/seed/* are ours.
+  const oldLp = await db.landingPage.findMany({
+    where: { path: { startsWith: "/seed-" } },
+    select: { id: true },
+  });
+  if (oldLp.length) {
+    await db.landingPage.deleteMany({ where: { id: { in: oldLp.map((p) => p.id) } } });
+    console.log(`  deleted ${oldLp.length} landing pages`);
+  }
+  await db.landingPageDomain.deleteMany({ where: { hostname: { startsWith: "seed-" } } });
+  await db.landingPageTemplate.deleteMany({ where: { name: { startsWith: "[seed]" } } });
   // Customers tagged seed (after orders are gone).
   await db.customer.deleteMany({ where: { tags: { has: "seed" } } });
   // Products tagged seed (use description marker since Product has no tags array).
@@ -1749,6 +1763,228 @@ async function seedBugs(
   }
 
   console.log(`  ✓ ${count} bugs (+1 duplicate), ${activityCount} activity events, ${commentCount} comments, ${impactCount} tenant-impacts`);
+}
+
+/* ── Landing Pages (Page 38) ─────────────────────────── */
+
+const LP_TEMPLATES = [
+  {
+    path: "/seed-pricing",
+    title: "Flowtora — Pricing",
+    description: "Plans + Stripe-Connected billing card",
+    status: "LIVE" as LandingPageStatus,
+    blocks: [
+      defaultBlock("header"),
+      defaultBlock("hero"),
+      defaultBlock("pricing"),
+      defaultBlock("faq"),
+      defaultBlock("cta"),
+      defaultBlock("footer"),
+    ],
+    isPublic: true,
+    abTestPrimaryMetric: "SIGNUP" as LandingPageMetric,
+    metaTitle: "Pricing — Flowtora",
+    metaDescription: "Plans starting at $49/month. Built for sign + print shops.",
+  },
+  {
+    path: "/seed-features-automation",
+    title: "Flowtora — Automation features",
+    description: "Long-form features page",
+    status: "LIVE" as LandingPageStatus,
+    blocks: [
+      defaultBlock("header"),
+      defaultBlock("hero"),
+      defaultBlock("features"),
+      defaultBlock("testimonials"),
+      defaultBlock("cta"),
+      defaultBlock("footer"),
+    ],
+    isPublic: true,
+    metaTitle: "Automation — Flowtora",
+    metaDescription: "Quotes, jobs, and invoices on autopilot.",
+  },
+  {
+    path: "/seed-promo-summer",
+    title: "Summer promo — 30% off",
+    description: "Time-limited promo lander",
+    status: "DRAFT" as LandingPageStatus,
+    blocks: [
+      defaultBlock("hero"),
+      { ...defaultBlock("cta"), props: {
+        ...(defaultBlock("cta") as { props: Record<string, unknown> }).props,
+        formCapture: true,
+        headline: "Get 30% off your first 6 months",
+        primaryLabel: "Claim my discount",
+      } },
+      defaultBlock("footer"),
+    ],
+    isPublic: false,
+  },
+  {
+    path: "/seed-launch-mobile",
+    title: "Mobile app launch",
+    description: "Scheduled to publish in 2 days",
+    status: "SCHEDULED" as LandingPageStatus,
+    publishAtOffsetDays: 2,
+    blocks: [
+      defaultBlock("hero"),
+      defaultBlock("features"),
+      defaultBlock("cta"),
+    ],
+  },
+];
+
+async function seedLandingPages(staff: { id: string }[]) {
+  console.log("\n── Seeding landing pages (Page 38)…");
+
+  // Domain
+  const domain = await db.landingPageDomain.create({
+    data: {
+      hostname: "seed-go.flowtora.example",
+      verificationToken: "seed-" + Math.random().toString(36).slice(2, 10),
+      status: "VERIFIED",
+      verifiedAt: daysAgo(20),
+    },
+  });
+
+  // Template (used by createLandingPage)
+  await db.landingPageTemplate.create({
+    data: {
+      name: "[seed] Product page starter",
+      description: "Hero · features · testimonials · pricing · CTA",
+      blocks: [
+        defaultBlock("header"),
+        defaultBlock("hero"),
+        defaultBlock("features"),
+        defaultBlock("testimonials"),
+        defaultBlock("pricing"),
+        defaultBlock("cta"),
+        defaultBlock("footer"),
+      ] as never,
+      category: "Product",
+    },
+  });
+
+  let pageCount = 0;
+  let visitCount = 0;
+  let submissionCount = 0;
+
+  for (const tmpl of LP_TEMPLATES) {
+    const author = rand(staff);
+    const createdAt = daysAgo(randInt(15, 60));
+    const publishedAt = tmpl.status === "LIVE" ? daysAgo(randInt(2, 14)) : null;
+    const publishAt = ((tmpl as { publishAtOffsetDays?: number }).publishAtOffsetDays ?? 0) > 0
+      ? new Date(Date.now() + ((tmpl as { publishAtOffsetDays?: number }).publishAtOffsetDays ?? 0) * DAY)
+      : null;
+
+    const page = await db.landingPage.create({
+      data: {
+        path: tmpl.path,
+        title: tmpl.title,
+        description: tmpl.description,
+        blocks: tmpl.blocks as never,
+        status: tmpl.status,
+        publishAt,
+        publishedAt,
+        authorId: author.id,
+        customDomainId: tmpl.path === "/seed-pricing" ? domain.id : null,
+        abTestPrimaryMetric: (tmpl as { abTestPrimaryMetric?: LandingPageMetric }).abTestPrimaryMetric ?? null,
+        metaTitle: (tmpl as { metaTitle?: string }).metaTitle ?? null,
+        metaDescription: (tmpl as { metaDescription?: string }).metaDescription ?? null,
+        formSchema: tmpl.path === "/seed-promo-summer"
+          ? [{ name: "email", type: "email", required: true, label: "Work email" }] as never
+          : [] as never,
+        createdAt,
+      },
+    });
+    pageCount += 1;
+
+    // Variants — only for the LIVE pricing page.
+    if (tmpl.path === "/seed-pricing") {
+      const variantBlocks = [
+        defaultBlock("hero"),
+        defaultBlock("pricing"),
+      ];
+      const v1 = await db.landingPageVariant.create({
+        data: {
+          pageId: page.id,
+          label: "B — short copy",
+          blocks: variantBlocks as never,
+          trafficPct: 50,
+          visitCount: randInt(80, 300),
+          conversionCount: randInt(4, 18),
+        },
+      });
+      void v1;
+    }
+
+    // Visits — only for live pages.
+    if (tmpl.status === "LIVE") {
+      const totalVisits = randInt(220, 600);
+      for (let i = 0; i < totalVisits; i++) {
+        const ageDays = randInt(0, 29);
+        const sessionId = `seed-${page.id.slice(-6)}-${i}`;
+        const device = rand(["DESKTOP", "DESKTOP", "DESKTOP", "MOBILE", "MOBILE", "TABLET"] as LandingPageDevice[]);
+        const source = rand(["google", "twitter", "linkedin", "direct", "newsletter", "producthunt"] as const);
+        const scrollDepth = rand([10, 25, 40, 60, 75, 90, 100] as const);
+        const timeOnPage = randInt(2, 240);
+        const converted = scrollDepth >= 60 && Math.random() < 0.06;
+        const bounced = scrollDepth < 25 && timeOnPage < 5;
+        await db.landingPageVisit.create({
+          data: {
+            pageId: page.id,
+            sessionId,
+            source,
+            utmSource: source === "google" ? "google" : null,
+            utmMedium: source === "newsletter" ? "email" : (source === "google" ? "cpc" : null),
+            utmCampaign: source === "newsletter" ? "weekly-digest" : null,
+            device,
+            scrollDepth,
+            timeOnPage,
+            converted,
+            bounced,
+            createdAt: daysAgo(ageDays),
+          },
+        });
+        visitCount += 1;
+      }
+    }
+
+    // Submissions — only for the promo page (which has formCapture).
+    if (tmpl.path === "/seed-promo-summer") {
+      for (let i = 0; i < 8; i++) {
+        await db.landingPageFormSubmission.create({
+          data: {
+            pageId: page.id,
+            payload: {
+              email: `prospect+${i}@example.com`,
+              note: i % 3 === 0 ? "Interested for our second location" : "",
+            } as never,
+            email: `prospect+${i}@example.com`,
+            source: "newsletter",
+            utm: { source: "newsletter", campaign: "summer-promo" } as never,
+            status: i < 2 ? "converted" : i < 5 ? "reviewed" : "new",
+            createdAt: daysAgo(randInt(0, 12)),
+          },
+        });
+        submissionCount += 1;
+      }
+    }
+
+    // Initial revision so Versions tab isn't empty.
+    await db.landingPageRevision.create({
+      data: {
+        pageId: page.id,
+        blocks: tmpl.blocks as never,
+        formSchema: [] as never,
+        savedByUserId: author.id,
+        note: "Initial save",
+        createdAt,
+      },
+    });
+  }
+
+  console.log(`  ✓ ${pageCount} landing pages, ${visitCount} visits, ${submissionCount} form submissions, 1 domain, 1 template`);
 }
 
 main().catch((e) => {
