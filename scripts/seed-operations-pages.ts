@@ -21,6 +21,7 @@ import type {
   AnnouncementAudience, AnnouncementChannel,
   ChangelogCategory,
   FeatureRequestStatus, EngineeringEffort, VoteDirection,
+  BugSeverity, BugStatus, BugEnvironment, BugFrequency,
 } from "@prisma/client";
 
 const SEED_TAG = "[seed]";
@@ -54,6 +55,7 @@ async function main() {
   await seedKnowledgeBase(platformUsers);       // Page 34
   await seedAnnouncements(platformUsers, tenants);  // Page 35
   await seedFeatureRequests(platformUsers, tenants); // Page 36
+  await seedBugs(platformUsers, tenants);            // Page 37
 
   console.log("\n✓ Seed complete.\n");
   await db.$disconnect();
@@ -116,6 +118,15 @@ async function wipeOldSeed() {
   if (oldFr.length) {
     await db.featureRequest.deleteMany({ where: { id: { in: oldFr.map((f) => f.id) } } });
     console.log(`  deleted ${oldFr.length} feature requests`);
+  }
+  // Bugs tagged seed.
+  const oldBugs = await db.bug.findMany({
+    where: { tags: { has: "seed" } },
+    select: { id: true },
+  });
+  if (oldBugs.length) {
+    await db.bug.deleteMany({ where: { id: { in: oldBugs.map((b) => b.id) } } });
+    console.log(`  deleted ${oldBugs.length} bugs`);
   }
   // Customers tagged seed (after orders are gone).
   await db.customer.deleteMany({ where: { tags: { has: "seed" } } });
@@ -1413,6 +1424,331 @@ async function seedFeatureRequests(
   }
 
   console.log(`  ✓ ${count} feature requests, ${voteCount} votes, ${commentCount} comments`);
+}
+
+/* ── Bugs (Page 37) ──────────────────────────────────── */
+
+const BUG_TEMPLATES: {
+  title: string;
+  module: SupportTicketModule;
+  severity: BugSeverity;
+  status: BugStatus;
+  environment: BugEnvironment;
+  description: string;
+  reproSteps: string;
+  expected: string;
+  actual: string;
+  browserOS?: string;
+  frequency: BugFrequency;
+  businessImpact?: string;
+  tags: string[];
+  hasSentry?: boolean;
+  hasLinear?: boolean;
+  hasJira?: boolean;
+  rootCause?: string;
+  fixDescription?: string;
+}[] = [
+  {
+    title: "Stripe webhooks 5xx after invoice voids",
+    module: "BILLING", severity: "SEV1", status: "IN_REVIEW", environment: "PRODUCTION",
+    description: "Voiding a paid invoice triggers a webhook handler that throws on null charge id.\n\nObserved on 2026-04-22 ~14:00 UTC.",
+    reproSteps: "1. Issue an invoice and pay it via Stripe.\n2. Go to invoice detail → Void invoice.\n3. Watch logs — webhook handler throws.",
+    expected: "Webhook returns 200 and invoice flips to VOID.",
+    actual: "Webhook returns 500; invoice stays paid + an audit row complains about the null charge.",
+    browserOS: "n/a (server)",
+    frequency: "ALWAYS",
+    businessImpact: "Blocks finance team from voiding mistaken invoices for ~12 active tenants.",
+    tags: ["seed", "stripe", "regression", "billing"],
+    hasSentry: true, hasLinear: true,
+  },
+  {
+    title: "Quote PDF logo renders fuzzy on Retina",
+    module: "QUOTES", severity: "SEV3", status: "RESOLVED", environment: "PRODUCTION",
+    description: "Logo on the quote PDF is rasterized at 1x; looks fuzzy on retina displays + when printed.",
+    reproSteps: "1. Generate any quote PDF as a tenant with a logo set.\n2. View on a 2x display or print.",
+    expected: "Crisp logo at 2x density.",
+    actual: "Visibly jagged.",
+    browserOS: "Chrome 124 / macOS 14",
+    frequency: "ALWAYS",
+    businessImpact: "Cosmetic — but customers screenshot quotes for proposals.",
+    tags: ["seed", "pdf", "branding"],
+    hasSentry: false,
+    rootCause: "PDF kit was rendering raster at 1x device pixels because the logo URL skipped the @2x suffix selector.",
+    fixDescription: "Changed PdfKit logo loader to fetch the original asset and embed it as a vector when SVG, fallback to 2x raster otherwise.",
+  },
+  {
+    title: "Order status reverts overnight on tenants in EST",
+    module: "ORDERS", severity: "SEV2", status: "IN_PROGRESS", environment: "PRODUCTION",
+    description: "Some EST tenants find their READY orders reverting to IN_PRODUCTION at ~02:00 local.",
+    reproSteps: "1. Mark an order READY before midnight EST.\n2. Wait until 02:00 EST.\n3. Refresh — status is IN_PRODUCTION again.",
+    expected: "Status persists.",
+    actual: "Reverts.",
+    frequency: "OFTEN",
+    businessImpact: "On-time delivery rate is materially affected for the eastern shops.",
+    tags: ["seed", "timezone", "schedule"],
+    hasSentry: true,
+  },
+  {
+    title: "Sign-in fails with `Unable to handle code` on magic links",
+    module: "AUTH", severity: "SEV2", status: "TRIAGED", environment: "PRODUCTION",
+    description: "A subset of magic-link sign-ins return Unable to handle code. No pattern by browser yet — possibly link-prefetch by anti-phishing scanners.",
+    reproSteps: "Receive magic link email → click the button.",
+    expected: "Sign in.",
+    actual: "Generic error page.",
+    frequency: "SOMETIMES",
+    tags: ["seed", "auth", "magic-link"],
+    hasSentry: true,
+  },
+  {
+    title: "Proof email doesn't render the inline image on Outlook",
+    module: "EMAIL", severity: "SEV3", status: "WONT_FIX", environment: "PRODUCTION",
+    description: "Outlook 2016/2019 doesn't display the inline preview image — only the attached one. Workaround: use the attached version.",
+    reproSteps: "Send a proof to an Outlook 2016 address; open the email.",
+    expected: "Inline preview renders.",
+    actual: "Empty image placeholder.",
+    frequency: "ALWAYS",
+    tags: ["seed", "email", "outlook"],
+    hasSentry: false,
+    rootCause: "Outlook strips inline images served via base64 over a certain size.",
+    fixDescription: "Documented workaround in the help center; not patching for legacy Outlook.",
+  },
+  {
+    title: "Production stage timing skews when WorkStation is reassigned mid-job",
+    module: "ORDERS", severity: "SEV3", status: "NEW", environment: "PRODUCTION",
+    description: "If you move a stage from one WorkStation to another mid-run, the active-time accounting double-counts.",
+    reproSteps: "1. Start a stage on Station A.\n2. Pause it.\n3. Reassign to Station B and resume.",
+    expected: "Active time totals to elapsed minus pauses.",
+    actual: "It's overcounted.",
+    frequency: "RARE",
+    tags: ["seed", "production", "metrics"],
+    hasSentry: false,
+  },
+  {
+    title: "Customer portal becomes unresponsive on slow networks",
+    module: "PORTAL", severity: "SEV2", status: "IN_PROGRESS", environment: "PRODUCTION",
+    description: "Tenants with throttled networks (3G class) report 8-10s loads on the proof viewer page; sometimes never finishes.",
+    reproSteps: "Throttle to 3G in DevTools, load /portal/p/<token>.",
+    expected: "<3s.",
+    actual: "8-10s+.",
+    browserOS: "Chrome 124, mobile Safari iOS 17",
+    frequency: "OFTEN",
+    businessImpact: "Customers bail before reviewing — proofs sit unviewed for days.",
+    tags: ["seed", "portal", "performance"],
+    hasSentry: true, hasLinear: true,
+  },
+  {
+    title: "Bulk import mis-maps `phone_number` column",
+    module: "REPORTS", severity: "SEV4", status: "RESOLVED", environment: "PRODUCTION",
+    description: "CSV import maps `phone_number` to billingEmail instead of phone.",
+    reproSteps: "Import a CSV with a column literally named `phone_number`.",
+    expected: "Maps to phone.",
+    actual: "Maps to billingEmail.",
+    frequency: "OFTEN",
+    tags: ["seed", "import", "csv"],
+    hasSentry: false,
+    rootCause: "Heuristic column matcher matched `phone_number` against `billing_email` because both contain `_` — fixed precedence rule.",
+    fixDescription: "Replaced lexical match with a hand-tuned label list; added regression test for the failing case.",
+  },
+  {
+    title: "Search index returns stale results after article re-publish",
+    module: "REPORTS", severity: "SEV3", status: "RELEASED", environment: "PRODUCTION",
+    description: "KB article search shows the previous body for ~5 minutes after re-publish.",
+    reproSteps: "Publish edits, immediately search the changed phrase.",
+    expected: "New body indexed.",
+    actual: "Old body until cache expires.",
+    frequency: "ALWAYS",
+    tags: ["seed", "search", "cache"],
+    hasSentry: false,
+    rootCause: "Search cache TTL didn't invalidate on KbArticle.update.",
+    fixDescription: "Added invalidation hook in saveKbArticle; verified by support staff.",
+  },
+  {
+    title: "Settings → Team add-member loops on duplicate email",
+    module: "ADMIN", severity: "SEV4", status: "NEW", environment: "STAGING",
+    description: "Inviting a teammate whose email is already a tenant member shows a flash error and leaves the form in a half-submitted state.",
+    reproSteps: "Settings → Team → invite member with an existing member's email.",
+    expected: "Clear error + reset form.",
+    actual: "Form spinner stuck.",
+    frequency: "ALWAYS",
+    tags: ["seed", "ux", "team"],
+    hasSentry: false,
+  },
+];
+
+async function seedBugs(
+  staff: { id: string; email: string; name: string | null }[],
+  tenants: { id: string; name: string }[],
+) {
+  console.log("\n── Seeding bugs (Page 37)…");
+  let count = 0;
+  let activityCount = 0;
+  let impactCount = 0;
+  let commentCount = 0;
+  for (const tmpl of BUG_TEMPLATES) {
+    const ageDays = randInt(1, 60);
+    const createdAt = daysAgo(ageDays);
+    const reporter = rand(staff);
+    const reporterTenant = rand(tenants);
+    const assignee = (tmpl.status === "NEW" || tmpl.status === "TRIAGED") && Math.random() < 0.4
+      ? null
+      : rand(staff);
+
+    const triagedAt = (["NEW"].includes(tmpl.status)) ? null
+      : new Date(createdAt.getTime() + randInt(1, 12) * 3_600_000);
+    const startedAt = (["NEW", "TRIAGED"].includes(tmpl.status)) ? null
+      : new Date((triagedAt ?? createdAt).getTime() + randInt(2, 24) * 3_600_000);
+    const resolvedAt = (["RESOLVED", "RELEASED"].includes(tmpl.status))
+      ? new Date((startedAt ?? createdAt).getTime() + randInt(4, 72) * 3_600_000)
+      : null;
+    const releasedAt = tmpl.status === "RELEASED"
+      ? new Date((resolvedAt ?? createdAt).getTime() + randInt(2, 36) * 3_600_000)
+      : null;
+
+    const sentryId = tmpl.hasSentry
+      ? `FLOWTORA-${Math.random().toString(36).slice(2, 8).toUpperCase()}`
+      : null;
+    const linearId = tmpl.hasLinear
+      ? `ENG-${randInt(1000, 9999)}`
+      : null;
+    const jiraId = tmpl.hasJira
+      ? `PLT-${randInt(100, 999)}`
+      : null;
+
+    const bug = await db.bug.create({
+      data: {
+        title: tmpl.title,
+        description: tmpl.description,
+        reproSteps: tmpl.reproSteps,
+        expected: tmpl.expected,
+        actual: tmpl.actual,
+        browserOS: tmpl.browserOS ?? null,
+        frequency: tmpl.frequency,
+        businessImpact: tmpl.businessImpact ?? null,
+        severity: tmpl.severity,
+        status: tmpl.status,
+        environment: tmpl.environment,
+        module: tmpl.module,
+        reporterUserId: reporter.id,
+        reporterTenantId: reporterTenant.id,
+        assigneeUserId: assignee ? assignee.id : null,
+        linkedSentryIssueId: sentryId,
+        linkedLinearIssueId: linearId,
+        linkedJiraIssueId: jiraId,
+        tags: tmpl.tags,
+        rootCause: tmpl.rootCause ?? null,
+        fixDescription: tmpl.fixDescription ?? null,
+        verifiedByUserId: tmpl.fixDescription ? rand(staff).id : null,
+        postmortemUrl: (tmpl.severity === "SEV1" || tmpl.severity === "SEV2") && (tmpl.status === "RESOLVED" || tmpl.status === "RELEASED")
+          ? `https://flowtora.com/postmortems/${createdAt.toISOString().slice(0, 10)}-${tmpl.module.toLowerCase()}`
+          : null,
+        lastSyncedAt: tmpl.hasSentry ? new Date(createdAt.getTime() + randInt(60, 600) * 60_000) : null,
+        createdAt,
+        triagedAt,
+        startedAt,
+        resolvedAt,
+        releasedAt,
+      },
+      select: { id: true, number: true },
+    });
+    count += 1;
+
+    // Activity feed
+    await db.bugActivity.create({
+      data: { bugId: bug.id, action: "created", actorId: reporter.id, details: { severity: tmpl.severity }, createdAt },
+    });
+    activityCount += 1;
+    if (triagedAt) {
+      await db.bugActivity.create({
+        data: { bugId: bug.id, action: "status_changed", actorId: rand(staff).id, details: { from: "NEW", to: "TRIAGED" }, createdAt: triagedAt },
+      });
+      activityCount += 1;
+    }
+    if (assignee) {
+      await db.bugActivity.create({
+        data: { bugId: bug.id, action: "assignee_changed", actorId: rand(staff).id, details: { from: null, to: assignee.id }, createdAt: triagedAt ?? createdAt },
+      });
+      activityCount += 1;
+    }
+    if (sentryId) {
+      await db.bugActivity.create({
+        data: { bugId: bug.id, action: "sentry_synced", actorId: rand(staff).id, details: { issueId: sentryId, count: randInt(50, 500), userCount: randInt(5, 80) }, createdAt: new Date(createdAt.getTime() + 600_000) },
+      });
+      activityCount += 1;
+    }
+
+    // Comments
+    const cmts = randInt(0, 3);
+    for (let i = 0; i < cmts; i++) {
+      await db.bugComment.create({
+        data: {
+          bugId: bug.id,
+          authorId: rand(staff).id,
+          body: rand([
+            "Reproduced locally — looks like a race condition.",
+            "Talked to the reporter; they confirmed it's still happening this week.",
+            "Pulled the Sentry breadcrumbs — the failing call is in handler.ts:142.",
+            "Holding pending QA review on staging.",
+            "PR up — link in Linear.",
+          ]),
+          internal: Math.random() < 0.3,
+          createdAt: new Date(createdAt.getTime() + (i + 1) * randInt(1, 12) * 3_600_000),
+        },
+      });
+      commentCount += 1;
+      activityCount += 1;
+      await db.bugActivity.create({
+        data: { bugId: bug.id, action: "commented", actorId: rand(staff).id, details: {}, createdAt: new Date(createdAt.getTime() + (i + 1) * randInt(1, 12) * 3_600_000) },
+      });
+    }
+
+    // Tenant impacts (auto-detected when there's a Sentry link).
+    const impactedTenants = sentryId
+      ? sample(tenants, randInt(1, Math.min(3, tenants.length)))
+      : (Math.random() < 0.5 ? sample(tenants, 1) : []);
+    for (const t of impactedTenants) {
+      await db.bugTenantImpact.upsert({
+        where: { bugId_tenantId: { bugId: bug.id, tenantId: t.id } },
+        create: {
+          bugId: bug.id,
+          tenantId: t.id,
+          autoDetected: !!sentryId,
+          firstSeenAt: createdAt,
+          lastSeenAt: new Date(createdAt.getTime() + randInt(1, ageDays) * DAY),
+          note: !sentryId ? "Reported via support ticket" : null,
+        },
+        update: {},
+      });
+      impactCount += 1;
+    }
+  }
+
+  // Seed one duplicate-of bug to validate the duplicate UI.
+  const survivor = await db.bug.findFirst({
+    where: { tags: { has: "seed" }, status: "IN_REVIEW" },
+    select: { id: true, title: true },
+  });
+  if (survivor) {
+    const dup = await db.bug.create({
+      data: {
+        title: `[dup] ${survivor.title}`,
+        description: "Filed separately by another tenant — same root cause.",
+        severity: "SEV2",
+        status: "DUPLICATE",
+        environment: "PRODUCTION",
+        module: "BILLING",
+        reporterUserId: rand(staff).id,
+        reporterTenantId: rand(tenants).id,
+        duplicateOfId: survivor.id,
+        tags: ["seed", "duplicate-test"],
+      },
+    });
+    await db.bugActivity.create({
+      data: { bugId: dup.id, action: "status_changed", actorId: rand(staff).id, details: { from: "NEW", to: "DUPLICATE" } },
+    });
+    activityCount += 1;
+  }
+
+  console.log(`  ✓ ${count} bugs (+1 duplicate), ${activityCount} activity events, ${commentCount} comments, ${impactCount} tenant-impacts`);
 }
 
 main().catch((e) => {

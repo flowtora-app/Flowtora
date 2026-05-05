@@ -362,6 +362,7 @@ model Tenant {
   portalMessages     PortalMessage[]
   locations          Location[]
   supportTickets     SupportTicket[]
+  bugTenantImpacts   BugTenantImpact[]
   dataExportRequests DataExportRequest[]
   deletionRequests   AccountDeletionRequest[]
   feedback           Feedback[]
@@ -8252,6 +8253,176 @@ enum SupportTicketModule {
   EMAIL
   ADMIN
   OTHER
+}
+
+// ────────────────────────────────────────────────────────────
+// Page 37 — Bug Reports / Engineering bug tracker.
+// ────────────────────────────────────────────────────────────
+
+enum BugSeverity {
+  SEV1 // outage / data loss
+  SEV2 // major feature broken, no clean workaround
+  SEV3 // limited / cosmetic with workaround
+  SEV4 // typo / polish
+}
+
+enum BugStatus {
+  NEW
+  TRIAGED
+  IN_PROGRESS
+  IN_REVIEW
+  RESOLVED
+  RELEASED
+  WONT_FIX
+  DUPLICATE
+}
+
+enum BugEnvironment {
+  PRODUCTION
+  STAGING
+  SANDBOX
+}
+
+enum BugFrequency {
+  ALWAYS
+  OFTEN
+  SOMETIMES
+  RARE
+}
+
+model Bug {
+  id     String      @id @default(cuid())
+  /** Sequential, human-friendly issue number scoped globally. */
+  number Int         @unique @default(autoincrement())
+  title  String
+  module SupportTicketModule @default(OTHER)
+
+  description  String         @default("") // Markdown
+  reproSteps   String         @default("")
+  expected     String         @default("")
+  actual       String         @default("")
+  browserOS    String?
+  accountContext String?      // tenant-side reproduction context
+  frequency    BugFrequency   @default(SOMETIMES)
+  /** Free-form business impact summary (e.g. "blocks invoice export for 12 tenants"). */
+  businessImpact String?
+
+  severity BugSeverity    @default(SEV3)
+  status   BugStatus      @default(NEW)
+  environment BugEnvironment @default(PRODUCTION)
+
+  // Author / triage
+  reporterUserId   String?
+  reporterTenantId String? // tenant-side bug reports come in via Page 33 + convert
+  assigneeUserId   String?
+
+  // External integrations — opaque ids; the runtime sync uses these.
+  linkedSentryIssueId String?
+  linkedLinearIssueId String?
+  linkedJiraIssueId   String?
+
+  // Duplicate handling — when status = DUPLICATE, points at the survivor.
+  duplicateOfId String?
+
+  // Tags + audit
+  tags String[] @default([])
+
+  createdAt DateTime  @default(now())
+  updatedAt DateTime  @updatedAt
+  triagedAt DateTime?
+  startedAt DateTime?
+  resolvedAt DateTime?
+  releasedAt DateTime?
+
+  // Resolution detail (Page 37 §Resolution tab).
+  rootCause       String?
+  fixDescription  String?
+  verifiedByUserId String?
+  postmortemUrl   String?
+
+  // Last Sentry sync stamp — drives the "Sync with Linear/Jira status"
+  // header chip and the per-bug stack-trace render.
+  lastSyncedAt DateTime?
+
+  duplicateOf Bug? @relation("BugDuplicate", fields: [duplicateOfId], references: [id], onDelete: SetNull)
+  duplicates  Bug[] @relation("BugDuplicate")
+
+  attachments        BugAttachment[]
+  comments           BugComment[]
+  activity           BugActivity[]
+  tenantImpacts      BugTenantImpact[]
+  /** Inverse: a SupportTicket can link back here via SupportTicket.linkedBugId. */
+
+  @@index([status, severity])
+  @@index([assigneeUserId, status])
+  @@index([reporterTenantId, status])
+  @@index([module, status])
+  @@index([linkedSentryIssueId])
+}
+
+model BugAttachment {
+  id    String @id @default(cuid())
+  bugId String
+  url   String
+  name  String
+  /** "image/png" / "video/mp4" / "application/pdf" — free-form mime hint. */
+  mime  String?
+  /** Bytes — null when the uploader didn't supply it. */
+  size  Int?
+  uploadedByUserId String?
+  createdAt        DateTime @default(now())
+
+  bug Bug @relation(fields: [bugId], references: [id], onDelete: Cascade)
+
+  @@index([bugId, createdAt])
+}
+
+model BugComment {
+  id        String   @id @default(cuid())
+  bugId     String
+  authorId  String
+  body      String
+  /** Internal-only notes stay off the customer-side mirror (future). */
+  internal  Boolean  @default(false)
+  createdAt DateTime @default(now())
+
+  bug Bug @relation(fields: [bugId], references: [id], onDelete: Cascade)
+
+  @@index([bugId, createdAt])
+}
+
+model BugActivity {
+  id        String   @id @default(cuid())
+  bugId     String
+  /** Free-form action key (status_changed, assignee_changed, severity_changed, sentry_synced, …). */
+  action    String
+  /** Optional payload — JSON-encoded for flexibility. */
+  details   Json     @default("{}")
+  actorId   String?
+  createdAt DateTime @default(now())
+
+  bug Bug @relation(fields: [bugId], references: [id], onDelete: Cascade)
+
+  @@index([bugId, createdAt])
+}
+
+model BugTenantImpact {
+  id       String  @id @default(cuid())
+  bugId    String
+  tenantId String
+  /** True when populated by an automated correlator (Sentry tags, fingerprinting). */
+  autoDetected Boolean  @default(false)
+  /** Free-form note from triage. */
+  note         String?
+  firstSeenAt  DateTime @default(now())
+  lastSeenAt   DateTime @default(now())
+
+  bug    Bug    @relation(fields: [bugId], references: [id], onDelete: Cascade)
+  tenant Tenant @relation(fields: [tenantId], references: [id], onDelete: Cascade)
+
+  @@unique([bugId, tenantId])
+  @@index([bugId])
+  @@index([tenantId])
 }
 
 // ────────────────────────────────────────────────────────────

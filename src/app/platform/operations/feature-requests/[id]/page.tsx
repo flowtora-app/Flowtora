@@ -409,11 +409,11 @@ export default async function FeatureRequestDetailPage({
           {fr.linkedBugId && (
             <SidebarCard title="Linked bug">
               <Link
-                href={`/platform/support/${fr.linkedBugId}`}
+                href={`/platform/operations/bugs/${fr.linkedBugId}`}
                 className="ts-focus text-[12px] underline"
                 style={{ color: "var(--danger-fg)" }}
               >
-                Open bug ticket →
+                Open bug report →
               </Link>
             </SidebarCard>
           )}

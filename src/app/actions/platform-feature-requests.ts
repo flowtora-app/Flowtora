@@ -363,39 +363,56 @@ export async function convertFeatureRequestToBug(formData: FormData) {
 
   const fr = await db.featureRequest.findUnique({ where: { id: parsed.data.id } });
   if (!fr) redirect(`${LIST_ROUTE}?error=${encodeURIComponent("Not found")}`);
-  // Page 37 (Bug Reports) is its own surface; until then we materialize the
-  // converted bug as a SupportTicket with category=BUG so it lands in the
-  // shared inbox + has a real audit trail.
   if (!fr) return;
-  const tenantId = fr.submitterTenantId;
-  if (!tenantId) {
-    redirect(`${detailRoute(fr.id)}?error=${encodeURIComponent("Need a submitter tenant before converting")}`);
+
+  // Create the real Bug (Page 37). Submitter tenant is preserved for the
+  // tenant-impact list; if absent we still create the bug — it just won't
+  // pre-link a tenant.
+  const bug = await db.bug.create({
+    data: {
+      title: fr.title,
+      description: fr.description || "",
+      severity: "SEV3",
+      module: fr.tags.includes("billing") ? "BILLING"
+            : fr.tags.includes("auth") ? "AUTH"
+            : fr.tags.includes("proofs") ? "PROOFS"
+            : fr.tags.includes("orders") ? "ORDERS"
+            : fr.tags.includes("invoices") ? "INVOICES"
+            : fr.tags.includes("integrations") ? "INTEGRATIONS"
+            : "OTHER",
+      environment: "PRODUCTION",
+      reporterUserId: fr.submitterUserId,
+      reporterTenantId: fr.submitterTenantId,
+      tags: ["from-feature-request", ...fr.tags.filter((t) => t !== "seed")],
+      status: "NEW",
+    },
+    select: { id: true, number: true },
+  });
+  await db.bugActivity.create({
+    data: {
+      bugId: bug.id,
+      action: "created_from_feature_request",
+      actorId: ctx.userId,
+      details: { featureRequestId: fr.id, featureRequestTitle: fr.title },
+    },
+  });
+  // Pre-link the tenant impact when we know who reported it.
+  if (fr.submitterTenantId) {
+    await db.bugTenantImpact.upsert({
+      where: { bugId_tenantId: { bugId: bug.id, tenantId: fr.submitterTenantId } },
+      create: {
+        bugId: bug.id,
+        tenantId: fr.submitterTenantId,
+        autoDetected: false,
+        note: "Reporter — converted from feature request",
+      },
+      update: {},
+    });
   }
-  const ticket = await db.supportTicket.create({
-    data: {
-      tenantId,
-      subject: `[bug] ${fr.title}`,
-      category: "BUG",
-      module: "OTHER",
-      priority: "NORMAL",
-      status: "OPEN",
-      openedByUserId: fr.submitterUserId,
-    },
-    select: { id: true },
-  });
-  await db.supportTicketMessage.create({
-    data: {
-      ticketId: ticket.id,
-      authorId: ctx.userId,
-      isStaff: true,
-      internal: true,
-      body: `Converted from feature request ${fr.id} (${fr.title}). Original description:\n\n${fr.description}`,
-    },
-  });
   await db.featureRequest.update({
     where: { id: fr.id },
     data: {
-      linkedBugId: ticket.id,
+      linkedBugId: bug.id,
       status: fr.status === "SUBMITTED" || fr.status === "UNDER_REVIEW" ? "WONT_DO" : fr.status,
     },
   });
@@ -404,9 +421,10 @@ export async function convertFeatureRequestToBug(formData: FormData) {
     action: "platform.feature_request.converted_to_bug",
     entityType: "FeatureRequest",
     entityId: fr.id,
-    metadata: { actor: ctx.email, ticketId: ticket.id },
+    metadata: { actor: ctx.email, bugId: bug.id, bugNumber: bug.number },
   });
   revalidatePath(LIST_ROUTE);
   revalidatePath(detailRoute(fr.id));
-  redirect(`${detailRoute(fr.id)}?ok=converted-to-${ticket.id.slice(0, 6)}`);
+  revalidatePath("/platform/operations/bugs");
+  redirect(`/platform/operations/bugs/${bug.id}?ok=converted-from-fr-${fr.id.slice(0, 6)}`);
 }
