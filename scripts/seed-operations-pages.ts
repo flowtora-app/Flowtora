@@ -64,6 +64,7 @@ async function main() {
   await seedSequences(platformUsers, tenants);       // Page 40
   await seedReferrals(tenants);                       // Page 41
   await seedAffiliates();                             // Page 42
+  await seedSeo();                                    // Page 43
 
   console.log("\n✓ Seed complete.\n");
   await db.$disconnect();
@@ -192,6 +193,13 @@ async function wipeOldSeed() {
   await db.affiliateApplication.deleteMany({ where: { email: { endsWith: "@seed.flowtora.example" } } });
   await db.affiliateTier.deleteMany({ where: { name: { startsWith: "[seed] " } } });
   await db.affiliateCreative.deleteMany({ where: { name: { startsWith: "[seed] " } } });
+  // Page 43 — SEO seed wipe. Keywords/backlinks/broken/gaps/snapshots
+  // are tagged by deterministic markers so we can clean cleanly.
+  await db.seoKeyword.deleteMany({ where: { keyword: { startsWith: "[seed] " } } });
+  await db.seoBacklink.deleteMany({ where: { sourceDomain: { endsWith: ".seedlinks.example" } } });
+  await db.seoBrokenLink.deleteMany({ where: { brokenUrl: { contains: "seed-broken" } } });
+  await db.seoContentGap.deleteMany({ where: { keyword: { startsWith: "[seed] " } } });
+  await db.seoPageSpeedSnapshot.deleteMany({ where: { url: { endsWith: ".seed.flowtora.com" } } });
   // Customers tagged seed (after orders are gone).
   await db.customer.deleteMany({ where: { tags: { has: "seed" } } });
   // Products tagged seed (use description marker since Product has no tags array).
@@ -3220,6 +3228,311 @@ Tools I'm using → https://ref.flowtora.com/r/{{code}}`,
 
   console.log(
     `  ✓ ${affiliateRows.length} affiliates, ${tierBlueprints.length} tiers, ${creativeBlueprints.length} creatives, ${pendingApps.length} pending apps, ${totalClicks.toLocaleString()} clicks, ${totalConversions} conversions, $${(totalEarned/100).toLocaleString()} earned`,
+  );
+}
+
+/* ── Page 43 — SEO & Content ─────────────────────────── */
+
+async function seedSeo() {
+  console.log("── Seeding SEO & Content (Page 43)…");
+
+  // 1. Singleton settings.
+  await db.seoSettings.upsert({
+    where: { id: "default" },
+    create: {
+      id: "default",
+      robotsTxt:
+        "User-agent: *\nAllow: /\nDisallow: /platform/\nDisallow: /t/\nDisallow: /api/\n\nSitemap: https://flowtora.com/sitemap.xml\n",
+      sitemapEnabled: true,
+      sitemapLastGeneratedAt: daysAgo(2),
+      sitemapUrlCount: 13,
+      defaultCanonicalDomain: "https://flowtora.com",
+      metaTitleTemplate: "{{page}} | Flowtora",
+      metaDescription:
+        "Flowtora is the all-in-one shop OS for sign and print businesses. Quote, produce, proof, and bill from one place.",
+      ogImageUrl: "https://flowtora.com/og/default.png",
+      hreflangs: [
+        { lang: "en-us", url: "https://flowtora.com/" },
+        { lang: "en-ca", url: "https://flowtora.com/ca/" },
+      ],
+    },
+    update: {
+      sitemapLastGeneratedAt: daysAgo(2),
+      sitemapUrlCount: 13,
+    },
+  });
+
+  // 2. Tracked keywords. Mix of intent + position bands so the table
+  // renders meaningfully. Names tagged with "[seed] " for the wipe.
+  const keywordBlueprints: Array<{
+    keyword: string;
+    intent: "INFORMATIONAL" | "NAVIGATIONAL" | "COMMERCIAL" | "TRANSACTIONAL";
+    searchVolume: number;
+    difficulty: number;
+    position: number | null;
+    url?: string;
+    tags?: string[];
+  }> = [
+    { keyword: "[seed] sign shop software", intent: "COMMERCIAL", searchVolume: 1900, difficulty: 42, position: 4, url: "/", tags: ["core", "category"] },
+    { keyword: "[seed] print shop management software", intent: "COMMERCIAL", searchVolume: 1300, difficulty: 47, position: 7, url: "/for-print-shops", tags: ["core", "category"] },
+    { keyword: "[seed] sign making business software", intent: "COMMERCIAL", searchVolume: 880, difficulty: 38, position: 2, url: "/for-sign-shops", tags: ["category"] },
+    { keyword: "[seed] wide format printing software", intent: "COMMERCIAL", searchVolume: 720, difficulty: 51, position: 14, url: "/for-print-shops", tags: ["niche"] },
+    { keyword: "[seed] vinyl wrap shop software", intent: "COMMERCIAL", searchVolume: 590, difficulty: 36, position: 5, url: "/for-sign-shops", tags: ["niche"] },
+    { keyword: "[seed] flowtora", intent: "NAVIGATIONAL", searchVolume: 410, difficulty: 5, position: 1, url: "/", tags: ["brand"] },
+    { keyword: "[seed] flowtora pricing", intent: "TRANSACTIONAL", searchVolume: 320, difficulty: 8, position: 1, url: "/pricing", tags: ["brand", "pricing"] },
+    { keyword: "[seed] flowtora vs printavo", intent: "COMMERCIAL", searchVolume: 260, difficulty: 22, position: 6, url: "/compare/printavo", tags: ["brand", "compare"] },
+    { keyword: "[seed] sign shop quote template", intent: "INFORMATIONAL", searchVolume: 1600, difficulty: 28, position: 18, url: "/blog/sign-shop-quote-template", tags: ["content"] },
+    { keyword: "[seed] how to price wide format prints", intent: "INFORMATIONAL", searchVolume: 1100, difficulty: 31, position: 22, url: "/blog/wide-format-pricing-guide", tags: ["content"] },
+    { keyword: "[seed] sign shop workflow checklist", intent: "INFORMATIONAL", searchVolume: 480, difficulty: 18, position: 12, url: "/blog/sign-shop-workflow", tags: ["content"] },
+    { keyword: "[seed] best signage CRM", intent: "COMMERCIAL", searchVolume: 540, difficulty: 44, position: 9, url: "/", tags: ["category", "crm"] },
+    { keyword: "[seed] print shop estimating software", intent: "COMMERCIAL", searchVolume: 920, difficulty: 53, position: 23, url: "/features/estimating", tags: ["category"] },
+    { keyword: "[seed] proof approval software for sign shops", intent: "COMMERCIAL", searchVolume: 360, difficulty: 29, position: 8, url: "/features/proofs", tags: ["niche", "feature"] },
+    { keyword: "[seed] flowtora reviews", intent: "COMMERCIAL", searchVolume: 220, difficulty: 14, position: 3, url: "/reviews", tags: ["brand"] },
+    { keyword: "[seed] sign shop CRM open source", intent: "INFORMATIONAL", searchVolume: 170, difficulty: 22, position: null, tags: ["niche"] },
+    { keyword: "[seed] print job tracking software", intent: "COMMERCIAL", searchVolume: 1400, difficulty: 49, position: 28, url: "/features/queue", tags: ["category"] },
+    { keyword: "[seed] sign making jobs near me", intent: "NAVIGATIONAL", searchVolume: 800, difficulty: 32, position: null, tags: ["geo"] },
+    { keyword: "[seed] flowtora demo", intent: "NAVIGATIONAL", searchVolume: 90, difficulty: 5, position: 1, url: "/contact", tags: ["brand"] },
+    { keyword: "[seed] sign shop accounting software integration", intent: "COMMERCIAL", searchVolume: 270, difficulty: 36, position: 15, url: "/integrations/quickbooks", tags: ["integration"] },
+    { keyword: "[seed] how to start a sign shop", intent: "INFORMATIONAL", searchVolume: 2400, difficulty: 26, position: 31, url: "/blog/start-a-sign-shop", tags: ["content", "top-funnel"] },
+    { keyword: "[seed] sign shop production scheduling", intent: "COMMERCIAL", searchVolume: 350, difficulty: 41, position: 11, url: "/features/scheduling", tags: ["feature"] },
+  ];
+
+  let keywordsCreated = 0;
+  let rankingsCreated = 0;
+  for (const k of keywordBlueprints) {
+    const previousPosition = k.position == null ? null : Math.max(1, k.position + (Math.floor(Math.random() * 7) - 3));
+    const created = await db.seoKeyword.create({
+      data: {
+        keyword: k.keyword,
+        intent: k.intent,
+        searchVolume: k.searchVolume,
+        difficulty: k.difficulty,
+        position: k.position,
+        previousPosition: k.position == null ? null : previousPosition,
+        url: k.url ?? null,
+        country: "US",
+        tags: k.tags ?? [],
+        active: true,
+        lastCheckedAt: daysAgo(randInt(0, 3)),
+      },
+    });
+    keywordsCreated++;
+    // 30 days of historical ranking snapshots so the trend has shape.
+    let cur = previousPosition ?? k.position;
+    for (let i = 30; i >= 0; i--) {
+      const date = new Date(Date.now() - i * DAY);
+      const utcDate = new Date(Date.UTC(date.getUTCFullYear(), date.getUTCMonth(), date.getUTCDate()));
+      // Drift slightly each day; null positions stay null.
+      if (cur != null) {
+        cur = Math.max(1, Math.min(100, cur + (Math.floor(Math.random() * 5) - 2)));
+      }
+      await db.seoKeywordRanking.create({
+        data: { keywordId: created.id, date: utcDate, position: cur },
+      });
+      rankingsCreated++;
+    }
+  }
+
+  // 3. Backlinks. Use deterministic source domains tagged with
+  // "*.seedlinks.example" so the wipe finds them. Realistic mix of
+  // active / lost / toxic + dofollow / nofollow.
+  const backlinkSources = [
+    { domain: "techbeat.seedlinks.example",     da: 78, anchor: "Flowtora",                   target: "/",                         type: "DOFOLLOW", age: 120 },
+    { domain: "ecomtoday.seedlinks.example",    da: 71, anchor: "all-in-one shop OS",         target: "/",                         type: "DOFOLLOW", age: 95 },
+    { domain: "printersquarterly.seedlinks.example", da: 64, anchor: "print shop software",   target: "/for-print-shops",          type: "DOFOLLOW", age: 80 },
+    { domain: "signsmag.seedlinks.example",     da: 68, anchor: "sign shop CRM",              target: "/for-sign-shops",           type: "DOFOLLOW", age: 60 },
+    { domain: "smallbizadvice.seedlinks.example", da: 55, anchor: "Flowtora review",          target: "/reviews",                  type: "DOFOLLOW", age: 45 },
+    { domain: "marketingweek.seedlinks.example", da: 82, anchor: "click here",                 target: "/pricing",                  type: "NOFOLLOW", age: 40 },
+    { domain: "wideformatworld.seedlinks.example", da: 59, anchor: "Flowtora pricing",        target: "/pricing",                  type: "DOFOLLOW", age: 30 },
+    { domain: "saasreviews.seedlinks.example",  da: 62, anchor: "Flowtora",                   target: "/",                         type: "DOFOLLOW", age: 25 },
+    { domain: "vinylwrappros.seedlinks.example", da: 48, anchor: "vinyl wrap shop software",  target: "/for-sign-shops",           type: "DOFOLLOW", age: 22 },
+    { domain: "ugcforum.seedlinks.example",     da: 35, anchor: "Flowtora is great",          target: "/",                         type: "UGC",      age: 18 },
+    { domain: "printavoblog.seedlinks.example", da: 55, anchor: "competitor comparison",      target: "/compare/printavo",         type: "DOFOLLOW", age: 14 },
+    { domain: "signbusinesshub.seedlinks.example", da: 41, anchor: "see this",                target: "/",                         type: "NOFOLLOW", age: 9 },
+    { domain: "shopownerpod.seedlinks.example", da: 50, anchor: "Flowtora podcast sponsor",   target: "/",                         type: "SPONSORED", age: 7 },
+    { domain: "designersweekly.seedlinks.example", da: 67, anchor: "best proof tool",         target: "/features/proofs",          type: "DOFOLLOW", age: 5 },
+    { domain: "linkfarm.seedlinks.example",     da: 12, anchor: "click",                      target: "/",                         type: "DOFOLLOW", age: 70, status: "TOXIC" as const },
+    // Lost backlinks
+    { domain: "oldnewsletter.seedlinks.example", da: 40, anchor: "Flowtora",                  target: "/",                         type: "DOFOLLOW", age: 200, status: "LOST" as const },
+    { domain: "deadblog.seedlinks.example",     da: 30, anchor: "sign shop software",         target: "/",                         type: "DOFOLLOW", age: 150, status: "LOST" as const },
+  ];
+  let backlinksCreated = 0;
+  for (const b of backlinkSources) {
+    await db.seoBacklink.create({
+      data: {
+        sourceDomain: b.domain,
+        sourceUrl: `https://${b.domain}/article/${randInt(1000, 9999)}`,
+        targetUrl: b.target,
+        anchorText: b.anchor,
+        domainAuthority: b.da,
+        followType: b.type as "DOFOLLOW" | "NOFOLLOW" | "UGC" | "SPONSORED",
+        status: b.status ?? "ACTIVE",
+        firstSeenAt: daysAgo(b.age),
+        lastSeenAt: b.status === "LOST" ? daysAgo(b.age - 30) : daysAgo(randInt(0, 7)),
+        lostAt: b.status === "LOST" ? daysAgo(randInt(5, 25)) : null,
+        notes: b.status === "TOXIC" ? "Low-DA link farm — disavow candidate." : null,
+      },
+    });
+    backlinksCreated++;
+  }
+
+  // 4. Broken links — realistic 404/500 mix on real-feeling page paths.
+  const brokenSeeds = [
+    {
+      pageUrl: "/blog/sign-shop-workflow",
+      brokenUrl: "https://oldpartner.com/seed-broken/case-study-1",
+      statusCode: 404, anchor: "case study", context: "body",
+      fixSuggestion: "Replace with internal link to /reviews — partner site decommissioned that case study.",
+    },
+    {
+      pageUrl: "/blog/start-a-sign-shop",
+      brokenUrl: "https://archive.org/seed-broken/wayback-redirect",
+      statusCode: 500, anchor: "see archived guide", context: "body",
+      fixSuggestion: "Wayback link is timing out; switch to a stable archive snapshot URL.",
+    },
+    {
+      pageUrl: "/for-sign-shops",
+      brokenUrl: "https://samplecdn.example.com/seed-broken/icon-old.svg",
+      statusCode: 404, anchor: "icon", context: "header",
+      fixSuggestion: "Asset moved to /assets/icons/v2/. Update src= reference.",
+    },
+    {
+      pageUrl: "/pricing",
+      brokenUrl: "https://payments.stripe.com/seed-broken/legacy-checkout",
+      statusCode: 410, anchor: "secure checkout", context: "footer",
+      fixSuggestion: "Stripe legacy URL gone — point at /api/checkout instead.",
+    },
+    {
+      pageUrl: "/blog/wide-format-pricing-guide",
+      brokenUrl: "https://gist.github.com/seed-broken/old-formula",
+      statusCode: 404, anchor: "pricing formula gist", context: "body",
+      fixSuggestion: "Gist deleted by author. Replace with embedded snippet on our docs site.",
+    },
+    {
+      pageUrl: "/for-print-shops",
+      brokenUrl: "https://docs.flowtora.com/seed-broken/legacy-page",
+      statusCode: 404, anchor: "RIP integration docs", context: "body",
+      fixSuggestion: "Docs path moved to /integrations/onyx — add 301 redirect or update link.",
+    },
+  ];
+  for (const b of brokenSeeds) {
+    await db.seoBrokenLink.create({
+      data: {
+        pageUrl: b.pageUrl,
+        brokenUrl: b.brokenUrl,
+        statusCode: b.statusCode,
+        anchorText: b.anchor,
+        context: b.context,
+        fixSuggestion: b.fixSuggestion,
+        firstDetectedAt: daysAgo(randInt(2, 30)),
+        lastCheckedAt: daysAgo(randInt(0, 2)),
+        status: "OPEN",
+      },
+    });
+  }
+  // 2 resolved historical entries.
+  for (let i = 0; i < 2; i++) {
+    await db.seoBrokenLink.create({
+      data: {
+        pageUrl: "/blog/post-" + i,
+        brokenUrl: `https://archived.example.com/seed-broken/old-${i}`,
+        statusCode: 404,
+        anchorText: "previous post",
+        context: "footer",
+        fixSuggestion: "Pointed at root of section index.",
+        firstDetectedAt: daysAgo(60 + i * 10),
+        lastCheckedAt: daysAgo(40 + i * 10),
+        resolvedAt: daysAgo(35 + i * 10),
+        resolutionNote: "Replaced with internal canonical link.",
+        status: "RESOLVED",
+      },
+    });
+  }
+
+  // 5. Content gaps — opportunities, tagged with [seed] keyword prefix.
+  const gapSeeds = [
+    { keyword: "[seed] sign shop pricing calculator",   sv: 1300, diff: 24, intent: "INFORMATIONAL", competitor: "https://printavo.com/blog/pricing-calculator", competitorDomain: "printavo.com",   ourPos: null, status: "OPEN" },
+    { keyword: "[seed] sign shop POS integration",      sv: 880,  diff: 31, intent: "COMMERCIAL",    competitor: "https://shopvox.com/pos",                       competitorDomain: "shopvox.com",     ourPos: null, status: "OPEN" },
+    { keyword: "[seed] vinyl signs cost guide",          sv: 1900, diff: 22, intent: "INFORMATIONAL", competitor: "https://signshopadvisor.com/vinyl-signs-cost", competitorDomain: "signshopadvisor.com", ourPos: 47, status: "OPEN" },
+    { keyword: "[seed] commercial signage maintenance", sv: 480,  diff: 18, intent: "INFORMATIONAL", competitor: "https://nationalsigns.com/maintenance",         competitorDomain: "nationalsigns.com", ourPos: null, status: "IN_PROGRESS" },
+    { keyword: "[seed] print shop estimating template", sv: 720,  diff: 28, intent: "INFORMATIONAL", competitor: "https://printingnews.com/templates",            competitorDomain: "printingnews.com", ourPos: 38, status: "OPEN" },
+    { keyword: "[seed] sign shop hiring guide",          sv: 320,  diff: 14, intent: "INFORMATIONAL", competitor: null,                                            competitorDomain: null,              ourPos: null, status: "OPEN" },
+    { keyword: "[seed] best small business invoicing software", sv: 8100, diff: 67, intent: "COMMERCIAL", competitor: "https://wave.financial/invoicing",      competitorDomain: "wave.financial",  ourPos: null, status: "IGNORED" },
+    { keyword: "[seed] proof approval workflow examples", sv: 240, diff: 19, intent: "INFORMATIONAL", competitor: "https://proofhq.com/blog/workflow",            competitorDomain: "proofhq.com",     ourPos: null, status: "PUBLISHED" },
+  ];
+  for (const g of gapSeeds) {
+    await db.seoContentGap.create({
+      data: {
+        keyword: g.keyword,
+        searchVolume: g.sv,
+        difficulty: g.diff,
+        intent: g.intent as "INFORMATIONAL" | "NAVIGATIONAL" | "COMMERCIAL" | "TRANSACTIONAL",
+        competitorUrl: g.competitor,
+        competitorDomain: g.competitorDomain,
+        ourPosition: g.ourPos,
+        status: g.status as "OPEN" | "IN_PROGRESS" | "PUBLISHED" | "IGNORED",
+        notes: g.status === "PUBLISHED" ? "Shipped Mar '26 — ranking on page 2 already." :
+               g.status === "IN_PROGRESS" ? "Outline drafted, copy in review." :
+               g.status === "IGNORED" ? "Out of niche — too broad for our audience." : null,
+        createdAt: daysAgo(randInt(7, 90)),
+        closedAt: g.status === "PUBLISHED" || g.status === "IGNORED" ? daysAgo(randInt(0, 30)) : null,
+      },
+    });
+  }
+
+  // 6. Page Speed snapshots — 8 snapshots per (url, device) over 60d.
+  const urls = [
+    "home.seed.flowtora.com",
+    "pricing.seed.flowtora.com",
+    "for-sign-shops.seed.flowtora.com",
+    "for-print-shops.seed.flowtora.com",
+    "features.seed.flowtora.com",
+    "blog.seed.flowtora.com",
+    "contact.seed.flowtora.com",
+  ];
+  const baselineByUrl: Record<string, { lcp: number; inp: number; cls: number; ttfb: number; mobileScore: number; desktopScore: number }> = {
+    "home.seed.flowtora.com":            { lcp: 2.1, inp: 145, cls: 0.04, ttfb: 220, mobileScore: 88, desktopScore: 96 },
+    "pricing.seed.flowtora.com":         { lcp: 2.8, inp: 195, cls: 0.07, ttfb: 280, mobileScore: 78, desktopScore: 92 },
+    "for-sign-shops.seed.flowtora.com":  { lcp: 2.5, inp: 165, cls: 0.05, ttfb: 240, mobileScore: 82, desktopScore: 94 },
+    "for-print-shops.seed.flowtora.com": { lcp: 2.7, inp: 185, cls: 0.08, ttfb: 270, mobileScore: 79, desktopScore: 91 },
+    "features.seed.flowtora.com":        { lcp: 3.4, inp: 260, cls: 0.12, ttfb: 320, mobileScore: 64, desktopScore: 84 },
+    "blog.seed.flowtora.com":            { lcp: 4.2, inp: 380, cls: 0.18, ttfb: 410, mobileScore: 48, desktopScore: 72 },
+    "contact.seed.flowtora.com":         { lcp: 1.9, inp: 130, cls: 0.03, ttfb: 200, mobileScore: 91, desktopScore: 97 },
+  };
+  let snapshots = 0;
+  for (const url of urls) {
+    const base = baselineByUrl[url]!;
+    for (const device of ["MOBILE", "DESKTOP"] as const) {
+      for (let snap = 7; snap >= 0; snap--) {
+        const measuredAt = daysAgo(snap * 8); // every 8 days for 56 days total
+        // Mobile typically scores lower; jitter slightly per snapshot.
+        const isMobile = device === "MOBILE";
+        const baselineScore = isMobile ? base.mobileScore : base.desktopScore;
+        const jitter = Math.floor(Math.random() * 7) - 3;
+        const score = Math.max(20, Math.min(100, baselineScore + jitter));
+        const lcpJitter = (Math.random() * 0.4 - 0.2);
+        const inpJitter = (Math.random() * 40 - 20);
+        const clsJitter = (Math.random() * 0.04 - 0.02);
+        const ttfbJitter = (Math.random() * 60 - 30);
+        await db.seoPageSpeedSnapshot.create({
+          data: {
+            url,
+            device,
+            lcp: Math.max(0.5, +(base.lcp + (isMobile ? 0 : -0.5) + lcpJitter).toFixed(3)),
+            inp: Math.max(40, +(base.inp + (isMobile ? 0 : -40) + inpJitter).toFixed(1)),
+            cls: Math.max(0, +(base.cls + clsJitter).toFixed(3)),
+            ttfb: Math.max(80, +(base.ttfb + ttfbJitter).toFixed(1)),
+            performanceScore: score,
+            measuredAt,
+          },
+        });
+        snapshots++;
+      }
+    }
+  }
+
+  console.log(
+    `  ✓ ${keywordsCreated} keywords (+ ${rankingsCreated} ranking history rows), ${backlinksCreated} backlinks, ${brokenSeeds.length}+2 broken links, ${gapSeeds.length} content gaps, ${snapshots} page-speed snapshots`,
   );
 }
 

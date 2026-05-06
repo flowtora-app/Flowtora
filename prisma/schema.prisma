@@ -9683,6 +9683,228 @@ model AffiliateMessage {
   @@index([affiliateId, createdAt])
 }
 
+// ────────────────────────────────────────────────────────────
+// Page 43 — SEO & Content.
+//
+// Backs /platform/marketing/seo. Six sections:
+//   1. Site-wide settings (robots.txt, sitemap, canonical, meta)
+//   2. Keyword rankings (synced from SEMrush/Ahrefs in production;
+//      the seed populates realistic snapshots so the UI has data)
+//   3. Backlink monitoring (referring domains, anchor text, status)
+//   4. Broken link checker (queue with fix suggestions)
+//   5. Content gaps (keyword opportunities not yet ranking)
+//   6. Page speed / Core Web Vitals (LCP, INP, CLS) per page
+//
+// External API integration is intentionally schema-only — admin can
+// kick off "Sync now" actions which seed realistic mock data so the
+// product feels real before the actual SEMrush/Ahrefs creds land.
+// ────────────────────────────────────────────────────────────
+
+enum SeoIntent {
+  INFORMATIONAL
+  NAVIGATIONAL
+  COMMERCIAL
+  TRANSACTIONAL
+}
+
+enum SeoFollowType {
+  DOFOLLOW
+  NOFOLLOW
+  UGC
+  SPONSORED
+}
+
+enum SeoBacklinkStatus {
+  ACTIVE
+  LOST
+  TOXIC
+}
+
+enum SeoBrokenLinkStatus {
+  OPEN
+  RESOLVED
+  IGNORED
+}
+
+enum SeoContentGapStatus {
+  OPEN
+  IN_PROGRESS
+  PUBLISHED
+  IGNORED
+}
+
+enum SeoPageSpeedDevice {
+  MOBILE
+  DESKTOP
+}
+
+model SeoSettings {
+  id String @id @default("default")
+
+  /** Raw robots.txt body — hand-edited by admins. */
+  robotsTxt              String  @default("User-agent: *\nAllow: /\nSitemap: https://flowtora.com/sitemap.xml\n")
+  /** Whether the auto-generated sitemap is enabled. */
+  sitemapEnabled         Boolean @default(true)
+  sitemapLastGeneratedAt DateTime?
+  sitemapUrlCount        Int     @default(0)
+
+  /** Default canonical domain (e.g. https://flowtora.com). */
+  defaultCanonicalDomain String?
+
+  /** Default meta title template — supports {{page}} / {{site}}. */
+  metaTitleTemplate      String  @default("{{page}} | Flowtora")
+  /** Default meta description shown when a page doesn't override. */
+  metaDescription        String?
+  /** Default Open Graph image URL. */
+  ogImageUrl             String?
+
+  /** hreflang alternates as JSON: [{ lang: "en-us", url: "..." }, ...]. */
+  hreflangs              Json    @default("[]")
+
+  updatedById String?
+  updatedAt   DateTime @updatedAt
+  createdAt   DateTime @default(now())
+}
+
+model SeoKeyword {
+  id        String     @id @default(cuid())
+  keyword   String     @unique
+  intent    SeoIntent  @default(INFORMATIONAL)
+  /** Monthly search volume (from SEMrush/Ahrefs). */
+  searchVolume Int?
+  /** Difficulty 0-100 (higher = harder to rank). */
+  difficulty   Int?
+  /** Current SERP position. Null = not in top 100. */
+  position         Int?
+  previousPosition Int?
+  /** URL on our site we're trying to rank for this keyword. */
+  url      String?
+  /** Country code — most rows are "US"; supports international tracking. */
+  country  String   @default("US")
+  /** Free-form admin tags. */
+  tags     String[] @default([])
+
+  lastCheckedAt DateTime?
+  active        Boolean   @default(true)
+
+  createdAt DateTime @default(now())
+  updatedAt DateTime @updatedAt
+
+  history SeoKeywordRanking[]
+
+  @@index([active, position])
+  @@index([country, intent])
+}
+
+model SeoKeywordRanking {
+  id        String   @id @default(cuid())
+  keywordId String
+  /** SERP position on this date. Null = not in top 100. */
+  position  Int?
+  date      DateTime
+
+  keyword SeoKeyword @relation(fields: [keywordId], references: [id], onDelete: Cascade)
+
+  @@unique([keywordId, date])
+  @@index([date])
+}
+
+model SeoBacklink {
+  id              String            @id @default(cuid())
+  sourceDomain    String
+  sourceUrl       String
+  targetUrl       String
+  anchorText      String?
+  /** Domain-authority style score (0-100). */
+  domainAuthority Int?
+  followType      SeoFollowType     @default(DOFOLLOW)
+  status          SeoBacklinkStatus @default(ACTIVE)
+
+  firstSeenAt DateTime  @default(now())
+  lastSeenAt  DateTime  @default(now())
+  lostAt      DateTime?
+
+  notes String?
+
+  @@index([sourceDomain])
+  @@index([status, lastSeenAt])
+  @@index([targetUrl])
+}
+
+model SeoBrokenLink {
+  id           String              @id @default(cuid())
+  /** Page on OUR site that contains the broken link. */
+  pageUrl      String
+  /** The broken URL that pageUrl is linking to. */
+  brokenUrl    String
+  /** Last-seen HTTP status code (404, 500, etc). */
+  statusCode   Int
+  anchorText   String?
+  /** Where on the page the link sits (header / body / footer). */
+  context      String?
+
+  status       SeoBrokenLinkStatus @default(OPEN)
+
+  firstDetectedAt DateTime @default(now())
+  lastCheckedAt   DateTime @default(now())
+
+  /** Heuristic suggestion for how to fix (auto-generated). */
+  fixSuggestion   String?
+
+  resolvedAt     DateTime?
+  resolvedById   String?
+  resolutionNote String?
+
+  @@index([status, lastCheckedAt])
+  @@index([pageUrl])
+}
+
+model SeoContentGap {
+  id String @id @default(cuid())
+
+  keyword         String
+  searchVolume    Int?
+  difficulty      Int?
+  intent          SeoIntent @default(INFORMATIONAL)
+  /** URL of a top-ranking competitor page for this keyword. */
+  competitorUrl    String?
+  competitorDomain String?
+  /** Current position our site holds for this keyword (null = not ranking). */
+  ourPosition Int?
+
+  status      SeoContentGapStatus @default(OPEN)
+  assignedToId String?
+  notes       String?
+
+  createdAt DateTime  @default(now())
+  closedAt  DateTime?
+
+  @@index([status, searchVolume(sort: Desc)])
+  @@index([assignedToId])
+}
+
+model SeoPageSpeedSnapshot {
+  id  String              @id @default(cuid())
+  url String
+  device SeoPageSpeedDevice @default(MOBILE)
+
+  /** Largest Contentful Paint (seconds). */
+  lcp Float?
+  /** Interaction to Next Paint (milliseconds). */
+  inp Float?
+  /** Cumulative Layout Shift (unitless, lower = better). */
+  cls Float?
+  /** Time to First Byte (milliseconds). */
+  ttfb Float?
+  /** Lighthouse-style performance score 0-100. */
+  performanceScore Int?
+
+  measuredAt DateTime @default(now())
+
+  @@index([url, measuredAt])
+  @@index([device, measuredAt])
+}
+
 model AffiliateProgramSettings {
   id String @id @default("default")
 
