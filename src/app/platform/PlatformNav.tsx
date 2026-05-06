@@ -82,6 +82,7 @@ const NAV_ITEMS: NavItem[] = [
   { href: "/platform/marketing/referrals",          label: "Referral Program",     icon: "Sparkles" },
   { href: "/platform/marketing/affiliates",         label: "Affiliate Program",    icon: "Vendors" },
   { href: "/platform/marketing/seo",                label: "SEO & Content",        icon: "Globe" },
+  { href: "/platform/marketing/leads",              label: "Lead Inbox",           icon: "Target" },
 ];
 
 const COLLAPSE_KEY = "flowtora.platform-nav.collapsed";

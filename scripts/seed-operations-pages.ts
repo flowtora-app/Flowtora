@@ -65,6 +65,7 @@ async function main() {
   await seedReferrals(tenants);                       // Page 41
   await seedAffiliates();                             // Page 42
   await seedSeo();                                    // Page 43
+  await seedLeadInbox(platformUsers, tenants);        // Page 44
 
   console.log("\n✓ Seed complete.\n");
   await db.$disconnect();
@@ -200,6 +201,16 @@ async function wipeOldSeed() {
   await db.seoBrokenLink.deleteMany({ where: { brokenUrl: { contains: "seed-broken" } } });
   await db.seoContentGap.deleteMany({ where: { keyword: { startsWith: "[seed] " } } });
   await db.seoPageSpeedSnapshot.deleteMany({ where: { url: { endsWith: ".seed.flowtora.com" } } });
+  // Page 44 — leads tagged "@seed.flowtora.example" plus their cascaded
+  // activity/tasks/emails/routing.
+  const seedLeads = await db.marketingLead.findMany({
+    where: { email: { endsWith: "@seed.flowtora.example" } },
+    select: { id: true },
+  });
+  if (seedLeads.length) {
+    await db.marketingLead.deleteMany({ where: { id: { in: seedLeads.map((l) => l.id) } } });
+    console.log(`  deleted ${seedLeads.length} seed leads (cascades to activities/tasks/emails/routing)`);
+  }
   // Customers tagged seed (after orders are gone).
   await db.customer.deleteMany({ where: { tags: { has: "seed" } } });
   // Products tagged seed (use description marker since Product has no tags array).
@@ -3533,6 +3544,638 @@ async function seedSeo() {
 
   console.log(
     `  ✓ ${keywordsCreated} keywords (+ ${rankingsCreated} ranking history rows), ${backlinksCreated} backlinks, ${brokenSeeds.length}+2 broken links, ${gapSeeds.length} content gaps, ${snapshots} page-speed snapshots`,
+  );
+}
+
+/* ── Page 44 — Lead Inbox ───────────────────────────── */
+
+async function seedLeadInbox(
+  staff: { id: string }[],
+  tenants: { id: string; name: string; slug: string }[],
+) {
+  console.log("── Seeding lead inbox (Page 44)…");
+
+  const owners = staff.slice(0, Math.min(5, staff.length));
+  if (owners.length === 0) {
+    console.log("  skipped — no platform staff to assign as owners");
+    return;
+  }
+
+  // Realistic lead blueprints — mix of statuses, sources, scores,
+  // owners, regions, industries, tags. All tagged via @seed.flowtora.example.
+  type LeadPlan = {
+    name: string;
+    company: string | null;
+    role: string | null;
+    phone: string | null;
+    region: string;
+    industry: string;
+    tags: string[];
+    teamSize: string | null;
+    source: "INQUIRY" | "DEMO" | "NEWSLETTER" | "TRIAL_ABANDON";
+    sourcePath: string | null;
+    utmSource: string | null;
+    utmMedium: string | null;
+    utmCampaign: string | null;
+    status: "NEW" | "CONTACTED" | "QUALIFIED" | "CONVERTED" | "DISQUALIFIED" | "SPAM";
+    score: number;
+    pageViews: number;
+    formSubmits: number;
+    emailOpens: number;
+    emailClicks: number;
+    callsLogged: number;
+    meetings: number;
+    ageDays: number;
+    message: string | null;
+    convertTenantIdx?: number;
+  };
+
+  const leadPlans: LeadPlan[] = [
+    {
+      name: "Sandra Mitchell", company: "BrightSign Co.", role: "Owner",
+      phone: "+1 (503) 555-0199", region: "Pacific Northwest", industry: "Sign shop",
+      tags: ["high-intent", "demo-booked"], teamSize: "6-25",
+      source: "DEMO", sourcePath: "/contact", utmSource: "google", utmMedium: "cpc", utmCampaign: "spring-2026-shops",
+      status: "QUALIFIED", score: 78,
+      pageViews: 14, formSubmits: 2, emailOpens: 6, emailClicks: 3, callsLogged: 1, meetings: 1,
+      ageDays: 18,
+      message: "Looking to consolidate 5 spreadsheets + Trello + a paper proof process into one app. Ready to evaluate seriously.",
+    },
+    {
+      name: "Diego Reyes", company: "Costa Print Studios", role: "Operations Manager",
+      phone: "+1 (305) 555-0143", region: "Southeast US", industry: "Print shop",
+      tags: ["multi-location", "from-podcast"], teamSize: "26-100",
+      source: "DEMO", sourcePath: "/for-print-shops", utmSource: "podcast", utmMedium: "audio", utmCampaign: "shop-owner-fm-q2",
+      status: "QUALIFIED", score: 82,
+      pageViews: 22, formSubmits: 1, emailOpens: 9, emailClicks: 5, callsLogged: 2, meetings: 2,
+      ageDays: 12,
+      message: "We have 3 locations and Printavo isn't scaling. Need multi-location support and customer portal.",
+    },
+    {
+      name: "Ada Nwosu", company: "Lagos Letters", role: "Founder",
+      phone: null, region: "EU-NG", industry: "Sign shop",
+      tags: ["international"], teamSize: "1-5",
+      source: "INQUIRY", sourcePath: "/contact", utmSource: null, utmMedium: null, utmCampaign: null,
+      status: "CONTACTED", score: 42,
+      pageViews: 7, formSubmits: 1, emailOpens: 2, emailClicks: 0, callsLogged: 0, meetings: 0,
+      ageDays: 5,
+      message: "Do you support local Nigerian payment rails? Curious if Flowtora fits a 2-person sign shop.",
+    },
+    {
+      name: "Tom Hanson", company: "Mountain Wraps", role: "Owner",
+      phone: "+1 (406) 555-0124", region: "Mountain West", industry: "Vinyl wraps",
+      tags: ["wraps-niche"], teamSize: "1-5",
+      source: "DEMO", sourcePath: "/for-sign-shops", utmSource: "facebook", utmMedium: "social", utmCampaign: "wraps-jan",
+      status: "CONVERTED", score: 88,
+      pageViews: 28, formSubmits: 2, emailOpens: 12, emailClicks: 7, callsLogged: 3, meetings: 2,
+      ageDays: 35,
+      message: "Demo went great. Moving from spreadsheets. Need to start with quote → proof → invoice asap.",
+      convertTenantIdx: 0,
+    },
+    {
+      name: "Yuki Tanaka", company: "PrintPro Tokyo", role: "Studio Lead",
+      phone: "+81 90-5555-2210", region: "Asia-JP", industry: "Print shop",
+      tags: ["international", "translated-needs"], teamSize: "6-25",
+      source: "NEWSLETTER", sourcePath: "/", utmSource: "twitter", utmMedium: "social", utmCampaign: null,
+      status: "NEW", score: 18,
+      pageViews: 3, formSubmits: 1, emailOpens: 1, emailClicks: 0, callsLogged: 0, meetings: 0,
+      ageDays: 1,
+      message: null,
+    },
+    {
+      name: "Rachel Goldman", company: "Lighthouse Design", role: "Co-founder",
+      phone: "+1 (617) 555-0188", region: "Northeast US", industry: "Design agency",
+      tags: ["agency", "design"], teamSize: "6-25",
+      source: "INQUIRY", sourcePath: "/contact", utmSource: "linkedin", utmMedium: "social", utmCampaign: "agency-q2",
+      status: "CONTACTED", score: 51,
+      pageViews: 11, formSubmits: 1, emailOpens: 4, emailClicks: 2, callsLogged: 1, meetings: 0,
+      ageDays: 9,
+      message: "We white-label sign jobs to a partner shop. Curious if Flowtora's portal works for that handoff.",
+    },
+    {
+      name: "Marco Bianchi", company: "Bianchi Insegne", role: "Owner",
+      phone: "+39 320 555 4421", region: "EU-IT", industry: "Sign shop",
+      tags: ["international"], teamSize: "1-5",
+      source: "TRIAL_ABANDON", sourcePath: "/signup", utmSource: null, utmMedium: null, utmCampaign: null,
+      status: "NEW", score: 28,
+      pageViews: 6, formSubmits: 0, emailOpens: 0, emailClicks: 0, callsLogged: 0, meetings: 0,
+      ageDays: 2,
+      message: null,
+    },
+    {
+      name: "Priya Sharma", company: "Bangalore Banner Co.", role: "Sales Lead",
+      phone: "+91 98 5555 1109", region: "Asia-IN", industry: "Sign shop",
+      tags: ["international"], teamSize: "26-100",
+      source: "DEMO", sourcePath: "/contact", utmSource: "google", utmMedium: "cpc", utmCampaign: "intl-shops-q2",
+      status: "QUALIFIED", score: 71,
+      pageViews: 18, formSubmits: 2, emailOpens: 7, emailClicks: 3, callsLogged: 1, meetings: 1,
+      ageDays: 22,
+      message: "We do volume work for retail chains. Need quote-to-cash automation. Currently using spreadsheets + WhatsApp.",
+    },
+    {
+      name: "Brandon Lee", company: "Texas Signworks", role: "Owner",
+      phone: "+1 (214) 555-0067", region: "Southwest US", industry: "Sign shop",
+      tags: ["pricing-objection"], teamSize: "1-5",
+      source: "INQUIRY", sourcePath: "/pricing", utmSource: "google", utmMedium: "organic", utmCampaign: null,
+      status: "DISQUALIFIED", score: 22,
+      pageViews: 5, formSubmits: 1, emailOpens: 2, emailClicks: 0, callsLogged: 1, meetings: 0,
+      ageDays: 28,
+      message: "Pricing is a bit steep for a 2-person shop. Will revisit if we hire a third.",
+    },
+    {
+      name: "Olivia Park", company: "Park & Parker Press", role: "Operations",
+      phone: "+1 (415) 555-7741", region: "West Coast", industry: "Print shop",
+      tags: ["west-coast"], teamSize: "6-25",
+      source: "DEMO", sourcePath: "/for-print-shops", utmSource: "twitter", utmMedium: "social", utmCampaign: null,
+      status: "CONTACTED", score: 56,
+      pageViews: 13, formSubmits: 1, emailOpens: 5, emailClicks: 2, callsLogged: 1, meetings: 1,
+      ageDays: 7,
+      message: "Booked a demo. Currently on Shopvox; the proof workflow there is hurting us.",
+    },
+    {
+      name: "Hassan Al-Rashid", company: null, role: null,
+      phone: null, region: "MENA-AE", industry: "Sign shop",
+      tags: ["consumer-spam-pattern"], teamSize: null,
+      source: "NEWSLETTER", sourcePath: "/", utmSource: null, utmMedium: null, utmCampaign: null,
+      status: "SPAM", score: 0,
+      pageViews: 0, formSubmits: 1, emailOpens: 0, emailClicks: 0, callsLogged: 0, meetings: 0,
+      ageDays: 14,
+      message: "Buy cheap watches reply now",
+    },
+    {
+      name: "Megan Fitzgerald", company: "Hudson Sign Lab", role: "Co-owner",
+      phone: "+1 (212) 555-3398", region: "Northeast US", industry: "Sign shop",
+      tags: ["agency-partner"], teamSize: "6-25",
+      source: "INQUIRY", sourcePath: "/contact", utmSource: "newsletter", utmMedium: "email", utmCampaign: "biz-mag-feb",
+      status: "CONVERTED", score: 84,
+      pageViews: 24, formSubmits: 3, emailOpens: 11, emailClicks: 6, callsLogged: 2, meetings: 2,
+      ageDays: 60,
+      message: "Came in via the trade mag feature. We've been on Excel for 8 years. Time to stop.",
+      convertTenantIdx: 1,
+    },
+    {
+      name: "Liam Sanchez", company: "Sanchez Vinyl", role: "Owner",
+      phone: "+1 (305) 555-0991", region: "Southeast US", industry: "Vinyl wraps",
+      tags: ["wraps-niche", "podcast-listener"], teamSize: "1-5",
+      source: "DEMO", sourcePath: "/contact", utmSource: "podcast", utmMedium: "audio", utmCampaign: "shop-owner-fm-q2",
+      status: "QUALIFIED", score: 67,
+      pageViews: 16, formSubmits: 1, emailOpens: 6, emailClicks: 3, callsLogged: 1, meetings: 1,
+      ageDays: 11,
+      message: "Heard you on the podcast. Need real proof tracking for car wraps — paper sucks.",
+    },
+    {
+      name: "Sophia Klein", company: "Klein & Co. Studios", role: "Founder",
+      phone: null, region: "EU-DE", industry: "Design agency",
+      tags: ["international", "agency"], teamSize: "1-5",
+      source: "INQUIRY", sourcePath: "/contact", utmSource: null, utmMedium: null, utmCampaign: null,
+      status: "NEW", score: 32,
+      pageViews: 4, formSubmits: 1, emailOpens: 1, emailClicks: 0, callsLogged: 0, meetings: 0,
+      ageDays: 0,
+      message: "Curious about EU GDPR compliance for portal data.",
+    },
+    {
+      name: "Carlos Vega", company: "Vega Wide-Format", role: "Owner",
+      phone: "+1 (520) 555-2233", region: "Southwest US", industry: "Wide-format print",
+      tags: ["wide-format"], teamSize: "6-25",
+      source: "DEMO", sourcePath: "/for-print-shops", utmSource: "google", utmMedium: "cpc", utmCampaign: "wide-format-q2",
+      status: "CONTACTED", score: 49,
+      pageViews: 9, formSubmits: 1, emailOpens: 3, emailClicks: 1, callsLogged: 0, meetings: 0,
+      ageDays: 4,
+      message: "Replacing a clunky in-house tool. Need RIP integration roadmap.",
+    },
+    {
+      name: "Jenna Phillips", company: "Phillips Print Group", role: "GM",
+      phone: "+1 (404) 555-7710", region: "Southeast US", industry: "Print shop",
+      tags: ["growth-stage"], teamSize: "26-100",
+      source: "INQUIRY", sourcePath: "/contact", utmSource: "linkedin", utmMedium: "social", utmCampaign: null,
+      status: "QUALIFIED", score: 75,
+      pageViews: 19, formSubmits: 2, emailOpens: 8, emailClicks: 4, callsLogged: 2, meetings: 1,
+      ageDays: 16,
+      message: "We're 38 staff across 2 locations. Roll-up coming. Need Flowtora to scale with us.",
+    },
+    {
+      name: "Lori Adams", company: "Adams Sign Co.", role: "Owner",
+      phone: "+1 (303) 555-3334", region: "Mountain West", industry: "Sign shop",
+      tags: ["small-biz"], teamSize: "1-5",
+      source: "TRIAL_ABANDON", sourcePath: "/signup", utmSource: "facebook", utmMedium: "social", utmCampaign: null,
+      status: "CONTACTED", score: 38,
+      pageViews: 5, formSubmits: 0, emailOpens: 2, emailClicks: 1, callsLogged: 1, meetings: 0,
+      ageDays: 6,
+      message: null,
+    },
+    {
+      name: "Felix Rosenberg", company: "Rosenberg Press", role: "Owner",
+      phone: "+1 (612) 555-9991", region: "Midwest US", industry: "Print shop",
+      tags: ["legacy-systems"], teamSize: "26-100",
+      source: "DEMO", sourcePath: "/for-print-shops", utmSource: "google", utmMedium: "cpc", utmCampaign: "legacy-replace",
+      status: "CONTACTED", score: 61,
+      pageViews: 17, formSubmits: 1, emailOpens: 5, emailClicks: 2, callsLogged: 1, meetings: 1,
+      ageDays: 13,
+      message: "Replacing PrintSmith. Big project — need a clear migration plan and support during cutover.",
+    },
+    {
+      name: "Aiko Watanabe", company: "Watanabe Sign Studio", role: "Studio Manager",
+      phone: "+81 90-5555-7733", region: "Asia-JP", industry: "Sign shop",
+      tags: ["international"], teamSize: "1-5",
+      source: "NEWSLETTER", sourcePath: "/", utmSource: null, utmMedium: null, utmCampaign: null,
+      status: "NEW", score: 8,
+      pageViews: 1, formSubmits: 1, emailOpens: 0, emailClicks: 0, callsLogged: 0, meetings: 0,
+      ageDays: 3,
+      message: null,
+    },
+    {
+      name: "Daniel Roth", company: "Roth Sign Group", role: "President",
+      phone: "+1 (415) 555-1102", region: "West Coast", industry: "Sign shop",
+      tags: ["enterprise-fit"], teamSize: "100+",
+      source: "INQUIRY", sourcePath: "/contact", utmSource: "linkedin", utmMedium: "social", utmCampaign: "enterprise-q2",
+      status: "QUALIFIED", score: 91,
+      pageViews: 32, formSubmits: 3, emailOpens: 14, emailClicks: 9, callsLogged: 4, meetings: 3,
+      ageDays: 25,
+      message: "120 staff, 6 locations. We're shopping a real platform. Looking for SSO + advanced reporting.",
+    },
+  ];
+
+  let leadCount = 0;
+  let activityCount = 0;
+  let taskCount = 0;
+  let emailCount = 0;
+  let routingCount = 0;
+
+  // Real templates for activities/emails so the timeline reads naturally.
+  const templates = {
+    pageViews: ["/", "/pricing", "/for-sign-shops", "/for-print-shops", "/blog/sign-shop-workflow", "/contact", "/features/proofs", "/features/scheduling"],
+    emailSent: [
+      { subj: "Welcome to Flowtora", body: "Thanks for reaching out! Here's a quick overview of how Flowtora replaces 5 spreadsheets and a paper proof process — happy to walk through any of it on a call." },
+      { subj: "Quick demo recap + next steps", body: "Following up on our call. As discussed, here's a 2-week trial link with sample data already loaded so you can poke around the queue + proof flows immediately." },
+      { subj: "Pricing for your team size", body: "Quick note on pricing — based on a 6-25 person team you'd land on the Pro plan, $X/month with the multi-location addon." },
+      { subj: "Just checking in", body: "Wanted to circle back — happy to set up a deeper walkthrough or send over a sample import script for your existing data. What's most useful?" },
+    ],
+    emailReceived: [
+      { subj: "Re: Welcome to Flowtora", body: "Thanks! When can we hop on a call this week? Mornings work best for us." },
+      { subj: "Re: Quick demo recap + next steps", body: "Trying the trial now. Quick question — does the customer portal support file uploads >100MB?" },
+      { subj: "Re: Pricing for your team size", body: "Pro plan looks reasonable. Need to compare against [competitor] but you're in the running." },
+    ],
+  };
+
+  for (let pi = 0; pi < leadPlans.length; pi++) {
+    const p = leadPlans[pi]!;
+    const owner = owners[pi % owners.length]!;
+    const createdAt = daysAgo(p.ageDays);
+    const firstNamePart = p.name.split(" ")[0]!.toLowerCase();
+    const email = `${firstNamePart}-${randInt(100, 999)}@seed.flowtora.example`;
+
+    // Build score factors so the breakdown card has real data.
+    const factors: Array<{ factor: string; points: number; source: string }> = [];
+    if (p.company) factors.push({ factor: "Provided company name", points: 10, source: "profile" });
+    if (p.phone)   factors.push({ factor: "Provided phone number", points: 8, source: "profile" });
+    if (p.teamSize === "26-100" || p.teamSize === "100+") {
+      factors.push({ factor: "Mid/large team size", points: 10, source: "profile" });
+    } else if (p.teamSize === "6-25") {
+      factors.push({ factor: "Growing team size", points: 6, source: "profile" });
+    }
+    if (p.message) factors.push({ factor: "Wrote a message", points: 5, source: "profile" });
+    if (p.source === "DEMO") factors.push({ factor: "Demo request", points: 25, source: "intent" });
+    else if (p.source === "INQUIRY") factors.push({ factor: "Contact inquiry", points: 12, source: "intent" });
+    else if (p.source === "TRIAL_ABANDON") factors.push({ factor: "Started signup", points: 18, source: "intent" });
+    else if (p.source === "NEWSLETTER") factors.push({ factor: "Newsletter signup", points: 3, source: "intent" });
+    if (p.pageViews >= 5) factors.push({ factor: "5+ page views", points: 8, source: "engagement" });
+    else if (p.pageViews >= 2) factors.push({ factor: "2+ page views", points: 4, source: "engagement" });
+    if (p.formSubmits >= 2) factors.push({ factor: "Multiple form submits", points: 6, source: "engagement" });
+    if (p.emailOpens >= 3) factors.push({ factor: "Engaged with emails (3+)", points: 6, source: "engagement" });
+    if (p.emailClicks >= 1) factors.push({ factor: "Clicked link in email", points: 8, source: "engagement" });
+    if (p.meetings >= 1) factors.push({ factor: "Booked a meeting", points: 15, source: "engagement" });
+    if (p.callsLogged >= 1) factors.push({ factor: "Phone conversation", points: 10, source: "engagement" });
+
+    // MQL/SQL gating from score + status.
+    const mqlAt = p.score >= 40 ? daysAgo(Math.max(0, p.ageDays - 2)) : null;
+    const sqlAt = (p.status === "QUALIFIED" || p.status === "CONVERTED") ? daysAgo(Math.max(0, p.ageDays - 4)) : null;
+    const firstContactedAt = p.callsLogged > 0 || p.emailOpens > 0
+      ? daysAgo(Math.max(0, p.ageDays - 1))
+      : null;
+    const lastContactedAt = p.callsLogged > 0 || p.emailOpens > 1
+      ? daysAgo(randInt(0, Math.min(p.ageDays, 5)))
+      : firstContactedAt;
+    const convertedAt = p.status === "CONVERTED" ? daysAgo(randInt(0, 5)) : null;
+    const convertedTenant = p.convertTenantIdx != null ? tenants[p.convertTenantIdx] : null;
+    const disqualifiedReason = p.status === "DISQUALIFIED"
+      ? "Pricing objection — left door open for a future check-in."
+      : (p.status === "SPAM" ? "Spam pattern: gibberish message + irrelevant offer." : null);
+
+    const lead = await db.marketingLead.create({
+      data: {
+        kind: p.source,
+        email,
+        name: p.name,
+        company: p.company,
+        role: p.role,
+        phone: p.phone,
+        teamSize: p.teamSize,
+        message: p.message,
+        timezone: p.region.startsWith("EU") ? "Europe/Berlin" :
+                  p.region.startsWith("Asia-JP") ? "Asia/Tokyo" :
+                  p.region.startsWith("Asia-IN") ? "Asia/Kolkata" : "America/Los_Angeles",
+        region: p.region,
+        industry: p.industry,
+        tags: p.tags,
+        score: p.score,
+        scoreFactors: factors,
+        source: p.sourcePath,
+        referrer: p.utmSource ? `https://${p.utmSource}.com` : null,
+        utmSource: p.utmSource,
+        utmMedium: p.utmMedium,
+        utmCampaign: p.utmCampaign,
+        ipHash: Math.random().toString(36).slice(2, 18),
+        userAgent: rand(["Mozilla/5.0 Chrome", "Mozilla/5.0 Safari", "Mozilla/5.0 Firefox"]),
+        status: p.status,
+        assignedToUserId: p.status === "SPAM" ? null : owner.id,
+        firstContactedAt,
+        lastContactedAt,
+        convertedAt,
+        convertedTenantId: convertedTenant?.id ?? null,
+        disqualifiedReason,
+        notes: p.status === "QUALIFIED" || p.status === "CONVERTED"
+          ? `[${daysAgo(p.ageDays - 1).toLocaleDateString()} · sales rep]\nGood fit. Decision-maker engaged. Following up next week.`
+          : null,
+        mqlAt,
+        sqlAt,
+        lastActivityAt: lastContactedAt ?? createdAt,
+        createdAt,
+      },
+      select: { id: true },
+    });
+    leadCount++;
+
+    // ── Activities ──
+    // FORM_SUBMIT events
+    for (let i = 0; i < p.formSubmits; i++) {
+      await db.leadActivity.create({
+        data: {
+          leadId: lead.id,
+          kind: "FORM_SUBMIT",
+          detail: i === 0 ? `Submitted ${p.source.toLowerCase()} form` : "Resubmitted form",
+          url: p.sourcePath,
+          metadata: { campaign: p.utmCampaign },
+          occurredAt: daysAgo(p.ageDays - i),
+        },
+      });
+      activityCount++;
+    }
+    // PAGE_VIEW events
+    for (let i = 0; i < p.pageViews; i++) {
+      const pageUrl = rand(templates.pageViews);
+      await db.leadActivity.create({
+        data: {
+          leadId: lead.id,
+          kind: "PAGE_VIEW",
+          detail: `Viewed ${pageUrl}`,
+          url: pageUrl,
+          occurredAt: daysAgo(randInt(0, p.ageDays)),
+        },
+      });
+      activityCount++;
+    }
+    // EMAIL_OPENED + EMAIL_CLICKED + EMAIL_SENT
+    for (let i = 0; i < p.emailOpens; i++) {
+      await db.leadActivity.create({
+        data: {
+          leadId: lead.id,
+          kind: "EMAIL_OPENED",
+          detail: `Opened: ${rand(templates.emailSent).subj}`,
+          occurredAt: daysAgo(randInt(0, p.ageDays - 1)),
+        },
+      });
+      activityCount++;
+    }
+    for (let i = 0; i < p.emailClicks; i++) {
+      await db.leadActivity.create({
+        data: {
+          leadId: lead.id,
+          kind: "EMAIL_CLICKED",
+          detail: `Clicked link in: ${rand(templates.emailSent).subj}`,
+          url: "/pricing",
+          occurredAt: daysAgo(randInt(0, p.ageDays - 1)),
+        },
+      });
+      activityCount++;
+    }
+    // Calls + meetings
+    for (let i = 0; i < p.callsLogged; i++) {
+      await db.leadActivity.create({
+        data: {
+          leadId: lead.id,
+          kind: rand(["CALL_MADE", "CALL_RECEIVED"] as const),
+          detail: `${i === 0 ? "Discovery call" : "Follow-up call"} · ${randInt(15, 45)}min`,
+          occurredAt: daysAgo(randInt(0, p.ageDays - 1)),
+        },
+      });
+      activityCount++;
+    }
+    for (let i = 0; i < p.meetings; i++) {
+      await db.leadActivity.create({
+        data: {
+          leadId: lead.id,
+          kind: i === 0 ? "MEETING_SCHEDULED" : "MEETING_COMPLETED",
+          detail: `Demo · ${randInt(30, 60)}min`,
+          occurredAt: daysAgo(randInt(0, p.ageDays - 1)),
+        },
+      });
+      activityCount++;
+    }
+    if (p.status === "CONVERTED" && convertedTenant) {
+      await db.leadActivity.create({
+        data: {
+          leadId: lead.id,
+          kind: "CONVERTED",
+          detail: `Converted to tenant ${convertedTenant.name}`,
+          url: `/platform/tenants/${convertedTenant.slug}`,
+          occurredAt: convertedAt ?? new Date(),
+        },
+      });
+      activityCount++;
+    }
+    // Status & score events
+    await db.leadActivity.create({
+      data: {
+        leadId: lead.id,
+        kind: "ASSIGNED",
+        detail: p.status === "SPAM" ? "Auto-flagged spam (no owner assigned)" : `Assigned to lead owner`,
+        occurredAt: daysAgo(p.ageDays),
+      },
+    });
+    activityCount++;
+    if (p.score > 0) {
+      await db.leadActivity.create({
+        data: {
+          leadId: lead.id,
+          kind: "SCORE_UPDATED",
+          detail: `Score → ${p.score}`,
+          metadata: { score: p.score },
+          occurredAt: daysAgo(Math.max(0, p.ageDays - 1)),
+        },
+      });
+      activityCount++;
+    }
+
+    // ── Email thread ──
+    const sentCount = Math.min(p.emailOpens, 3);
+    for (let i = 0; i < sentCount; i++) {
+      const t = templates.emailSent[i % templates.emailSent.length]!;
+      await db.leadEmailMessage.create({
+        data: {
+          leadId: lead.id,
+          direction: "OUT",
+          subject: t.subj,
+          body: t.body,
+          fromEmail: "sales@flowtora.com",
+          toEmail: email,
+          authorId: owner.id,
+          createdAt: daysAgo(Math.max(0, p.ageDays - 1 - i)),
+        },
+      });
+      emailCount++;
+    }
+    if (p.emailClicks > 0 || (p.status === "QUALIFIED" || p.status === "CONVERTED")) {
+      const r = rand(templates.emailReceived);
+      await db.leadEmailMessage.create({
+        data: {
+          leadId: lead.id,
+          direction: "IN",
+          subject: r.subj,
+          body: r.body,
+          fromEmail: email,
+          toEmail: "sales@flowtora.com",
+          createdAt: daysAgo(Math.max(0, p.ageDays - 2)),
+        },
+      });
+      emailCount++;
+    }
+
+    // ── Tasks ──
+    if (p.status === "NEW") {
+      await db.leadTask.create({
+        data: {
+          leadId: lead.id,
+          title: "Send first-touch email + book intro call",
+          notes: null,
+          dueAt: daysAgo(-1),
+          assignedToUserId: owner.id,
+          createdById: owner.id,
+        },
+      });
+      taskCount++;
+    } else if (p.status === "CONTACTED") {
+      await db.leadTask.create({
+        data: {
+          leadId: lead.id,
+          title: "Follow up if no reply by Friday",
+          dueAt: daysAgo(-3),
+          assignedToUserId: owner.id,
+          createdById: owner.id,
+        },
+      });
+      taskCount++;
+    } else if (p.status === "QUALIFIED") {
+      await db.leadTask.create({
+        data: {
+          leadId: lead.id,
+          title: "Send proposal + pricing breakdown",
+          dueAt: daysAgo(-2),
+          assignedToUserId: owner.id,
+          createdById: owner.id,
+        },
+      });
+      taskCount++;
+      // Add a completed historical task too.
+      await db.leadTask.create({
+        data: {
+          leadId: lead.id,
+          title: "Discovery call",
+          completedAt: daysAgo(Math.max(0, p.ageDays - 4)),
+          assignedToUserId: owner.id,
+          createdById: owner.id,
+          createdAt: daysAgo(p.ageDays - 1),
+        },
+      });
+      taskCount++;
+    } else if (p.status === "CONVERTED") {
+      await db.leadTask.create({
+        data: {
+          leadId: lead.id,
+          title: "Welcome onboarding outreach",
+          completedAt: daysAgo(0),
+          assignedToUserId: owner.id,
+          createdById: owner.id,
+          createdAt: daysAgo(2),
+        },
+      });
+      taskCount++;
+    }
+
+    // ── Routing history ──
+    if (p.status !== "SPAM") {
+      await db.leadRoutingEvent.create({
+        data: {
+          leadId: lead.id,
+          ruleName: p.source === "DEMO" ? "Demo → senior sales" : "Inbound round-robin",
+          action: "ROUTED_TO",
+          detail: `Assigned to ${owner.id}`,
+          occurredAt: daysAgo(p.ageDays),
+        },
+      });
+      routingCount++;
+    }
+    if (mqlAt) {
+      await db.leadRoutingEvent.create({
+        data: {
+          leadId: lead.id,
+          ruleName: "MQL gate (score ≥ 40)",
+          action: "QUALIFIED",
+          detail: `Score reached ${p.score} — promoted to MQL.`,
+          occurredAt: mqlAt,
+        },
+      });
+      routingCount++;
+    }
+    if (sqlAt) {
+      await db.leadRoutingEvent.create({
+        data: {
+          leadId: lead.id,
+          ruleName: "SQL gate (manual qualification)",
+          action: "SQL",
+          detail: "Sales rep marked QUALIFIED after discovery call.",
+          occurredAt: sqlAt,
+        },
+      });
+      routingCount++;
+    }
+    if (p.status === "CONVERTED") {
+      await db.leadRoutingEvent.create({
+        data: {
+          leadId: lead.id,
+          ruleName: "Conversion",
+          action: "CONVERTED",
+          detail: `Linked to tenant ${convertedTenant?.slug ?? "?"}`,
+          occurredAt: convertedAt ?? new Date(),
+        },
+      });
+      routingCount++;
+    }
+    if (p.status === "DISQUALIFIED") {
+      await db.leadRoutingEvent.create({
+        data: {
+          leadId: lead.id,
+          ruleName: "Disqualified",
+          action: "DISQUALIFIED",
+          detail: disqualifiedReason ?? "No reason provided",
+          occurredAt: daysAgo(0),
+        },
+      });
+      routingCount++;
+    }
+  }
+
+  console.log(
+    `  ✓ ${leadCount} leads, ${activityCount} activity events, ${taskCount} tasks, ${emailCount} emails, ${routingCount} routing events`,
   );
 }
 

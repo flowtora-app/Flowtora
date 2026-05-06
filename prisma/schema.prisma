@@ -5768,6 +5768,7 @@ model MarketingLead {
   name    String?
   company String?
   role    String?
+  phone   String?       // Page 44 — table column
 
   // Context
   teamSize      String? // "1-5" | "6-25" | "26-100" | "100+"
@@ -5775,6 +5776,27 @@ model MarketingLead {
   preferredTime String? // for demo requests — "morning", "afternoon", "evening"
   timezone      String? // IANA, e.g. "America/Los_Angeles"
   businessType  BusinessType?
+
+  // Page 44 — segmentation + scoring fields
+  /** Free-form region filter (e.g. "Pacific Northwest", "EU-DE"). */
+  region    String?
+  /** Industry vertical the lead operates in (e.g. "Sign shop", "Agency"). */
+  industry  String?
+  /** Admin-assigned tags. */
+  tags      String[] @default([])
+  /** Composite lead score 0-100. Recomputed by recordLeadActivity()
+   *  + the score-update action. Drives the Score range filter. */
+  score      Int      @default(0)
+  /** Per-factor breakdown shown on the detail page. JSON shape:
+   *  [{ factor: "Has company name", points: 10, source: "profile" }, ...] */
+  scoreFactors Json   @default("[]")
+  /** Marketing-qualified lead gate timestamp. */
+  mqlAt DateTime?
+  /** Sales-qualified lead gate timestamp. */
+  sqlAt DateTime?
+  /** Latest activity timestamp from any LeadActivity event — drives
+   *  the "Last touch" column without a per-row aggregate. */
+  lastActivityAt DateTime?
 
   // Attribution
   source      String? // URL path of the capture point ("/", "/contact", "/book-demo")
@@ -5805,10 +5827,19 @@ model MarketingLead {
   createdAt DateTime @default(now())
   updatedAt DateTime @updatedAt
 
+  // Page 44 relations.
+  activities      LeadActivity[]
+  tasks           LeadTask[]
+  emailMessages   LeadEmailMessage[]
+  routingHistory  LeadRoutingEvent[]
+
   @@index([kind, status, createdAt])
   @@index([email])
   @@index([assignedToUserId, status])
   @@index([createdAt])
+  @@index([score])
+  @@index([region])
+  @@index([industry])
 }
 
 enum MarketingLeadKind {
@@ -5825,6 +5856,120 @@ enum MarketingLeadStatus {
   CONVERTED
   DISQUALIFIED
   SPAM
+}
+
+// ────────────────────────────────────────────────────────────
+// Page 44 — Lead Inbox detail surfaces.
+//
+// Per-lead activity timeline, tasks, email thread, and the
+// routing-rule firing history. All lead-scoped via cascade — when a
+// lead is hard-deleted, the timeline goes with it.
+// ────────────────────────────────────────────────────────────
+
+enum LeadActivityKind {
+  PAGE_VIEW           // visited a page on flowtora.com
+  FORM_SUBMIT         // filled out a marketing form (contact, demo, newsletter)
+  EMAIL_SENT          // we sent them an email
+  EMAIL_OPENED        // they opened one
+  EMAIL_CLICKED       // they clicked a link
+  CALL_MADE           // outbound phone call logged
+  CALL_RECEIVED       // inbound phone call logged
+  MEETING_SCHEDULED   // meeting on calendar
+  MEETING_COMPLETED   // meeting wrapped
+  NOTE_ADDED          // sales rep added an internal note
+  STATUS_CHANGED      // pipeline stage moved
+  SCORE_UPDATED       // automatic score recomputation fired
+  ASSIGNED            // ownership reassigned
+  CONVERTED           // converted to tenant trial
+  TAG_ADDED           // admin tagged the lead
+  TASK_COMPLETED      // a follow-up task got checked off
+}
+
+enum LeadEmailDirection {
+  OUT                 // platform staff → lead
+  IN                  // lead → platform staff (inbound reply)
+}
+
+model LeadActivity {
+  id     String           @id @default(cuid())
+  leadId String
+
+  kind     LeadActivityKind
+  /** Human-readable summary, e.g. "Viewed /pricing" or "Opened: Welcome email". */
+  detail   String?
+  /** Optional URL associated with the activity (page viewed / link clicked). */
+  url      String?
+  /** Free-form metadata (campaign id, points awarded, etc). */
+  metadata Json             @default("{}")
+
+  occurredAt DateTime @default(now())
+
+  lead MarketingLead @relation(fields: [leadId], references: [id], onDelete: Cascade)
+
+  @@index([leadId, occurredAt])
+  @@index([kind, occurredAt])
+}
+
+model LeadTask {
+  id     String @id @default(cuid())
+  leadId String
+
+  title  String
+  notes  String?
+  /** Optional due date — drives the "Tasks due" filter on the detail page. */
+  dueAt  DateTime?
+  /** Stamped when checked off. */
+  completedAt DateTime?
+  /** Owner of the task — generally the lead's `assignedToUserId`, but
+   *  can be overridden when delegating. */
+  assignedToUserId String?
+  /** Platform staff who created the task. */
+  createdById      String?
+
+  createdAt DateTime @default(now())
+  updatedAt DateTime @updatedAt
+
+  lead MarketingLead @relation(fields: [leadId], references: [id], onDelete: Cascade)
+
+  @@index([leadId, completedAt])
+  @@index([assignedToUserId, completedAt, dueAt])
+}
+
+model LeadEmailMessage {
+  id     String @id @default(cuid())
+  leadId String
+
+  direction LeadEmailDirection
+  subject   String
+  body      String
+  fromEmail String
+  toEmail   String
+  /** Platform staff author (for OUT). */
+  authorId  String?
+
+  createdAt DateTime @default(now())
+
+  lead MarketingLead @relation(fields: [leadId], references: [id], onDelete: Cascade)
+
+  @@index([leadId, createdAt])
+}
+
+model LeadRoutingEvent {
+  id     String @id @default(cuid())
+  leadId String
+
+  /** Rule name that fired, e.g. "MQL: company-fit + 3+ engagements". */
+  ruleName String
+  /** Action shorthand: "ROUTED_TO", "QUALIFIED", "DISQUALIFIED", "SCORE_+10". */
+  action   String
+  /** Resulting owner / status / score change snapshot. */
+  detail   String?
+
+  occurredAt DateTime @default(now())
+
+  lead MarketingLead @relation(fields: [leadId], references: [id], onDelete: Cascade)
+
+  @@index([leadId, occurredAt])
 }
 
 // ────────────────────────────────────────────────────────────
