@@ -78,6 +78,8 @@ export const PERMISSION_DESCRIPTIONS: Record<PlatformPermission, string> = {
   "leads.manage":          "Edit and qualify marketing leads.",
   "plans.manage":          "Edit pricing plans + add-ons.",
   "features.manage":       "Edit feature catalog metadata.",
+  "referrals.read":        "View tenant-to-tenant referral program metrics.",
+  "referrals.manage":      "Edit referral reward structure and review fraud flags.",
   // Analytics
   "analytics.read":        "Read analytics dashboards.",
   "analytics.export":      "Export analytics datasets.",

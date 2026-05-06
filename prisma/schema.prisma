@@ -411,6 +411,12 @@ model Tenant {
   taxExemptions          TaxExemption[]
   // Page 23 — Dunning queue entries for this tenant's failed payments.
   dunningEvents          DunningEvent[]
+  // Page 41 — Tenant-to-tenant referrals. A tenant has one referral
+  // code (when the program is on) and can be the referrer or referee
+  // on many TenantReferral funnel rows.
+  referralCode           TenantReferralCode?
+  referralsMade          TenantReferral[]   @relation("TenantReferralsMade")
+  referralAsReferee      TenantReferral?    @relation("TenantReferralAsReferee")
 }
 
 // ────────────────────────────────────────────────────────────
@@ -9295,4 +9301,182 @@ enum KbVisibility {
   PUBLIC
   INTERNAL
   PLAN_RESTRICTED
+}
+
+// ────────────────────────────────────────────────────────────
+// Page 41 — Tenant-to-tenant Referral Program.
+//
+// Distinct from the Affiliate program (Page 42, model `Affiliate`)
+// which targets external partners. The referral program targets
+// existing customers — every tenant gets a stable referral code
+// when the program is on; signups attributed to that code populate
+// `TenantReferral` and progress through clicked → signed up →
+// trialed → paid → rewarded.
+//
+// Settings live on a single-row `ReferralProgramSettings` table
+// (id = "default") so admins can edit reward structure + minimum
+// spend + attribution windows without spinning a new row per save.
+//
+// Fraud detection is rule-based: the seed and the realtime hook
+// flag self-referrals, IP/fingerprint reuse, burst-signup patterns,
+// and blacklisted email domains. Admins approve or deny each flag
+// from the Fraud review queue, which moves the row out of FRAUD
+// status (or denies the reward release).
+// ────────────────────────────────────────────────────────────
+
+enum ReferralRewardKind {
+  CREDIT          // account credit in minor currency units
+  FREE_MONTHS     // N free months extension
+  CASH            // cash payout via Stripe Connect / PayPal / etc.
+}
+
+enum TenantReferralStatus {
+  CLICKED         // visitor hit the ?ref= link, no signup yet
+  SIGNED_UP       // tenant created via the link
+  TRIALED         // tenant entered TRIAL state
+  PAID            // tenant has paid at least the minimum-spend threshold
+  REWARDED        // referrer reward issued (credit/free months/cash queued)
+  EXPIRED         // attribution window lapsed without conversion
+  FRAUD           // flagged by fraud detection — pending admin review
+}
+
+enum TenantReferralFraudFlag {
+  SELF_REFERRAL          // referrer === referee (same email / domain)
+  SAME_IP                // same IP as referrer or other recent referees
+  SAME_FINGERPRINT       // device fingerprint reuse
+  BURST_SIGNUPS          // referrer drove > N signups in < M minutes
+  BLACKLISTED_DOMAIN     // referee email on the disposable / fraud list
+  RAPID_CLICKS           // > N clicks from same IP in < M minutes
+  PAYMENT_REVERSED       // referee paid then refunded inside hold window
+}
+
+enum TenantReferralFraudResolution {
+  PENDING                // not yet reviewed
+  APPROVED               // admin cleared the flag — reward releases
+  DENIED                 // admin denied — no reward issued
+}
+
+model ReferralProgramSettings {
+  id String @id @default("default")
+
+  // ── Reward structure ────────────────────────────────────────
+  /** What the referrer earns on each successful conversion. */
+  referrerRewardKind        ReferralRewardKind @default(CREDIT)
+  /** Credit amount in minor currency units (e.g. 10000 = $100). */
+  referrerRewardCreditCents Int @default(10000)
+  /** Free months extension when kind = FREE_MONTHS. */
+  referrerRewardFreeMonths  Int @default(1)
+  /** Cash payout in minor currency units when kind = CASH. */
+  referrerRewardCashCents   Int @default(5000)
+
+  /** Discount % off the first N invoices for the referee. */
+  refereeDiscountPct      Int @default(20)
+  /** Number of invoices / months the discount applies for. */
+  refereeDiscountMonths   Int @default(3)
+
+  // ── Release conditions ──────────────────────────────────────
+  /** Minimum total spend (minor units) before referrer reward releases. */
+  minimumSpendCents       Int @default(10000)
+  /** Days the click-to-signup attribution cookie is honored. */
+  attributionWindowDays   Int @default(60)
+  /** Days a referral row stays open after signup before it auto-expires. */
+  signupToPaidWindowDays  Int @default(45)
+  /** Hold window after PAID before the reward releases (clawback buffer). */
+  rewardHoldDays          Int @default(14)
+
+  /** Master switch — when off, the marketing site hides referral CTAs. */
+  active Boolean @default(true)
+
+  /** Who last edited the settings — for the audit row. */
+  updatedById String?
+  updatedAt   DateTime @updatedAt
+  createdAt   DateTime @default(now())
+}
+
+model TenantReferralCode {
+  id       String @id @default(cuid())
+  tenantId String @unique
+  /** Stable, URL-safe code shown in `?ref=<code>` links. */
+  code     String @unique
+
+  // Denormalized counters — incremented on click/signup/conversion
+  // so the leaderboard can render without a per-row aggregate.
+  clicks         Int @default(0)
+  signups        Int @default(0)
+  trials         Int @default(0)
+  conversions    Int @default(0)
+  earnedCents    Int @default(0)
+
+  createdAt DateTime @default(now())
+  updatedAt DateTime @updatedAt
+
+  tenant    Tenant            @relation(fields: [tenantId], references: [id], onDelete: Cascade)
+  referrals TenantReferral[]
+}
+
+model TenantReferral {
+  id String @id @default(cuid())
+
+  /** Referral code that drove this funnel row. */
+  codeId           String
+  /** Convenience FK back to the referrer tenant — equals
+   *  TenantReferralCode.tenantId at create time. Stored explicitly so
+   *  the leaderboard can group without joining through the code row. */
+  referrerTenantId String
+  /** Referee tenant FK — null until SIGNED_UP. Unique so a tenant can
+   *  only ever be referred once. */
+  referredTenantId String? @unique
+  /** Email captured at click/signup time; redundant with
+   *  `referredTenant.email` when SIGNED_UP, but lets the funnel show
+   *  the prospect even before signup. */
+  referredEmail    String?
+
+  status TenantReferralStatus @default(CLICKED)
+  /** Where the click came from — "share-link", "in-app", "email", etc. */
+  source String?
+
+  // Funnel timestamps. Each is null until the corresponding stage hits.
+  clickedAt        DateTime  @default(now())
+  signedUpAt       DateTime?
+  trialedAt        DateTime?
+  paidAt           DateTime?
+  rewardReleasedAt DateTime?
+  expiredAt        DateTime?
+
+  /** Reward amount queued / paid in minor units. */
+  rewardAmountCents Int @default(0)
+  /** Reward kind snapshotted at conversion time so future settings
+   *  changes don't retroactively alter what the referrer earned. */
+  rewardKind        ReferralRewardKind?
+  /** Total spend by the referee at the time PAID stamped — used by
+   *  the reports + the minimum-spend release rule. */
+  refereeSpendCents Int @default(0)
+
+  // ── Fraud detection ─────────────────────────────────────────
+  /** Set when a rule fires. Null = clean. */
+  fraudFlag       TenantReferralFraudFlag?
+  fraudReason     String?
+  /** PENDING by default once a flag fires; admin moves it to
+   *  APPROVED / DENIED from the Fraud review queue. */
+  fraudResolution TenantReferralFraudResolution?
+  fraudReviewedAt DateTime?
+  fraudReviewerId String?
+  fraudReviewerNote String?
+
+  /** Hashed IP (first 3 octets / sha256) — used for SAME_IP detection. */
+  ipHash         String?
+  /** Browser fingerprint hash — used for SAME_FINGERPRINT detection. */
+  fingerprintHash String?
+
+  createdAt DateTime @default(now())
+  updatedAt DateTime @updatedAt
+
+  code           TenantReferralCode @relation(fields: [codeId], references: [id], onDelete: Cascade)
+  referrer       Tenant             @relation("TenantReferralsMade",     fields: [referrerTenantId], references: [id], onDelete: Cascade)
+  referee        Tenant?            @relation("TenantReferralAsReferee", fields: [referredTenantId], references: [id], onDelete: SetNull)
+
+  @@index([referrerTenantId, status])
+  @@index([status, createdAt])
+  @@index([fraudFlag, fraudResolution])
+  @@index([codeId, status])
 }

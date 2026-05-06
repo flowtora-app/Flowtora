@@ -62,6 +62,7 @@ async function main() {
   await seedLandingPages(platformUsers);             // Page 38
   await seedEmailCampaigns(platformUsers);           // Page 39
   await seedSequences(platformUsers, tenants);       // Page 40
+  await seedReferrals(tenants);                       // Page 41
 
   console.log("\n✓ Seed complete.\n");
   await db.$disconnect();
@@ -166,6 +167,16 @@ async function wipeOldSeed() {
     console.log(`  deleted ${oldSequences.length} sequences`);
   }
   // Templates aren't tagged — leave them for the prebuilt loader to manage.
+  // Page 41 — referral funnel rows + codes that we minted via seed.
+  // We can't tag the referral row itself, so we wipe by code prefix.
+  const seedCodes = await db.tenantReferralCode.findMany({
+    where: { code: { startsWith: "SEED-" } },
+    select: { id: true },
+  });
+  if (seedCodes.length) {
+    await db.tenantReferralCode.deleteMany({ where: { id: { in: seedCodes.map((c) => c.id) } } });
+    console.log(`  deleted ${seedCodes.length} seed referral codes (cascades to funnel rows)`);
+  }
   // Customers tagged seed (after orders are gone).
   await db.customer.deleteMany({ where: { tags: { has: "seed" } } });
   // Products tagged seed (use description marker since Product has no tags array).
@@ -2505,6 +2516,298 @@ async function seedSequences(staff: { id: string }[], tenants: { id: string; nam
   }
 
   console.log(`  ✓ ${seqCount} sequences, ${stepCount} steps, ${enrollmentCount} enrollments, ${eventCount} events, ${templateCount} new templates`);
+}
+
+/* ── Page 41 — Referrals ─────────────────────────────── */
+
+async function seedReferrals(tenants: { id: string; name: string; slug: string }[]) {
+  console.log("── Seeding referral program (Page 41)…");
+  if (tenants.length < 2) {
+    console.log("  skipped — need at least 2 tenants for referrer/referee pairs");
+    return;
+  }
+
+  // 1. Singleton settings — explicitly stamp something concrete so the
+  // editor renders against a real edited row rather than the lazy default.
+  await db.referralProgramSettings.upsert({
+    where: { id: "default" },
+    create: {
+      id: "default",
+      active: true,
+      referrerRewardKind: "CREDIT",
+      referrerRewardCreditCents: 10_000,
+      referrerRewardFreeMonths: 1,
+      referrerRewardCashCents: 5_000,
+      refereeDiscountPct: 20,
+      refereeDiscountMonths: 3,
+      minimumSpendCents: 10_000,
+      attributionWindowDays: 60,
+      signupToPaidWindowDays: 45,
+      rewardHoldDays: 14,
+    },
+    update: { active: true },
+  });
+
+  // 2. Mint codes for ~8 of the seeded tenants. Code format SEED-<rand>
+  // so the wipe can remove them cleanly.
+  const referrers = tenants.slice(0, Math.min(8, tenants.length));
+  const codes: { id: string; tenantId: string; tenantName: string; code: string }[] = [];
+  for (const t of referrers) {
+    const safe = t.slug.replace(/[^a-z0-9]+/gi, "").toUpperCase().slice(0, 4) || "TNT";
+    const code = `SEED-${safe}-${randInt(1000, 9999)}`;
+    const created = await db.tenantReferralCode.create({
+      data: { tenantId: t.id, code },
+    });
+    codes.push({ id: created.id, tenantId: t.id, tenantName: t.name, code });
+  }
+
+  // 3. Funnel rows. We pick varying outcome distributions per referrer so
+  // the leaderboard ranks differently and KPIs reflect a realistic mix.
+  // Each referrer drives anywhere from 3-14 funnel rows.
+  let totalRows = 0;
+  let totalSignups = 0;
+  let totalConversions = 0;
+  let totalRewards = 0;
+  let fraudFlags = 0;
+
+  type Plan = {
+    clicked: number;       // ends as just CLICKED (no signup)
+    signedUp: number;      // SIGNED_UP only
+    trialed: number;       // got into trial, didn't pay
+    paid: number;          // hit PAID
+    rewarded: number;      // PAID + reward released
+    expired: number;       // signed up but window lapsed
+    fraud: number;         // flagged
+  };
+  const plans: Plan[] = [
+    // Strong referrer: lots of conversions, mostly clean
+    { clicked: 6, signedUp: 1, trialed: 1, paid: 2, rewarded: 4, expired: 0, fraud: 0 },
+    // Mid — healthy conversions
+    { clicked: 4, signedUp: 2, trialed: 1, paid: 1, rewarded: 2, expired: 1, fraud: 0 },
+    // Volume but low quality — many clicks, some fraud
+    { clicked: 9, signedUp: 1, trialed: 1, paid: 0, rewarded: 1, expired: 1, fraud: 1 },
+    // Mid-low
+    { clicked: 3, signedUp: 1, trialed: 0, paid: 0, rewarded: 1, expired: 0, fraud: 0 },
+    // Just signups — no one converted
+    { clicked: 5, signedUp: 3, trialed: 1, paid: 0, rewarded: 0, expired: 1, fraud: 0 },
+    // Suspicious — multiple fraud flags
+    { clicked: 2, signedUp: 0, trialed: 0, paid: 0, rewarded: 0, expired: 0, fraud: 2 },
+    // Just clicks
+    { clicked: 4, signedUp: 0, trialed: 0, paid: 0, rewarded: 0, expired: 0, fraud: 0 },
+    // Steady performer
+    { clicked: 3, signedUp: 1, trialed: 1, paid: 1, rewarded: 1, expired: 0, fraud: 0 },
+  ];
+
+  const fraudFlagPool = [
+    "SAME_IP", "SAME_FINGERPRINT", "BURST_SIGNUPS",
+    "BLACKLISTED_DOMAIN", "RAPID_CLICKS", "PAYMENT_REVERSED",
+  ] as const;
+  const fraudReasons: Record<string, string> = {
+    SAME_IP: "Three signups from the same /24 in 24h",
+    SAME_FINGERPRINT: "Browser fingerprint matched referrer's session",
+    BURST_SIGNUPS: "5 conversions in under 30 minutes — outside normal pattern",
+    BLACKLISTED_DOMAIN: "Email domain on the disposable-mailbox blocklist",
+    RAPID_CLICKS: "200+ clicks from one IP in <5min",
+    PAYMENT_REVERSED: "Referee charged back the first invoice within 7 days",
+  };
+
+  const refereeNames = [
+    "Bright Sign Co.", "Dakota Print Lab", "Edge Banner Studio", "Foothills Imaging",
+    "Gateway Wide-Format", "Helio Display", "Ironside Sign Works", "Junction Print",
+    "Kestrel Signage", "Lighthouse Visuals", "Magnolia Print Co.", "Northstar Studio",
+    "Oakridge Signs", "Pacific Wrap House", "Quartz Display", "Riverside Banner",
+    "Summit Sign Lab", "Twilight Vinyl", "Unity Print", "Vanguard Signs",
+    "Westwind Imaging", "Xenon Print Studio", "Yellowstone Signs", "Zenith Banner",
+  ];
+
+  for (let pi = 0; pi < codes.length; pi++) {
+    const code = codes[pi]!;
+    const plan = plans[pi % plans.length]!;
+
+    const mkRow = async (kind: keyof Plan, idx: number) => {
+      // Stagger across the last 30 days so the trend chart has variation.
+      const ageDays = randInt(0, 29);
+      const clickedAt = daysAgo(ageDays);
+      const refereeEmail = `${kind.toLowerCase()}-${pi}-${idx}-${randInt(100, 999)}@example.com`;
+      const refereeName = rand(refereeNames);
+      // We don't have synthetic tenants for every funnel row (creating
+      // tenants via seed is expensive + cascades into a lot of other
+      // tables). For PAID/REWARDED rows, link to an existing tenant
+      // that isn't the referrer; for others, leave referredTenantId null.
+      const linkRealReferee = kind === "paid" || kind === "rewarded";
+      let referredTenantId: string | null = null;
+      if (linkRealReferee) {
+        const candidates = tenants.filter((t) => t.id !== code.tenantId);
+        // Already-attached referees skip — we only have @@unique on
+        // referredTenantId so each tenant can be a referee once.
+        const taken = new Set<string>(
+          (await db.tenantReferral.findMany({
+            where: { referredTenantId: { not: null } },
+            select: { referredTenantId: true },
+          })).map((r) => r.referredTenantId!).filter(Boolean),
+        );
+        const free = candidates.filter((c) => !taken.has(c.id));
+        if (free.length > 0) {
+          referredTenantId = rand(free).id;
+        }
+      }
+
+      const ipBucket = randInt(1, 200);
+      const baseFields = {
+        codeId: code.id,
+        referrerTenantId: code.tenantId,
+        referredTenantId,
+        referredEmail: refereeEmail,
+        source: rand(["share-link", "in-app", "email", "social"] as const),
+        clickedAt,
+        ipHash: `ip${ipBucket.toString().padStart(3, "0")}` + Math.random().toString(36).slice(2, 8),
+        fingerprintHash: Math.random().toString(36).slice(2, 18),
+      };
+
+      switch (kind) {
+        case "clicked": {
+          await db.tenantReferral.create({
+            data: { ...baseFields, status: "CLICKED" },
+          });
+          break;
+        }
+        case "signedUp": {
+          await db.tenantReferral.create({
+            data: {
+              ...baseFields,
+              status: "SIGNED_UP",
+              signedUpAt: new Date(clickedAt.getTime() + randInt(1, 48) * 3_600_000),
+            },
+          });
+          break;
+        }
+        case "trialed": {
+          const signedUpAt = new Date(clickedAt.getTime() + randInt(1, 12) * 3_600_000);
+          await db.tenantReferral.create({
+            data: {
+              ...baseFields,
+              status: "TRIALED",
+              signedUpAt,
+              trialedAt: new Date(signedUpAt.getTime() + randInt(1, 6) * 3_600_000),
+            },
+          });
+          break;
+        }
+        case "paid": {
+          const signedUpAt = new Date(clickedAt.getTime() + randInt(1, 12) * 3_600_000);
+          const trialedAt = new Date(signedUpAt.getTime() + randInt(1, 6) * 3_600_000);
+          const paidAt = new Date(trialedAt.getTime() + randInt(7, 21) * DAY);
+          const spend = randInt(8000, 25000);
+          // PAID but reward not yet released (still inside hold window).
+          await db.tenantReferral.create({
+            data: {
+              ...baseFields,
+              status: "PAID",
+              signedUpAt,
+              trialedAt,
+              paidAt,
+              refereeSpendCents: spend,
+              rewardAmountCents: 10_000, // matches default referrer credit
+              rewardKind: "CREDIT",
+            },
+          });
+          break;
+        }
+        case "rewarded": {
+          const signedUpAt = new Date(clickedAt.getTime() + randInt(1, 12) * 3_600_000);
+          const trialedAt = new Date(signedUpAt.getTime() + randInt(1, 6) * 3_600_000);
+          const paidAt = new Date(trialedAt.getTime() + randInt(7, 21) * DAY);
+          const releasedAt = new Date(paidAt.getTime() + 14 * DAY);
+          const spend = randInt(15000, 50000);
+          await db.tenantReferral.create({
+            data: {
+              ...baseFields,
+              status: "REWARDED",
+              signedUpAt,
+              trialedAt,
+              paidAt,
+              rewardReleasedAt: releasedAt,
+              refereeSpendCents: spend,
+              rewardAmountCents: 10_000,
+              rewardKind: "CREDIT",
+            },
+          });
+          break;
+        }
+        case "expired": {
+          const signedUpAt = new Date(clickedAt.getTime() + randInt(1, 12) * 3_600_000);
+          await db.tenantReferral.create({
+            data: {
+              ...baseFields,
+              status: "EXPIRED",
+              signedUpAt,
+              expiredAt: daysAgo(randInt(0, 5)),
+            },
+          });
+          break;
+        }
+        case "fraud": {
+          const flag = rand(fraudFlagPool);
+          // Fraud rows generally fired at signup or post-payment. We
+          // model them as having reached SIGNED_UP at minimum so the
+          // queue has a real referee to review.
+          const signedUpAt = new Date(clickedAt.getTime() + randInt(1, 12) * 3_600_000);
+          // 1/3 of fraud rows are payment-reversed (had reached PAID).
+          const reversedPayment = flag === "PAYMENT_REVERSED";
+          const paidAt = reversedPayment ? new Date(signedUpAt.getTime() + randInt(7, 21) * DAY) : null;
+          await db.tenantReferral.create({
+            data: {
+              ...baseFields,
+              status: "FRAUD",
+              signedUpAt,
+              paidAt,
+              fraudFlag: flag,
+              fraudReason: fraudReasons[flag] ?? null,
+              fraudResolution: "PENDING",
+              refereeSpendCents: paidAt ? randInt(8000, 22000) : 0,
+              rewardAmountCents: paidAt ? 10_000 : 0,
+              rewardKind: paidAt ? "CREDIT" : null,
+            },
+          });
+          break;
+        }
+      }
+    };
+
+    for (let i = 0; i < plan.clicked;  i++) await mkRow("clicked", i);
+    for (let i = 0; i < plan.signedUp; i++) await mkRow("signedUp", i);
+    for (let i = 0; i < plan.trialed;  i++) await mkRow("trialed", i);
+    for (let i = 0; i < plan.paid;     i++) await mkRow("paid", i);
+    for (let i = 0; i < plan.rewarded; i++) await mkRow("rewarded", i);
+    for (let i = 0; i < plan.expired;  i++) await mkRow("expired", i);
+    for (let i = 0; i < plan.fraud;    i++) await mkRow("fraud", i);
+
+    // Update denorm counters on the code row to reflect the funnel.
+    const signupRows = plan.signedUp + plan.trialed + plan.paid + plan.rewarded + plan.expired;
+    const conversions = plan.paid + plan.rewarded;
+    const earned = plan.rewarded * 10_000;
+    const trials  = plan.trialed + plan.paid + plan.rewarded;
+    await db.tenantReferralCode.update({
+      where: { id: code.id },
+      data: {
+        clicks:      plan.clicked + plan.signedUp + plan.trialed + plan.paid + plan.rewarded + plan.expired + plan.fraud,
+        signups:     signupRows,
+        trials,
+        conversions,
+        earnedCents: earned,
+      },
+    });
+
+    totalRows += plan.clicked + plan.signedUp + plan.trialed + plan.paid + plan.rewarded + plan.expired + plan.fraud;
+    totalSignups += signupRows;
+    totalConversions += conversions;
+    totalRewards += earned;
+    fraudFlags += plan.fraud;
+  }
+
+  console.log(
+    `  ✓ ${codes.length} referral codes, ${totalRows} funnel rows, ${totalSignups} signups, ${totalConversions} conversions, $${(totalRewards/100).toLocaleString()} rewards, ${fraudFlags} fraud flags`,
+  );
 }
 
 main().catch((e) => {
