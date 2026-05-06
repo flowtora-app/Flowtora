@@ -85,6 +85,7 @@ const NAV_ITEMS: NavItem[] = [
   { href: "/platform/marketing/leads",              label: "Lead Inbox",           icon: "Target" },
   // Pages 45+ — integrations
   { href: "/platform/integrations",                 label: "Integrations Catalog", icon: "Pipeline" },
+  { href: "/platform/integrations/api",             label: "API Keys & Webhooks",  icon: "Shield" },
 ];
 
 const COLLAPSE_KEY = "flowtora.platform-nav.collapsed";

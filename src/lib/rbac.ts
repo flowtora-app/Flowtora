@@ -224,6 +224,9 @@ export type PlatformPermission =
   // Integrations — Page 45 catalog (entries, versions, incidents, etc.)
   | "integrations.read"
   | "integrations.manage"
+  // Integrations — Page 46 API keys + webhooks
+  | "webhooks.read"
+  | "webhooks.manage"
 
   // Analytics / BI
   | "analytics.read"
@@ -262,6 +265,7 @@ const PLATFORM_ALL: PlatformPermission[] = [
   "affiliates.read", "affiliates.manage",
   "seo.read", "seo.manage",
   "integrations.read", "integrations.manage",
+  "webhooks.read", "webhooks.manage",
   "analytics.read", "analytics.export", "revenue.read", "usage.read",
   "reports.read", "reports.create", "reports.edit", "reports.delete",
   "reports.schedule", "reports.export",
@@ -276,7 +280,7 @@ const PLATFORM_ALL: PlatformPermission[] = [
 const PLATFORM_BASELINE_READ: PlatformPermission[] = [
   "tenant.read", "billing.read", "staff.read", "users.read",
   "support.read", "health.read", "audit.read", "compliance.read",
-  "feature_flag.read", "announcement.read", "leads.read", "referrals.read", "affiliates.read", "seo.read", "integrations.read",
+  "feature_flag.read", "announcement.read", "leads.read", "referrals.read", "affiliates.read", "seo.read", "integrations.read", "webhooks.read",
   "analytics.read", "revenue.read", "usage.read",
   "reports.read", "reports.export", // every staff role reads + can export
   "system.read_settings", "notifications.read",
@@ -327,7 +331,7 @@ export const PLATFORM_ROLE_PERMISSIONS: Record<PlatformRole, PlatformPermission[
     "tenant.suspend", "tenant.archive", "tenant.impersonate", "tenant.tag",
     "support.respond", "support.macro_manage", "support.feedback_triage",
     "announcement.write", "readiness.manage",
-    "leads.manage", "referrals.manage", "affiliates.manage", "seo.manage", "integrations.manage",
+    "leads.manage", "referrals.manage", "affiliates.manage", "seo.manage", "integrations.manage", "webhooks.manage",
     "analytics.export",
     "reports.create", "reports.edit", "reports.schedule",
     "notifications.manage",
@@ -362,6 +366,7 @@ export const PLATFORM_ROLE_PERMISSIONS: Record<PlatformRole, PlatformPermission[
     "system.write_settings",
     "tenant.impersonate",   // for repro
     "integrations.manage",  // owns integration catalog + versions
+    "webhooks.manage",      // owns API keys + webhook endpoints
   ]),
   // Marketing — leads, announcements, public plan/feature copy.
   MARKETING_MANAGER: dedup([

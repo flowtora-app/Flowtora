@@ -86,6 +86,8 @@ export const PERMISSION_DESCRIPTIONS: Record<PlatformPermission, string> = {
   "seo.manage":            "Edit SEO settings (robots.txt, sitemap, meta defaults), resolve broken links, and triage content gaps.",
   "integrations.read":     "View the integration catalog, adoption metrics, health, and version history.",
   "integrations.manage":   "Edit catalog entries, manage versions, deprecate integrations, and force-disconnect tenants.",
+  "webhooks.read":         "View API keys, webhook endpoints, event catalog, and delivery logs.",
+  "webhooks.manage":       "Create/rotate/revoke API keys, configure webhook endpoints, replay deliveries, and edit webhook settings.",
   // Analytics
   "analytics.read":        "Read analytics dashboards.",
   "analytics.export":      "Export analytics datasets.",

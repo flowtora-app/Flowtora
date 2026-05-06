@@ -6175,6 +6175,292 @@ model IntegrationSyncEvent {
   @@index([tenantId, occurredAt])
 }
 
+// ────────────────────────────────────────────────────────────
+// Page 46 — API Keys & Webhooks.
+//
+// Three concerns wrapped into one admin surface:
+//   1. Platform-level API keys (system-to-system) — scoped, with
+//      IP allowlists, expiry, and per-key rate limits
+//   2. Outbound webhook endpoints — URL, secret, retry policy, filter
+//      expression, custom headers, auto-disable threshold
+//   3. Event catalog — Flowtora's emitted event taxonomy with sample
+//      payloads + schemas + version history
+//   4. Delivery log — every webhook attempt for replay/inspection
+//   5. Singleton webhook settings (defaults)
+//
+// Permissions: webhooks.read (everyone reads) + webhooks.manage
+// (engineer + admin only).
+// ────────────────────────────────────────────────────────────
+
+enum ApiKeyEnvironment {
+  PRODUCTION
+  STAGING
+  SANDBOX
+}
+
+enum ApiKeyStatus {
+  ACTIVE
+  REVOKED
+  EXPIRED
+}
+
+enum WebhookEndpointStatus {
+  ACTIVE
+  PAUSED
+  FAILING
+  DISABLED
+}
+
+enum WebhookRetryPolicy {
+  EXPONENTIAL
+  LINEAR
+  CUSTOM
+}
+
+enum WebhookEventStability {
+  STABLE
+  BETA
+  DEPRECATED
+}
+
+enum WebhookEventCategory {
+  TENANT_LIFECYCLE
+  SUBSCRIPTION
+  INVOICE
+  PAYMENT
+  USER
+  JOB
+  INTEGRATION
+  SYSTEM
+  SECURITY
+  MARKETING
+}
+
+enum WebhookDeliveryStatus {
+  PENDING
+  SUCCEEDED
+  FAILED
+  DEAD_LETTER
+  RESOLVED
+}
+
+model PlatformApiKey {
+  id   String @id @default(cuid())
+  /** Display name, e.g. "Datadog APM ingest". */
+  name String
+  /** First 8 chars of the key, e.g. "ft_live_". Shown in lists; full
+   *  key only revealed at create time. */
+  keyPrefix    String
+  /** Bcrypt/scrypt hash of the full key. Comparison is constant-time. */
+  hashedKey    String
+  /** Free-form description shown on the detail page. */
+  description  String?
+  /** Owner team string — "Engineering", "Support", etc. */
+  ownerTeam    String?
+  /** Scope strings: "tenants:read", "billing:write", … */
+  scopes       String[] @default([])
+  environment  ApiKeyEnvironment @default(PRODUCTION)
+  status       ApiKeyStatus      @default(ACTIVE)
+  /** CIDR ranges allowed to use this key. Empty = no restriction. */
+  ipAllowlist  String[] @default([])
+  /** Optional per-key rate-limit override in requests/minute. */
+  rateLimitPerMin Int?
+
+  /** Stamped on each successful auth. */
+  lastUsedAt   DateTime?
+  /** Optional expiration timestamp. Null = no expiry. */
+  expiresAt    DateTime?
+
+  createdById  String?
+  createdAt    DateTime @default(now())
+  revokedAt    DateTime?
+  revokedById  String?
+
+  usage        PlatformApiKeyUsage[]
+
+  @@index([status, createdAt])
+  @@index([keyPrefix])
+}
+
+model PlatformApiKeyUsage {
+  id         String @id @default(cuid())
+  apiKeyId   String
+
+  /** HTTP-style status code. */
+  statusCode Int
+  /** Optional route stem, e.g. "/api/v1/tenants". */
+  route      String?
+  /** Per-call duration in ms. */
+  durationMs Int
+  /** Hashed IP for de-dupe + abuse pattern detection. */
+  ipHash     String?
+
+  occurredAt DateTime @default(now())
+
+  apiKey PlatformApiKey @relation(fields: [apiKeyId], references: [id], onDelete: Cascade)
+
+  @@index([apiKeyId, occurredAt])
+}
+
+model WebhookEndpoint {
+  id   String @id @default(cuid())
+  /** HTTPS URL — verified via challenge ping at create time. */
+  url  String
+  description String?
+  status WebhookEndpointStatus @default(ACTIVE)
+
+  /** Subscribed event names — must exist in WebhookEvent.name. */
+  subscribedEvents String[] @default([])
+
+  /** Per-endpoint signing secret. Rotated through SigningSecret
+   *  rotation: old + new active during 24h grace. */
+  signingSecret    String
+  /** When the previous secret stops being honored. */
+  signingSecretRotatesAt DateTime?
+  previousSigningSecret  String?
+
+  /** Custom headers as JSON: [{key, value}]. */
+  customHeaders Json @default("[]")
+
+  retryPolicy   WebhookRetryPolicy @default(EXPONENTIAL)
+  maxAttempts   Int @default(5)
+  timeoutSec    Int @default(15)
+
+  /** CEL/JSONLogic expression — fires only when evaluated truthy.
+   *  Stored as raw text; runtime evaluator lives in /api/webhooks/dispatch. */
+  filterExpression String?
+
+  /** Auto-disable after N consecutive failures. Null = never. */
+  autoDisableThreshold Int?
+  /** Current consecutive failure count — reset on each success. */
+  consecutiveFailures  Int @default(0)
+
+  /** Denormalized rolling success rate over the last 24h. */
+  successRate24h Float?
+  lastDeliveryAt DateTime?
+  lastErrorAt    DateTime?
+  lastError      String?
+
+  createdById String?
+  createdAt   DateTime @default(now())
+  updatedAt   DateTime @updatedAt
+
+  deliveries WebhookDelivery[]
+
+  @@index([status])
+}
+
+model WebhookEvent {
+  id String @id @default(cuid())
+  /** Stable event name, e.g. "tenant.created". Dot-namespaced. */
+  name        String @unique
+  category    WebhookEventCategory
+  description String
+  /** Markdown schema reference / link. */
+  schemaUrl   String?
+  /** Sample JSON payload as a JSON value. */
+  samplePayload Json @default("{}")
+  /** Version this event was introduced in, e.g. "2024.01". */
+  introducedVersion String
+  stability   WebhookEventStability @default(STABLE)
+  /** When STABLE → DEPRECATED, store the migration note. */
+  deprecationNotice String?
+
+  /** Code samples by language: { node, python, ruby, php, go, curl }. */
+  codeSamples Json @default("{}")
+
+  /** Denormalised count of endpoints subscribed to this event. */
+  subscriberCount Int @default(0)
+
+  createdAt DateTime @default(now())
+  updatedAt DateTime @updatedAt
+
+  versions WebhookEventVersion[]
+
+  @@index([category, name])
+  @@index([stability])
+}
+
+model WebhookEventVersion {
+  id String @id @default(cuid())
+  eventId String
+  /** Version this entry covers, e.g. "2024.01" or "2025.06". */
+  version String
+  /** Markdown changelog. */
+  changes String?
+  /** Was this the breaking-change version. */
+  breaking Boolean @default(false)
+  /** Sample payload at this version (for diff). */
+  samplePayload Json @default("{}")
+  releasedAt DateTime @default(now())
+
+  event WebhookEvent @relation(fields: [eventId], references: [id], onDelete: Cascade)
+
+  @@unique([eventId, version])
+}
+
+model WebhookDelivery {
+  id String @id @default(cuid())
+  /** Endpoint this delivery targets. */
+  endpointId String
+  /** Event name as it was at dispatch time. */
+  eventName  String
+  /** Optional tenant id — populated for tenant-scoped events. */
+  tenantId   String?
+
+  status     WebhookDeliveryStatus @default(PENDING)
+  httpCode   Int?
+  /** Round-trip latency in ms (null if request never sent). */
+  latencyMs  Int?
+  /** Attempt counter — 1 for first try, 2 for first retry, etc. */
+  attempts   Int     @default(1)
+  /** When the next retry will fire. Null when terminal. */
+  nextRetryAt DateTime?
+
+  /** JSON payload sent to the endpoint. */
+  payload     Json
+  /** Response body (truncated to ~16KB). */
+  responseBody String?
+  /** Request + response headers as JSON. */
+  requestHeaders  Json @default("{}")
+  responseHeaders Json @default("{}")
+
+  /** Error message when status != SUCCEEDED. */
+  errorMessage String?
+
+  attemptedAt  DateTime @default(now())
+  resolvedAt   DateTime?
+  resolvedById String?
+
+  endpoint WebhookEndpoint @relation(fields: [endpointId], references: [id], onDelete: Cascade)
+
+  @@index([endpointId, attemptedAt])
+  @@index([status, attemptedAt])
+  @@index([eventName, attemptedAt])
+}
+
+model WebhookSettings {
+  id String @id @default("default")
+
+  /** Default retry policy for new endpoints. */
+  defaultRetryPolicy WebhookRetryPolicy @default(EXPONENTIAL)
+  defaultMaxAttempts Int                @default(5)
+  defaultTimeoutSec  Int                @default(15)
+  /** How many days to keep dead-letter deliveries before purging. */
+  deadLetterRetentionDays Int           @default(30)
+  /** Auto-disable threshold default for new endpoints. */
+  defaultAutoDisableThreshold Int?
+  /** Egress IPs displayed for tenant firewall config. */
+  egressIps String[] @default([])
+  /** Encryption-at-rest verification timestamp (drives the badge). */
+  encryptionVerifiedAt DateTime?
+  encryptionAlgorithm  String?
+
+  updatedById String?
+  updatedAt   DateTime @updatedAt
+  createdAt   DateTime @default(now())
+}
+
 model IntegrationCatalogAuditLog {
   id            String @id @default(cuid())
   integrationId String

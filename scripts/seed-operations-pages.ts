@@ -12,6 +12,7 @@
 // notes / tags, and we delete-then-insert by tag.
 
 import { db } from "../src/lib/db";
+import { randomBytes, createHash } from "node:crypto";
 import type {
   OrderStatus, OrderPriority,
   SupportTicketStatus, SupportTicketPriority,
@@ -67,6 +68,7 @@ async function main() {
   await seedSeo();                                    // Page 43
   await seedLeadInbox(platformUsers, tenants);        // Page 44
   await seedIntegrationCatalog(tenants);              // Page 45
+  await seedApiAndWebhooks(platformUsers, tenants);   // Page 46
 
   console.log("\n✓ Seed complete.\n");
   await db.$disconnect();
@@ -222,6 +224,24 @@ async function wipeOldSeed() {
     await db.integrationCatalog.deleteMany({ where: { id: { in: seedIntegrations.map((i) => i.id) } } });
     console.log(`  deleted ${seedIntegrations.length} seed integrations (cascades versions/incidents/sync events/audit)`);
   }
+  // Page 46 — API keys + webhook endpoints + events tagged with [seed].
+  const seedKeys = await db.platformApiKey.findMany({
+    where: { name: { startsWith: "[seed] " } },
+    select: { id: true },
+  });
+  if (seedKeys.length) {
+    await db.platformApiKey.deleteMany({ where: { id: { in: seedKeys.map((k) => k.id) } } });
+    console.log(`  deleted ${seedKeys.length} seed API keys (cascades usage events)`);
+  }
+  const seedEndpoints = await db.webhookEndpoint.findMany({
+    where: { description: { contains: "[seed]" } },
+    select: { id: true },
+  });
+  if (seedEndpoints.length) {
+    await db.webhookEndpoint.deleteMany({ where: { id: { in: seedEndpoints.map((e) => e.id) } } });
+    console.log(`  deleted ${seedEndpoints.length} seed webhook endpoints (cascades deliveries)`);
+  }
+  await db.webhookEvent.deleteMany({ where: { description: { startsWith: "[seed] " } } });
   // Customers tagged seed (after orders are gone).
   await db.customer.deleteMany({ where: { tags: { has: "seed" } } });
   // Products tagged seed (use description marker since Product has no tags array).
@@ -4898,6 +4918,489 @@ async function seedIntegrationCatalog(tenants: { id: string; name: string; slug:
 
   console.log(
     `  ✓ ${createdCount} integrations, ${versionCount} versions, ${tenantConnectionCount} tenant connections, ${syncEventCount} sync events, ${incidentCount} incidents, ${auditCount} audit entries`,
+  );
+}
+
+/* ── Page 46 — API Keys & Webhooks ───────────────── */
+
+async function seedApiAndWebhooks(
+  staff: { id: string }[],
+  tenants: { id: string; name: string; slug: string }[],
+) {
+  console.log("── Seeding API keys + webhooks (Page 46)…");
+  const creator = staff[0];
+  if (!creator) {
+    console.log("  skipped — no platform staff found");
+    return;
+  }
+
+  // 1. Settings (singleton).
+  await db.webhookSettings.upsert({
+    where: { id: "default" },
+    create: {
+      id: "default",
+      defaultRetryPolicy: "EXPONENTIAL",
+      defaultMaxAttempts: 5,
+      defaultTimeoutSec: 15,
+      deadLetterRetentionDays: 30,
+      defaultAutoDisableThreshold: 50,
+      egressIps: ["52.21.34.0/29", "54.148.6.0/29", "13.59.7.0/29"],
+      encryptionAlgorithm: "AES-256-GCM",
+      encryptionVerifiedAt: daysAgo(7),
+    },
+    update: { encryptionVerifiedAt: daysAgo(7) },
+  });
+
+  // 2. Event catalog — covers all 10 categories.
+  type EventBlueprint = {
+    name: string;
+    category:
+      | "TENANT_LIFECYCLE" | "SUBSCRIPTION" | "INVOICE" | "PAYMENT" | "USER"
+      | "JOB" | "INTEGRATION" | "SYSTEM" | "SECURITY" | "MARKETING";
+    stability: "STABLE" | "BETA" | "DEPRECATED";
+    description: string;
+    introduced: string;
+    sample: Record<string, unknown>;
+  };
+  const events: EventBlueprint[] = [
+    { name: "tenant.created", category: "TENANT_LIFECYCLE", stability: "STABLE", introduced: "2024.01",
+      description: "[seed] Fired when a new tenant is created. Includes initial owner + plan.",
+      sample: { id: "tenant_abc", slug: "demo-shop", name: "Demo Shop", plan: "STARTER", createdAt: "2026-05-01T12:00:00Z" } },
+    { name: "tenant.updated", category: "TENANT_LIFECYCLE", stability: "STABLE", introduced: "2024.01",
+      description: "[seed] Tenant profile changed (name, address, logo).",
+      sample: { id: "tenant_abc", changes: { name: { from: "Old", to: "New" } } } },
+    { name: "tenant.deleted", category: "TENANT_LIFECYCLE", stability: "STABLE", introduced: "2024.03",
+      description: "[seed] Tenant was hard-deleted.",
+      sample: { id: "tenant_abc", deletedAt: "2026-05-01T12:00:00Z", reason: "spam" } },
+    { name: "subscription.created", category: "SUBSCRIPTION", stability: "STABLE", introduced: "2024.01",
+      description: "[seed] New subscription started.",
+      sample: { tenantId: "tenant_abc", plan: "PRO", trialEndsAt: "2026-05-15T00:00:00Z" } },
+    { name: "subscription.canceled", category: "SUBSCRIPTION", stability: "STABLE", introduced: "2024.01",
+      description: "[seed] Subscription canceled (cancelAtPeriodEnd=true).",
+      sample: { tenantId: "tenant_abc", reason: "switched_competitor", cancelAtPeriodEnd: true } },
+    { name: "subscription.plan_changed", category: "SUBSCRIPTION", stability: "STABLE", introduced: "2024.04",
+      description: "[seed] Tenant upgraded or downgraded plan.",
+      sample: { tenantId: "tenant_abc", from: "STARTER", to: "PRO" } },
+    { name: "invoice.created", category: "INVOICE", stability: "STABLE", introduced: "2024.01",
+      description: "[seed] New platform invoice generated for a tenant.",
+      sample: { id: "inv_abc", tenantId: "tenant_abc", amount: 12500, currency: "USD" } },
+    { name: "invoice.paid", category: "INVOICE", stability: "STABLE", introduced: "2024.01",
+      description: "[seed] Invoice was paid (Stripe charge succeeded).",
+      sample: { id: "inv_abc", paidAt: "2026-05-01T12:00:00Z", amount: 12500 } },
+    { name: "invoice.payment_failed", category: "INVOICE", stability: "STABLE", introduced: "2024.01",
+      description: "[seed] Charge attempt failed — dunning kicks in.",
+      sample: { id: "inv_abc", attempt: 2, failureCode: "card_declined" } },
+    { name: "payment.refunded", category: "PAYMENT", stability: "STABLE", introduced: "2024.01",
+      description: "[seed] Refund issued against a payment.",
+      sample: { paymentId: "pay_abc", amount: 5000, reason: "customer_request" } },
+    { name: "payment.dispute.opened", category: "PAYMENT", stability: "STABLE", introduced: "2024.06",
+      description: "[seed] Cardholder filed a chargeback.",
+      sample: { paymentId: "pay_abc", disputeReason: "fraudulent", amount: 12500 } },
+    { name: "user.invited", category: "USER", stability: "STABLE", introduced: "2024.01",
+      description: "[seed] Tenant member invited a new teammate.",
+      sample: { tenantId: "tenant_abc", invitedEmail: "alex@example.com", role: "ADMIN" } },
+    { name: "user.login", category: "USER", stability: "STABLE", introduced: "2024.01",
+      description: "[seed] Successful user login (audit trail).",
+      sample: { userId: "user_abc", tenantId: "tenant_abc", method: "PASSWORD" } },
+    { name: "user.suspicious_activity", category: "SECURITY", stability: "STABLE", introduced: "2024.08",
+      description: "[seed] Suspicious activity flagged — failed logins, impossible travel, etc.",
+      sample: { userId: "user_abc", reason: "impossible_travel", details: { from: "US", to: "RU" } } },
+    { name: "job.created", category: "JOB", stability: "STABLE", introduced: "2024.02",
+      description: "[seed] New job/order created in a tenant workspace.",
+      sample: { jobId: "job_abc", tenantId: "tenant_abc", customerId: "cust_abc", total: 24500 } },
+    { name: "job.status_changed", category: "JOB", stability: "STABLE", introduced: "2024.02",
+      description: "[seed] Job moved to a new pipeline status.",
+      sample: { jobId: "job_abc", from: "DRAFT", to: "IN_PRODUCTION" } },
+    { name: "integration.connected", category: "INTEGRATION", stability: "STABLE", introduced: "2024.05",
+      description: "[seed] Tenant connected a third-party integration.",
+      sample: { tenantId: "tenant_abc", provider: "stripe", connectedAt: "2026-05-01T12:00:00Z" } },
+    { name: "integration.sync_failed", category: "INTEGRATION", stability: "BETA", introduced: "2025.02",
+      description: "[seed] An integration sync attempt failed.",
+      sample: { tenantId: "tenant_abc", provider: "quickbooks-online", error: "rate_limit_exceeded" } },
+    { name: "system.maintenance.started", category: "SYSTEM", stability: "STABLE", introduced: "2024.03",
+      description: "[seed] Platform-wide maintenance window started.",
+      sample: { window: "2026-05-01T02:00:00Z/PT2H", reason: "neon_failover" } },
+    { name: "system.feature_freeze", category: "SYSTEM", stability: "STABLE", introduced: "2024.03",
+      description: "[seed] Feature freeze toggled.",
+      sample: { active: true, reason: "holiday_freeze" } },
+    { name: "security.api_key.rotated", category: "SECURITY", stability: "STABLE", introduced: "2024.04",
+      description: "[seed] Platform API key rotated.",
+      sample: { apiKeyId: "key_abc", actor: "admin@flowtora.com" } },
+    { name: "marketing.lead.captured", category: "MARKETING", stability: "STABLE", introduced: "2024.07",
+      description: "[seed] New lead captured from a marketing form.",
+      sample: { leadId: "lead_abc", source: "/contact", email: "..." } },
+    { name: "marketing.referral.converted", category: "MARKETING", stability: "BETA", introduced: "2025.04",
+      description: "[seed] Referred tenant converted to paid plan.",
+      sample: { referralId: "ref_abc", referrerTenantId: "tenant_abc", referredTenantId: "tenant_xyz" } },
+    { name: "billing.coupon_redeemed", category: "INVOICE", stability: "DEPRECATED", introduced: "2023.09",
+      description: "[seed] Coupon redeemed against an invoice. Use invoice.created with `coupon` field instead.",
+      sample: { tenantId: "tenant_abc", couponCode: "SUMMER25", amount: 2500 } },
+  ];
+  let eventCount = 0;
+  const createdEventNames: string[] = [];
+  for (const e of events) {
+    const created = await db.webhookEvent.create({
+      data: {
+        name: e.name,
+        category: e.category,
+        description: e.description,
+        introducedVersion: e.introduced,
+        stability: e.stability,
+        samplePayload: e.sample as never,
+        deprecationNotice: e.stability === "DEPRECATED"
+          ? "Use invoice.created with `coupon` field instead. Sunset 2026-12-01."
+          : null,
+        codeSamples: {
+          node: `import { Flowtora } from "@flowtora/sdk";\nconst ft = new Flowtora({ apiKey });\nft.webhooks.on("${e.name}", (payload) => {\n  // ...\n});`,
+          curl: `curl -X POST https://your.app/webhook \\\n  -H "X-Flowtora-Event: ${e.name}" \\\n  -H "X-Flowtora-Signature: <hmac>" \\\n  -d '${JSON.stringify(e.sample)}'`,
+        },
+        subscriberCount: 0,
+      },
+    });
+    eventCount++;
+    createdEventNames.push(e.name);
+    // Add 1-2 historical version entries for events that have been
+    // around for a while.
+    if (e.introduced.startsWith("2024")) {
+      await db.webhookEventVersion.create({
+        data: {
+          eventId: created.id,
+          version: e.introduced,
+          changes: "Initial release.",
+          breaking: false,
+          samplePayload: e.sample as never,
+          releasedAt: daysAgo(randInt(200, 600)),
+        },
+      });
+      if (Math.random() < 0.5) {
+        await db.webhookEventVersion.create({
+          data: {
+            eventId: created.id,
+            version: "2025.06",
+            changes: "Added optional metadata fields. Non-breaking.",
+            breaking: false,
+            samplePayload: e.sample as never,
+            releasedAt: daysAgo(randInt(60, 200)),
+          },
+        });
+      }
+    }
+  }
+
+  // 3. API keys.
+  type KeyBlueprint = {
+    name: string;
+    description: string;
+    ownerTeam: string;
+    scopes: string[];
+    environment: "PRODUCTION" | "STAGING" | "SANDBOX";
+    expiryDays: number | null;
+    ipAllowlist?: string[];
+    rateLimitPerMin?: number;
+    status?: "ACTIVE" | "REVOKED" | "EXPIRED";
+    revokedDays?: number;
+    usagePerDay: number;
+    errorRate: number;
+  };
+  const keyBlueprints: KeyBlueprint[] = [
+    {
+      name: "[seed] Datadog APM ingest",
+      description: "Ingest platform telemetry into Datadog APM.",
+      ownerTeam: "Engineering",
+      scopes: ["audit:read", "system:read_settings", "tenant:read"],
+      environment: "PRODUCTION", expiryDays: 180,
+      ipAllowlist: ["13.0.0.0/8"], rateLimitPerMin: 1000,
+      usagePerDay: 800, errorRate: 0.005,
+    },
+    {
+      name: "[seed] Snowflake reverse-ETL",
+      description: "Pull tenant + billing data into Snowflake nightly.",
+      ownerTeam: "Data", scopes: ["tenants:read", "billing:read", "users:read", "audit:read"],
+      environment: "PRODUCTION", expiryDays: 365,
+      rateLimitPerMin: 500, usagePerDay: 60, errorRate: 0.01,
+    },
+    {
+      name: "[seed] Stripe Connect callback",
+      description: "Internal service auth for Stripe webhooks.",
+      ownerTeam: "Engineering", scopes: ["billing:read", "billing:write"],
+      environment: "PRODUCTION", expiryDays: null,
+      rateLimitPerMin: 5000, usagePerDay: 1500, errorRate: 0.001,
+    },
+    {
+      name: "[seed] Customer.io sync",
+      description: "Sync engagement data into Customer.io for marketing.",
+      ownerTeam: "Marketing", scopes: ["users:read", "tenants:read"],
+      environment: "PRODUCTION", expiryDays: 90, rateLimitPerMin: 200,
+      usagePerDay: 120, errorRate: 0.02,
+    },
+    {
+      name: "[seed] PagerDuty incident bridge",
+      description: "Forward platform alerts to PagerDuty.",
+      ownerTeam: "SRE", scopes: ["audit:read"],
+      environment: "PRODUCTION", expiryDays: null, rateLimitPerMin: 100,
+      usagePerDay: 5, errorRate: 0,
+    },
+    {
+      name: "[seed] Staging — load test",
+      description: "Used by load-testing harness in staging.",
+      ownerTeam: "QA", scopes: ["tenants:read", "tenants:write", "billing:read"],
+      environment: "STAGING", expiryDays: 30, rateLimitPerMin: 10000,
+      usagePerDay: 200, errorRate: 0.05,
+    },
+    {
+      name: "[seed] Sandbox — partner integration testing",
+      description: "Lent out to partners for integration QA.",
+      ownerTeam: "DevRel", scopes: ["tenants:read", "billing:read", "users:read"],
+      environment: "SANDBOX", expiryDays: 90, rateLimitPerMin: 60,
+      usagePerDay: 30, errorRate: 0.08,
+    },
+    {
+      name: "[seed] Legacy migration tool",
+      description: "Internal CLI to backfill data from legacy DB. Single-use.",
+      ownerTeam: "Engineering", scopes: ["tenants:write", "billing:write", "system:admin"],
+      environment: "PRODUCTION", expiryDays: null, rateLimitPerMin: 50,
+      usagePerDay: 0, errorRate: 0,
+      status: "REVOKED", revokedDays: 12,
+    },
+    {
+      name: "[seed] Marketing site form submitter",
+      description: "Captures contact form submissions from flowtora.com.",
+      ownerTeam: "Marketing", scopes: ["leads:write"],
+      environment: "PRODUCTION", expiryDays: 365, rateLimitPerMin: 30,
+      usagePerDay: 8, errorRate: 0.001,
+    },
+    {
+      name: "[seed] Mobile app v2 build",
+      description: "Mobile app talks to the platform via this key.",
+      ownerTeam: "Engineering", scopes: ["tenants:read", "users:read", "users:write"],
+      environment: "PRODUCTION", expiryDays: 12, rateLimitPerMin: 2000,
+      usagePerDay: 950, errorRate: 0.008,
+    },
+  ];
+  let keyCount = 0;
+  const keysWithUsage: Array<{ id: string; usagePerDay: number; errorRate: number }> = [];
+  for (const b of keyBlueprints) {
+    const tail = randomBytes(20).toString("hex");
+    const envCode = b.environment === "PRODUCTION" ? "live" : b.environment === "STAGING" ? "stg" : "sand";
+    const fullKey = `ft_${envCode}_${tail}`;
+    const created = await db.platformApiKey.create({
+      data: {
+        name: b.name,
+        description: b.description,
+        ownerTeam: b.ownerTeam,
+        scopes: b.scopes,
+        environment: b.environment,
+        keyPrefix: fullKey.slice(0, 12),
+        hashedKey: createHash("sha256").update(fullKey).digest("hex"),
+        ipAllowlist: b.ipAllowlist ?? [],
+        rateLimitPerMin: b.rateLimitPerMin ?? null,
+        expiresAt: b.expiryDays != null ? new Date(Date.now() + b.expiryDays * DAY) : null,
+        status: b.status ?? "ACTIVE",
+        revokedAt: b.revokedDays != null ? daysAgo(b.revokedDays) : null,
+        revokedById: b.revokedDays != null ? creator.id : null,
+        createdById: creator.id,
+        lastUsedAt: b.usagePerDay > 0 ? new Date(Date.now() - randInt(1, 60) * 60_000) : null,
+        createdAt: daysAgo(randInt(30, 365)),
+      },
+    });
+    keyCount++;
+    if (b.status !== "REVOKED") {
+      keysWithUsage.push({ id: created.id, usagePerDay: b.usagePerDay, errorRate: b.errorRate });
+    }
+  }
+
+  // Bulk-insert per-key usage events for the last 7 days.
+  let usageCount = 0;
+  for (const k of keysWithUsage) {
+    const events: Array<Record<string, unknown>> = [];
+    for (let day = 6; day >= 0; day--) {
+      const callsToday = Math.round(k.usagePerDay * (0.85 + Math.random() * 0.3));
+      // Sample at most 30/day to keep volumes sane.
+      const sampleCount = Math.min(30, callsToday);
+      for (let i = 0; i < sampleCount; i++) {
+        const isError = Math.random() < k.errorRate;
+        const status = isError ? rand([429, 500, 502, 503] as const) : rand([200, 200, 200, 201, 204] as const);
+        events.push({
+          apiKeyId: k.id,
+          statusCode: status,
+          route: rand(["/api/v1/tenants", "/api/v1/billing/invoices", "/api/v1/users", "/api/v1/audit"] as const),
+          durationMs: randInt(20, status >= 500 ? 2000 : 400),
+          ipHash: Math.random().toString(36).slice(2, 18),
+          occurredAt: new Date(Date.now() - day * DAY - randInt(0, DAY)),
+        });
+      }
+    }
+    for (let i = 0; i < events.length; i += 200) {
+      await db.platformApiKeyUsage.createMany({ data: events.slice(i, i + 200) as never });
+    }
+    usageCount += events.length;
+  }
+
+  // 4. Webhook endpoints — 8 endpoints with realistic event mixes.
+  type EndpointBlueprint = {
+    url: string;
+    description: string;
+    status: "ACTIVE" | "PAUSED" | "FAILING" | "DISABLED";
+    events: string[];
+    successRate: number; // 0-1
+    consecutiveFailures: number;
+    lastErrorMessage?: string;
+    customHeaders?: Array<{ key: string; value: string }>;
+    filterExpression?: string;
+  };
+  const endpointBlueprints: EndpointBlueprint[] = [
+    {
+      url: "https://hooks.zapier.com/hooks/catch/123/abc-flowtora",
+      description: "[seed] Zapier — push tenant lifecycle into Airtable.",
+      status: "ACTIVE",
+      events: ["tenant.created", "tenant.updated", "subscription.plan_changed"],
+      successRate: 0.998, consecutiveFailures: 0,
+    },
+    {
+      url: "https://api.customer.io/v1/integrations/flowtora-callback",
+      description: "[seed] Customer.io — engagement triggers.",
+      status: "ACTIVE",
+      events: ["user.login", "user.invited", "marketing.lead.captured"],
+      successRate: 0.995, consecutiveFailures: 0,
+    },
+    {
+      url: "https://api.pagerduty.com/integration/abc/incidents",
+      description: "[seed] PagerDuty — failed-payment alerts → on-call.",
+      status: "ACTIVE",
+      events: ["invoice.payment_failed", "payment.dispute.opened", "user.suspicious_activity"],
+      successRate: 1.0, consecutiveFailures: 0,
+      filterExpression: "payload.amount > 50000 || event == 'user.suspicious_activity'",
+    },
+    {
+      url: "https://salesforce.example.com/services/apexrest/flowtora",
+      description: "[seed] Salesforce — push subscription events into the CRM.",
+      status: "FAILING",
+      events: ["subscription.created", "subscription.canceled", "subscription.plan_changed"],
+      successRate: 0.42, consecutiveFailures: 7,
+      lastErrorMessage: "Salesforce returned 401 — OAuth token expired",
+      customHeaders: [{ key: "X-SFDC-Source", value: "platform" }],
+    },
+    {
+      url: "https://hooks.slack.com/services/T01/B02/abc-warroom",
+      description: "[seed] Slack #warroom — feature-freeze + maintenance alerts.",
+      status: "ACTIVE",
+      events: ["system.maintenance.started", "system.feature_freeze"],
+      successRate: 1.0, consecutiveFailures: 0,
+    },
+    {
+      url: "https://internal-finance.flowtora.com/webhook/billing",
+      description: "[seed] Internal finance — invoice/payment ingest into the GL.",
+      status: "ACTIVE",
+      events: ["invoice.created", "invoice.paid", "payment.refunded"],
+      successRate: 0.96, consecutiveFailures: 1,
+      lastErrorMessage: "Connection reset — retried successfully",
+    },
+    {
+      url: "https://staging-mock.flowtora.com/webhook/test",
+      description: "[seed] Staging mock — used for QA.",
+      status: "PAUSED",
+      events: ["tenant.created", "subscription.created", "invoice.created"],
+      successRate: 0.99, consecutiveFailures: 0,
+    },
+    {
+      url: "https://decommissioned.example.com/webhook",
+      description: "[seed] Old vendor — endpoint decommissioned. Will be removed.",
+      status: "DISABLED",
+      events: ["tenant.created"],
+      successRate: 0, consecutiveFailures: 50,
+      lastErrorMessage: "DNS resolution failed",
+    },
+  ];
+  let endpointCount = 0;
+  const createdEndpoints: { id: string; url: string; events: string[]; status: string; successRate: number }[] = [];
+  for (const b of endpointBlueprints) {
+    const created = await db.webhookEndpoint.create({
+      data: {
+        url: b.url,
+        description: b.description,
+        status: b.status,
+        subscribedEvents: b.events,
+        signingSecret: `whsec_${randomBytes(24).toString("hex")}`,
+        customHeaders: b.customHeaders ?? [],
+        retryPolicy: "EXPONENTIAL",
+        maxAttempts: 5,
+        timeoutSec: 15,
+        filterExpression: b.filterExpression ?? null,
+        autoDisableThreshold: 50,
+        consecutiveFailures: b.consecutiveFailures,
+        successRate24h: b.successRate,
+        lastDeliveryAt: b.status !== "DISABLED" ? daysAgo(randInt(0, 1)) : daysAgo(60),
+        lastErrorAt: b.lastErrorMessage ? daysAgo(randInt(0, 5)) : null,
+        lastError: b.lastErrorMessage ?? null,
+        createdById: creator.id,
+        createdAt: daysAgo(randInt(30, 200)),
+      },
+    });
+    endpointCount++;
+    createdEndpoints.push({ id: created.id, url: b.url, events: b.events, status: b.status, successRate: b.successRate });
+  }
+
+  // 5. Refresh subscriberCount on events.
+  for (const eventName of createdEventNames) {
+    const subscriberCount = createdEndpoints.filter((e) => e.events.includes(eventName)).length;
+    if (subscriberCount > 0) {
+      await db.webhookEvent.updateMany({
+        where: { name: eventName },
+        data: { subscriberCount },
+      });
+    }
+  }
+
+  // 6. Webhook deliveries — bulk insert ~30 per active endpoint over the last 24h.
+  let deliveryCount = 0;
+  for (const ep of createdEndpoints) {
+    if (ep.status === "DISABLED" || ep.events.length === 0) continue;
+    const deliveryEvents = ep.status === "PAUSED" ? 5 : 30;
+    const events: Array<Record<string, unknown>> = [];
+    for (let i = 0; i < deliveryEvents; i++) {
+      const eventName = rand(ep.events);
+      const success = Math.random() < ep.successRate;
+      const tenantId = Math.random() < 0.7 && tenants.length > 0 ? rand(tenants).id : null;
+      const httpCode = success ? 200 : rand([401, 422, 500, 502, 503] as const);
+      const status = success ? "SUCCEEDED"
+        : (i % 4 === 0 ? "DEAD_LETTER" : "FAILED");
+      const attempts = success ? 1 : randInt(1, 5);
+      const sampleEvent = events.length > 0 ? null : null; // payload comes from event sample
+      void sampleEvent;
+      const samplePayload = (await db.webhookEvent.findUnique({ where: { name: eventName }, select: { samplePayload: true } }))?.samplePayload ?? {};
+      events.push({
+        endpointId: ep.id,
+        eventName,
+        tenantId,
+        status,
+        httpCode,
+        latencyMs: randInt(50, success ? 800 : 5000),
+        attempts,
+        nextRetryAt: status === "FAILED" && attempts < 5
+          ? new Date(Date.now() + randInt(60, 600) * 1000)
+          : null,
+        payload: samplePayload as never,
+        responseBody: success
+          ? '{"ok":true}'
+          : (httpCode === 401 ? '{"error":"unauthorized"}' : '{"error":"server_error"}'),
+        requestHeaders: {
+          "Content-Type": "application/json",
+          "X-Flowtora-Event": eventName,
+          "X-Flowtora-Signature": "v1=" + randomBytes(8).toString("hex"),
+        },
+        responseHeaders: { "Content-Type": "application/json" },
+        errorMessage: success ? null : (httpCode === 401 ? "Auth failed (token expired)" : "Upstream timeout"),
+        attemptedAt: new Date(Date.now() - randInt(0, 24 * 60 * 60 * 1000)),
+      });
+    }
+    for (let i = 0; i < events.length; i += 100) {
+      await db.webhookDelivery.createMany({ data: events.slice(i, i + 100) as never });
+    }
+    deliveryCount += events.length;
+  }
+
+  console.log(
+    `  ✓ ${eventCount} events, ${keyCount} API keys, ${usageCount.toLocaleString()} usage events, ${endpointCount} endpoints, ${deliveryCount.toLocaleString()} deliveries`,
   );
 }
 
