@@ -84,6 +84,8 @@ export const PERMISSION_DESCRIPTIONS: Record<PlatformPermission, string> = {
   "affiliates.manage":     "Approve/reject applications, edit tiers, and manage the creative library.",
   "seo.read":              "View keyword rankings, backlinks, broken links, content gaps, and page-speed metrics.",
   "seo.manage":            "Edit SEO settings (robots.txt, sitemap, meta defaults), resolve broken links, and triage content gaps.",
+  "integrations.read":     "View the integration catalog, adoption metrics, health, and version history.",
+  "integrations.manage":   "Edit catalog entries, manage versions, deprecate integrations, and force-disconnect tenants.",
   // Analytics
   "analytics.read":        "Read analytics dashboards.",
   "analytics.export":      "Export analytics datasets.",

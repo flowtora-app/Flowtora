@@ -5954,6 +5954,241 @@ model LeadEmailMessage {
   @@index([leadId, createdAt])
 }
 
+// ────────────────────────────────────────────────────────────
+// Page 45 — Third-Party Integrations Catalog.
+//
+// Master list of every integration available to tenants. Per-tenant
+// connection state already lives on `TenantIntegration` (provider key
+// matches IntegrationCatalog.slug). This catalog adds:
+//   - branding + description + screenshots
+//   - auth type + OAuth scopes + config schema
+//   - capabilities matrix (read/write/sync/webhook per entity)
+//   - regions + plan tiers + pricing
+//   - documentation + FAQ + code samples
+//   - inbound/outbound webhook catalog
+//   - default field mappings
+//   - version history + incidents + sync metrics + audit log
+// ────────────────────────────────────────────────────────────
+
+enum IntegrationCatalogStatus {
+  ACTIVE
+  BETA
+  COMING_SOON
+  DEPRECATED
+  INTERNAL_ONLY
+}
+
+enum IntegrationAuthType {
+  OAUTH2
+  API_KEY
+  BASIC_AUTH
+  SAML
+  CUSTOM
+}
+
+enum IntegrationCategory {
+  ACCOUNTING
+  PAYMENTS
+  ECOMMERCE
+  MARKETPLACES
+  AUTOMATION
+  COMMUNICATION
+  EMAIL_MARKETING
+  CRM
+  TEAM_COLLAB
+  PRODUCTIVITY
+  SHIPPING
+  CARRIERS
+  DESIGN
+  FILE_TRANSFER
+  PRINT_INDUSTRY
+  EQUIPMENT
+  ANALYTICS
+  TELEPHONY
+  CALENDAR
+  REVIEWS
+  OTHER
+}
+
+enum IntegrationRegion {
+  US
+  CA
+  EU
+  UK
+  APAC
+  GLOBAL
+}
+
+enum IntegrationIncidentSeverity {
+  CRITICAL
+  MAJOR
+  MINOR
+}
+
+enum IntegrationIncidentStatus {
+  INVESTIGATING
+  IDENTIFIED
+  MONITORING
+  RESOLVED
+}
+
+model IntegrationCatalog {
+  id   String @id @default(cuid())
+  /** Stable slug — referenced as TenantIntegration.provider value.
+   *  Drives the URL: /platform/integrations/[slug]. */
+  slug String @unique
+  name String
+  category IntegrationCategory
+  status   IntegrationCatalogStatus @default(ACTIVE)
+
+  // Branding
+  logoUrl     String?
+  vendorUrl   String?
+  supportEmail String?
+  /** 1-line description shown on the catalog grid card (max 80 chars). */
+  shortDescription String
+  /** Long markdown description for the Overview tab. */
+  description      String
+  /** Image URLs for the Overview screenshot gallery. */
+  screenshots String[] @default([])
+
+  // Auth + config
+  authType        IntegrationAuthType @default(OAUTH2)
+  /** OAuth scopes catalog: [{ scope, justification, capability }]. */
+  oauthScopes     Json @default("[]")
+  redirectUri     String?
+  webhookEndpoint String?
+  /** Required environment variable names (per-tenant secrets). */
+  envVarsRequired String[] @default([])
+  /** JSON schema for the connection config form (the same shape that
+   *  shows up in the tenant-side connect dialog). */
+  configSchema    Json @default("{}")
+
+  /** Capabilities matrix: [{ entity, read, write, sync, webhook }]. */
+  capabilities Json @default("[]")
+
+  // Availability
+  /** Plan keys this integration is available on. */
+  availablePlans String[] @default([])
+  /** Regions where this integration is offered. */
+  regions IntegrationRegion[] @default([])
+
+  // Pricing
+  requiresUpgrade  Boolean @default(false)
+  /** Per-call cost in cents (for metered integrations). */
+  perCallCents     Int?
+  passThroughFees  String?
+
+  // Documentation
+  documentation String?
+  faq           String?
+  /** Code samples keyed by language: { node, python, ruby, php, go, curl }. */
+  codeSamples   Json @default("{}")
+
+  // Webhooks
+  /** Outbound: [{ event, url, description }]. */
+  outboundWebhooks Json @default("[]")
+  /** Inbound: [{ event, description }]. */
+  inboundWebhooks  Json @default("[]")
+
+  /** Default field mappings: [{ flowtoraField, partnerField, direction }]. */
+  defaultFieldMappings Json @default("[]")
+
+  /** Currently-default version slug (semver). */
+  defaultVersion String @default("1.0.0")
+  /** Set when deprecating — informs the sunset banner. */
+  deprecatedAt DateTime?
+  sunsetAt     DateTime?
+  internalOnly Boolean @default(false)
+
+  // Denormalised counters for the catalog tile + KPI strip.
+  connectedTenantCount Int   @default(0)
+  uptimePct90d         Float?
+  syncCount7d          Int   @default(0)
+  errorCount30d        Int   @default(0)
+
+  createdById String?
+  createdAt   DateTime @default(now())
+  updatedAt   DateTime @updatedAt
+
+  versions   IntegrationVersion[]
+  incidents  IntegrationIncident[]
+  syncEvents IntegrationSyncEvent[]
+  auditLog   IntegrationCatalogAuditLog[]
+
+  @@index([category, status])
+  @@index([status])
+}
+
+model IntegrationVersion {
+  id            String @id @default(cuid())
+  integrationId String
+  version       String
+  /** Markdown changelog. */
+  changes       String?
+  isDefault     Boolean @default(false)
+  deprecatedAt  DateTime?
+  releasedAt    DateTime @default(now())
+  /** How many tenants are pinned to this version (denormalised). */
+  tenantCount   Int     @default(0)
+
+  integration IntegrationCatalog @relation(fields: [integrationId], references: [id], onDelete: Cascade)
+
+  @@unique([integrationId, version])
+  @@index([integrationId, releasedAt])
+}
+
+model IntegrationIncident {
+  id            String @id @default(cuid())
+  integrationId String
+  title         String
+  description   String?
+  severity      IntegrationIncidentSeverity @default(MINOR)
+  status        IntegrationIncidentStatus   @default(INVESTIGATING)
+  startedAt     DateTime
+  resolvedAt    DateTime?
+
+  integration IntegrationCatalog @relation(fields: [integrationId], references: [id], onDelete: Cascade)
+
+  @@index([integrationId, startedAt])
+  @@index([status, startedAt])
+}
+
+model IntegrationSyncEvent {
+  id            String @id @default(cuid())
+  integrationId String
+  /** Per-call duration in ms. */
+  durationMs    Int
+  success       Boolean
+  /** HTTP-style status code. Null when network-level failure. */
+  statusCode    Int?
+  /** Optional — tenant whose sync this was. Used by adoption rollups. */
+  tenantId      String?
+  /** Free-form descriptor: "sync.invoices", "webhook.received", etc. */
+  kind          String?
+
+  occurredAt DateTime @default(now())
+
+  integration IntegrationCatalog @relation(fields: [integrationId], references: [id], onDelete: Cascade)
+
+  @@index([integrationId, occurredAt])
+  @@index([tenantId, occurredAt])
+}
+
+model IntegrationCatalogAuditLog {
+  id            String @id @default(cuid())
+  integrationId String
+  /** "config_updated" / "version_set_default" / "deprecated" / "force_disconnect_all" / "version_created" / etc. */
+  action        String
+  detail        String?
+  authorId      String?
+  occurredAt    DateTime @default(now())
+
+  integration IntegrationCatalog @relation(fields: [integrationId], references: [id], onDelete: Cascade)
+
+  @@index([integrationId, occurredAt])
+}
+
 model LeadRoutingEvent {
   id     String @id @default(cuid())
   leadId String

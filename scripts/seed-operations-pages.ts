@@ -66,6 +66,7 @@ async function main() {
   await seedAffiliates();                             // Page 42
   await seedSeo();                                    // Page 43
   await seedLeadInbox(platformUsers, tenants);        // Page 44
+  await seedIntegrationCatalog(tenants);              // Page 45
 
   console.log("\n✓ Seed complete.\n");
   await db.$disconnect();
@@ -210,6 +211,16 @@ async function wipeOldSeed() {
   if (seedLeads.length) {
     await db.marketingLead.deleteMany({ where: { id: { in: seedLeads.map((l) => l.id) } } });
     console.log(`  deleted ${seedLeads.length} seed leads (cascades to activities/tasks/emails/routing)`);
+  }
+  // Page 45 — integration catalog rows tagged with [seed] in name (and
+  // their sync events / versions / incidents / audit cascading away).
+  const seedIntegrations = await db.integrationCatalog.findMany({
+    where: { name: { startsWith: "[seed] " } },
+    select: { id: true },
+  });
+  if (seedIntegrations.length) {
+    await db.integrationCatalog.deleteMany({ where: { id: { in: seedIntegrations.map((i) => i.id) } } });
+    console.log(`  deleted ${seedIntegrations.length} seed integrations (cascades versions/incidents/sync events/audit)`);
   }
   // Customers tagged seed (after orders are gone).
   await db.customer.deleteMany({ where: { tags: { has: "seed" } } });
@@ -4176,6 +4187,717 @@ async function seedLeadInbox(
 
   console.log(
     `  ✓ ${leadCount} leads, ${activityCount} activity events, ${taskCount} tasks, ${emailCount} emails, ${routingCount} routing events`,
+  );
+}
+
+/* ── Page 45 — Integrations Catalog ──────────────── */
+
+async function seedIntegrationCatalog(tenants: { id: string; name: string; slug: string }[]) {
+  console.log("── Seeding integrations catalog (Page 45)…");
+
+  type Blueprint = {
+    slug: string;
+    name: string;
+    category:
+      | "ACCOUNTING" | "PAYMENTS" | "ECOMMERCE" | "MARKETPLACES" | "AUTOMATION" | "COMMUNICATION"
+      | "EMAIL_MARKETING" | "CRM" | "TEAM_COLLAB" | "PRODUCTIVITY" | "SHIPPING" | "CARRIERS"
+      | "DESIGN" | "FILE_TRANSFER" | "PRINT_INDUSTRY" | "EQUIPMENT" | "ANALYTICS" | "TELEPHONY"
+      | "CALENDAR" | "REVIEWS" | "OTHER";
+    status: "ACTIVE" | "BETA" | "COMING_SOON" | "DEPRECATED" | "INTERNAL_ONLY";
+    authType: "OAUTH2" | "API_KEY" | "BASIC_AUTH" | "SAML" | "CUSTOM";
+    short: string;
+    description: string;
+    vendorUrl: string;
+    supportEmail: string;
+    plans: string[];
+    regions: ("US" | "CA" | "EU" | "UK" | "APAC" | "GLOBAL")[];
+    capabilities: Array<{ entity: string; read: boolean; write: boolean; sync: boolean; webhook: boolean }>;
+    scopes?: Array<{ scope: string; capability: string; justification: string }>;
+    outboundWebhooks?: Array<{ event: string; description: string }>;
+    inboundWebhooks?:  Array<{ event: string; description: string }>;
+    fieldMappings?:    Array<{ flowtoraField: string; partnerField: string; direction: "OUT" | "IN" | "BOTH" }>;
+    perCallCents?: number;
+    requiresUpgrade?: boolean;
+    deprecatedDays?: number;
+    versions?: Array<{ version: string; changes: string; releasedDays: number; isDefault?: boolean; deprecatedDays?: number }>;
+    docs?: string;
+    faq?: string;
+    code?: Record<string, string>;
+  };
+
+  const integrations: Blueprint[] = [
+    {
+      slug: "quickbooks-online",
+      name: "[seed] QuickBooks Online",
+      category: "ACCOUNTING", status: "ACTIVE", authType: "OAUTH2",
+      short: "Sync invoices, customers, and payments to QuickBooks Online.",
+      description: "Two-way sync between Flowtora and QuickBooks Online. Customers, invoices, and payments mirror automatically; line items map to QuickBooks income accounts you configure during setup.",
+      vendorUrl: "https://quickbooks.intuit.com/online/",
+      supportEmail: "support@intuit.com",
+      plans: ["Pro", "Business", "Enterprise"],
+      regions: ["US", "CA", "UK", "GLOBAL"],
+      capabilities: [
+        { entity: "Customer", read: true, write: true, sync: true, webhook: false },
+        { entity: "Invoice",  read: true, write: true, sync: true, webhook: true  },
+        { entity: "Payment",  read: true, write: true, sync: true, webhook: true  },
+        { entity: "Item",     read: true, write: false, sync: true, webhook: false },
+      ],
+      scopes: [
+        { scope: "com.intuit.quickbooks.accounting", capability: "READ/WRITE", justification: "Read + write customers, invoices, line items, and payments." },
+      ],
+      outboundWebhooks: [
+        { event: "invoice.created", description: "Push new invoices to QuickBooks." },
+        { event: "payment.received", description: "Mark invoices paid in QuickBooks." },
+      ],
+      inboundWebhooks: [
+        { event: "invoice.payment_recorded", description: "QuickBooks marked a payment — reflect it in Flowtora." },
+      ],
+      fieldMappings: [
+        { flowtoraField: "Invoice.total", partnerField: "Invoice.TotalAmt", direction: "OUT" },
+        { flowtoraField: "Customer.email", partnerField: "Customer.PrimaryEmailAddr.Address", direction: "BOTH" },
+        { flowtoraField: "LineItem.description", partnerField: "Line.Description", direction: "OUT" },
+      ],
+      versions: [
+        { version: "1.0.0", changes: "Initial release.", releasedDays: 320, deprecatedDays: 60 },
+        { version: "2.0.0", changes: "Adds payment webhooks; switches to OAuth 2 + Intuit API v3.", releasedDays: 60, isDefault: true },
+        { version: "2.1.0", changes: "Adds line-item description sync + multi-currency support.", releasedDays: 12 },
+      ],
+      docs: "## QuickBooks Online setup\n\n1. Connect from **Settings → Integrations → QuickBooks Online**.\n2. Pick the QBO company on the OAuth screen.\n3. Map your default income account.\n\n## Troubleshooting\n\n* **Invoices stuck pending**: rotate the connection token from the integrations dashboard.\n",
+      faq: "**Does it support sub-customers?** Yes — sync them as separate Flowtora customers and link via the parent_id field.\n\n**Does it support multi-currency?** Yes (since v2.1.0).",
+      code: {
+        node: "import { QuickBooksClient } from \"@flowtora/quickbooks\";\nconst qb = new QuickBooksClient({ tenantId });\nawait qb.invoices.create({ customerId, lines });\n",
+      },
+    },
+    {
+      slug: "stripe",
+      name: "[seed] Stripe",
+      category: "PAYMENTS", status: "ACTIVE", authType: "OAUTH2",
+      short: "Accept payments + subscriptions via Stripe Connect.",
+      description: "Stripe Connect powers tenant-side payments. Charges, subscriptions, refunds, and disputes sync in real time via webhooks.",
+      vendorUrl: "https://stripe.com",
+      supportEmail: "support@stripe.com",
+      plans: ["Pro", "Business", "Enterprise"],
+      regions: ["GLOBAL"],
+      capabilities: [
+        { entity: "Charge",       read: true, write: true, sync: true, webhook: true },
+        { entity: "Subscription", read: true, write: true, sync: true, webhook: true },
+        { entity: "Refund",       read: true, write: true, sync: true, webhook: true },
+        { entity: "Customer",     read: true, write: true, sync: true, webhook: true },
+      ],
+      scopes: [
+        { scope: "read_write", capability: "READ/WRITE", justification: "Process payments + manage subscriptions on behalf of the tenant." },
+      ],
+      outboundWebhooks: [
+        { event: "charge.refunded", description: "Issue a refund through Stripe." },
+      ],
+      inboundWebhooks: [
+        { event: "charge.succeeded",   description: "Mark invoice paid." },
+        { event: "charge.failed",      description: "Trigger dunning workflow." },
+        { event: "customer.subscription.deleted", description: "Cancel tenant subscription." },
+      ],
+      fieldMappings: [
+        { flowtoraField: "Payment.amount", partnerField: "Charge.amount", direction: "BOTH" },
+        { flowtoraField: "Customer.stripeCustomerId", partnerField: "Customer.id", direction: "BOTH" },
+      ],
+      versions: [
+        { version: "3.0.0", changes: "Stripe Connect (Standard) onboarding.", releasedDays: 540, deprecatedDays: 180 },
+        { version: "4.0.0", changes: "Stripe Connect Express + radius authentication.", releasedDays: 90, isDefault: true },
+      ],
+      perCallCents: 5,
+    },
+    {
+      slug: "shopify",
+      name: "[seed] Shopify",
+      category: "ECOMMERCE", status: "ACTIVE", authType: "OAUTH2",
+      short: "Pull orders + products from Shopify storefronts.",
+      description: "Imports Shopify orders into the Flowtora job queue. Customers, line items, and shipping addresses ride along; tracking numbers push back to Shopify on dispatch.",
+      vendorUrl: "https://shopify.com",
+      supportEmail: "partner@shopify.com",
+      plans: ["Pro", "Business"],
+      regions: ["GLOBAL"],
+      capabilities: [
+        { entity: "Order",    read: true, write: false, sync: true, webhook: true },
+        { entity: "Customer", read: true, write: false, sync: true, webhook: false },
+        { entity: "Product",  read: true, write: false, sync: true, webhook: false },
+        { entity: "Fulfillment", read: false, write: true, sync: true, webhook: false },
+      ],
+      scopes: [
+        { scope: "read_orders",       capability: "READ",  justification: "Pull orders into the Flowtora job queue." },
+        { scope: "write_fulfillments",capability: "WRITE", justification: "Push tracking numbers back to Shopify." },
+      ],
+      inboundWebhooks: [
+        { event: "orders/create", description: "Create job in Flowtora." },
+      ],
+    },
+    {
+      slug: "square",
+      name: "[seed] Square",
+      category: "PAYMENTS", status: "ACTIVE", authType: "OAUTH2",
+      short: "Accept in-person + online payments via Square.",
+      description: "Square integration for shops that take walk-in payments. Receipts sync to Flowtora invoices; refunds round-trip cleanly.",
+      vendorUrl: "https://squareup.com",
+      supportEmail: "developers@squareup.com",
+      plans: ["Pro", "Business"],
+      regions: ["US", "CA", "UK", "APAC"],
+      capabilities: [
+        { entity: "Payment", read: true, write: true, sync: true, webhook: true },
+        { entity: "Customer", read: true, write: true, sync: true, webhook: false },
+      ],
+    },
+    {
+      slug: "xero",
+      name: "[seed] Xero",
+      category: "ACCOUNTING", status: "ACTIVE", authType: "OAUTH2",
+      short: "Sync invoices and contacts to Xero.",
+      description: "Xero accounting integration popular in EU/UK/AU.",
+      vendorUrl: "https://xero.com",
+      supportEmail: "support@xero.com",
+      plans: ["Business", "Enterprise"],
+      regions: ["US", "UK", "EU", "APAC"],
+      capabilities: [
+        { entity: "Contact", read: true, write: true, sync: true, webhook: false },
+        { entity: "Invoice", read: true, write: true, sync: true, webhook: false },
+      ],
+    },
+    {
+      slug: "mailchimp",
+      name: "[seed] Mailchimp",
+      category: "EMAIL_MARKETING", status: "ACTIVE", authType: "OAUTH2",
+      short: "Sync customers as Mailchimp audience members.",
+      description: "Pushes Flowtora customers into a chosen Mailchimp audience, with tags for plan tier + last order date.",
+      vendorUrl: "https://mailchimp.com",
+      supportEmail: "support@mailchimp.com",
+      plans: ["Business"],
+      regions: ["GLOBAL"],
+      capabilities: [
+        { entity: "Audience", read: true, write: true, sync: true, webhook: false },
+      ],
+    },
+    {
+      slug: "klaviyo",
+      name: "[seed] Klaviyo",
+      category: "EMAIL_MARKETING", status: "BETA", authType: "API_KEY",
+      short: "High-velocity transactional + lifecycle email via Klaviyo.",
+      description: "Klaviyo profiles + events for shops that need richer segmentation than Mailchimp.",
+      vendorUrl: "https://klaviyo.com",
+      supportEmail: "success@klaviyo.com",
+      plans: ["Business", "Enterprise"],
+      regions: ["GLOBAL"],
+      capabilities: [
+        { entity: "Profile", read: true, write: true, sync: true, webhook: false },
+        { entity: "Event",   read: false, write: true, sync: false, webhook: false },
+      ],
+    },
+    {
+      slug: "hubspot",
+      name: "[seed] HubSpot",
+      category: "CRM", status: "ACTIVE", authType: "OAUTH2",
+      short: "Two-way sync of contacts, companies, and deals with HubSpot.",
+      description: "Mid-market CRM. Bidirectional sync — Flowtora customers as HubSpot contacts/companies; invoices as deals.",
+      vendorUrl: "https://hubspot.com",
+      supportEmail: "support@hubspot.com",
+      plans: ["Business", "Enterprise"],
+      regions: ["GLOBAL"],
+      capabilities: [
+        { entity: "Contact", read: true, write: true, sync: true, webhook: true },
+        { entity: "Company", read: true, write: true, sync: true, webhook: true },
+        { entity: "Deal",    read: true, write: true, sync: true, webhook: true },
+      ],
+    },
+    {
+      slug: "salesforce",
+      name: "[seed] Salesforce",
+      category: "CRM", status: "BETA", authType: "OAUTH2",
+      short: "Enterprise CRM sync — accounts, opportunities, contacts.",
+      description: "Salesforce integration for the enterprise tier. Field mappings ship with sensible defaults; admins can customize per-tenant.",
+      vendorUrl: "https://salesforce.com",
+      supportEmail: "developer@salesforce.com",
+      plans: ["Enterprise"],
+      regions: ["GLOBAL"],
+      requiresUpgrade: true,
+      capabilities: [
+        { entity: "Account",     read: true, write: true, sync: true, webhook: true },
+        { entity: "Opportunity", read: true, write: true, sync: true, webhook: true },
+        { entity: "Contact",     read: true, write: true, sync: true, webhook: true },
+      ],
+    },
+    {
+      slug: "slack",
+      name: "[seed] Slack",
+      category: "TEAM_COLLAB", status: "ACTIVE", authType: "OAUTH2",
+      short: "Post job + invoice notifications into Slack channels.",
+      description: "Real-time notifications. Tenants pick which events go to which channels.",
+      vendorUrl: "https://slack.com",
+      supportEmail: "feedback@slack.com",
+      plans: ["Pro", "Business", "Enterprise"],
+      regions: ["GLOBAL"],
+      capabilities: [
+        { entity: "Channel", read: true, write: true, sync: false, webhook: false },
+      ],
+    },
+    {
+      slug: "twilio-sms",
+      name: "[seed] Twilio SMS",
+      category: "COMMUNICATION", status: "ACTIVE", authType: "API_KEY",
+      short: "Send SMS notifications + 2FA via Twilio.",
+      description: "SMS notifications for proof approvals, ready-for-pickup, and 2FA login codes.",
+      vendorUrl: "https://twilio.com",
+      supportEmail: "help@twilio.com",
+      plans: ["Pro", "Business"],
+      regions: ["GLOBAL"],
+      perCallCents: 75,
+      capabilities: [
+        { entity: "Message", read: false, write: true, sync: false, webhook: true },
+      ],
+    },
+    {
+      slug: "shipstation",
+      name: "[seed] ShipStation",
+      category: "SHIPPING", status: "ACTIVE", authType: "API_KEY",
+      short: "Print labels + track shipments via ShipStation.",
+      description: "Pushes orders to ShipStation for label generation; tracking numbers come back via webhook.",
+      vendorUrl: "https://shipstation.com",
+      supportEmail: "support@shipstation.com",
+      plans: ["Pro", "Business"],
+      regions: ["US", "CA", "UK"],
+      capabilities: [
+        { entity: "Shipment", read: true, write: true, sync: true, webhook: true },
+      ],
+    },
+    {
+      slug: "fedex",
+      name: "[seed] FedEx",
+      category: "CARRIERS", status: "ACTIVE", authType: "API_KEY",
+      short: "FedEx rates, labels, and tracking.",
+      description: "Direct FedEx integration for shops that want to print labels at-source rather than via ShipStation.",
+      vendorUrl: "https://developer.fedex.com",
+      supportEmail: "developer@fedex.com",
+      plans: ["Business"],
+      regions: ["US", "CA"],
+      capabilities: [
+        { entity: "Shipment", read: true, write: true, sync: false, webhook: false },
+      ],
+    },
+    {
+      slug: "google-calendar",
+      name: "[seed] Google Calendar",
+      category: "CALENDAR", status: "ACTIVE", authType: "OAUTH2",
+      short: "Create install-day calendar events for crews.",
+      description: "Pushes install dates to crew Google Calendars; updates round-trip when crews accept/decline.",
+      vendorUrl: "https://calendar.google.com",
+      supportEmail: "calendar-api-support@google.com",
+      plans: ["Pro", "Business", "Enterprise"],
+      regions: ["GLOBAL"],
+      capabilities: [
+        { entity: "Event", read: true, write: true, sync: true, webhook: true },
+      ],
+    },
+    {
+      slug: "calendly",
+      name: "[seed] Calendly",
+      category: "CALENDAR", status: "ACTIVE", authType: "OAUTH2",
+      short: "Customer self-scheduled estimates via Calendly.",
+      description: "Embed Calendly on Flowtora-hosted booking pages; capture booking metadata into the lead inbox.",
+      vendorUrl: "https://calendly.com",
+      supportEmail: "support@calendly.com",
+      plans: ["Pro", "Business"],
+      regions: ["GLOBAL"],
+      capabilities: [
+        { entity: "Booking", read: true, write: false, sync: false, webhook: true },
+      ],
+    },
+    {
+      slug: "google-analytics-4",
+      name: "[seed] Google Analytics 4",
+      category: "ANALYTICS", status: "ACTIVE", authType: "API_KEY",
+      short: "Server-side GA4 events for marketing site conversions.",
+      description: "Send purchase / signup / demo-request events to GA4 Measurement Protocol so they survive ad-blockers.",
+      vendorUrl: "https://analytics.google.com",
+      supportEmail: "analytics-help@google.com",
+      plans: ["Business", "Enterprise"],
+      regions: ["GLOBAL"],
+      capabilities: [
+        { entity: "Event", read: false, write: true, sync: false, webhook: false },
+      ],
+    },
+    {
+      slug: "zapier",
+      name: "[seed] Zapier",
+      category: "AUTOMATION", status: "ACTIVE", authType: "API_KEY",
+      short: "Trigger Zaps on Flowtora events; act on Zap actions.",
+      description: "Public Zapier app — supports 30+ triggers and 25+ actions. Most popular Zap: 'New Lead → Slack channel'.",
+      vendorUrl: "https://zapier.com",
+      supportEmail: "partners@zapier.com",
+      plans: ["Pro", "Business", "Enterprise"],
+      regions: ["GLOBAL"],
+      capabilities: [
+        { entity: "Trigger", read: true, write: true, sync: false, webhook: true },
+        { entity: "Action",  read: false, write: true, sync: false, webhook: false },
+      ],
+    },
+    {
+      slug: "make",
+      name: "[seed] Make (Integromat)",
+      category: "AUTOMATION", status: "BETA", authType: "API_KEY",
+      short: "Visual workflow automation with Make.",
+      description: "Make integration for shops that prefer visual scenario building over Zapier's pricing tier model.",
+      vendorUrl: "https://make.com",
+      supportEmail: "support@make.com",
+      plans: ["Pro", "Business"],
+      regions: ["GLOBAL"],
+      capabilities: [
+        { entity: "Trigger", read: true, write: false, sync: false, webhook: true },
+      ],
+    },
+    {
+      slug: "google-business-profile",
+      name: "[seed] Google Business Profile",
+      category: "REVIEWS", status: "ACTIVE", authType: "OAUTH2",
+      short: "Pull Google review counts + recent reviews.",
+      description: "Display each shop's Google review average + latest reviews in the Flowtora-hosted public profile.",
+      vendorUrl: "https://business.google.com",
+      supportEmail: "support@business.google.com",
+      plans: ["Pro", "Business", "Enterprise"],
+      regions: ["GLOBAL"],
+      capabilities: [
+        { entity: "Review",   read: true, write: false, sync: true, webhook: false },
+        { entity: "Location", read: true, write: false, sync: true, webhook: false },
+      ],
+    },
+    {
+      slug: "onyx-hub",
+      name: "[seed] Onyx Hub",
+      category: "PRINT_INDUSTRY", status: "ACTIVE", authType: "API_KEY",
+      short: "Push print jobs to Onyx Hub RIP.",
+      description: "Native integration with Onyx Hub. Send job tickets + artwork files; receive RIP completion + ink usage telemetry.",
+      vendorUrl: "https://onyxgfx.com",
+      supportEmail: "support@onyxgfx.com",
+      plans: ["Business", "Enterprise"],
+      regions: ["GLOBAL"],
+      capabilities: [
+        { entity: "PrintJob", read: true, write: true, sync: true, webhook: true },
+      ],
+    },
+    {
+      slug: "caldera",
+      name: "[seed] Caldera",
+      category: "PRINT_INDUSTRY", status: "BETA", authType: "API_KEY",
+      short: "Caldera RIP integration — print job dispatch + ink reports.",
+      description: "For shops running Caldera RIP. Tickets ship as XML; ink coverage reports come back per-job.",
+      vendorUrl: "https://caldera.com",
+      supportEmail: "support@caldera.com",
+      plans: ["Business", "Enterprise"],
+      regions: ["GLOBAL"],
+      capabilities: [
+        { entity: "PrintJob", read: true, write: true, sync: true, webhook: false },
+      ],
+    },
+    {
+      slug: "hp-printos",
+      name: "[seed] HP PrintOS",
+      category: "EQUIPMENT", status: "BETA", authType: "OAUTH2",
+      short: "HP wide-format equipment telemetry via PrintOS.",
+      description: "Pull live press status, ink levels, and job throughput from HP PrintOS into the Production Health dashboard.",
+      vendorUrl: "https://www.printos.com",
+      supportEmail: "printos-support@hp.com",
+      plans: ["Business", "Enterprise"],
+      regions: ["GLOBAL"],
+      capabilities: [
+        { entity: "Press",   read: true, write: false, sync: true, webhook: false },
+        { entity: "InkLevel", read: true, write: false, sync: true, webhook: false },
+      ],
+    },
+    {
+      slug: "figma",
+      name: "[seed] Figma",
+      category: "DESIGN", status: "BETA", authType: "OAUTH2",
+      short: "Pull design files into proof workflow.",
+      description: "Designers can pull Figma frames directly into the proof approval workflow — no PNG export step.",
+      vendorUrl: "https://figma.com",
+      supportEmail: "support@figma.com",
+      plans: ["Business"],
+      regions: ["GLOBAL"],
+      capabilities: [
+        { entity: "File", read: true, write: false, sync: false, webhook: false },
+      ],
+    },
+    {
+      slug: "amazon-marketplace",
+      name: "[seed] Amazon Marketplace",
+      category: "MARKETPLACES", status: "COMING_SOON", authType: "OAUTH2",
+      short: "Pull Amazon orders into Flowtora job queue.",
+      description: "For sign + print shops also selling through Amazon Marketplace. Orders, shipping addresses, fulfillment status all sync.",
+      vendorUrl: "https://sellercentral.amazon.com",
+      supportEmail: "developer-support@amazon.com",
+      plans: ["Business", "Enterprise"],
+      regions: ["US", "EU", "UK"],
+      capabilities: [
+        { entity: "Order", read: true, write: false, sync: true, webhook: false },
+      ],
+    },
+    {
+      slug: "freshbooks",
+      name: "[seed] FreshBooks",
+      category: "ACCOUNTING", status: "DEPRECATED", authType: "OAUTH2",
+      short: "Legacy FreshBooks integration.",
+      description: "Deprecated in favor of QuickBooks Online and Xero. Sunset Q3 2026.",
+      vendorUrl: "https://freshbooks.com",
+      supportEmail: "support@freshbooks.com",
+      plans: ["Pro"],
+      regions: ["US", "CA"],
+      deprecatedDays: 60,
+      capabilities: [
+        { entity: "Invoice", read: true, write: true, sync: true, webhook: false },
+      ],
+    },
+    {
+      slug: "internal-billing-hooks",
+      name: "[seed] Internal billing hooks",
+      category: "OTHER", status: "INTERNAL_ONLY", authType: "CUSTOM",
+      short: "Internal-only Flowtora finance hooks.",
+      description: "Used by Flowtora finance ops to reconcile platform-wide GL entries. Not exposed to tenants.",
+      vendorUrl: "https://flowtora.com",
+      supportEmail: "ops@flowtora.com",
+      plans: [],
+      regions: ["GLOBAL"],
+      capabilities: [
+        { entity: "GLEntry", read: true, write: true, sync: true, webhook: false },
+      ],
+    },
+  ];
+
+  let createdCount = 0;
+  let versionCount = 0;
+  let syncEventCount = 0;
+  let incidentCount = 0;
+  let auditCount = 0;
+  let tenantConnectionCount = 0;
+
+  // Tenants pool — pick a subset to attach as "connected" so adoption metrics render.
+  const tenantPool = tenants;
+
+  for (let bi = 0; bi < integrations.length; bi++) {
+    const b = integrations[bi]!;
+
+    const created = await db.integrationCatalog.create({
+      data: {
+        slug: b.slug,
+        name: b.name,
+        category: b.category,
+        status: b.status,
+        authType: b.authType,
+        logoUrl: `https://cdn.flowtora.com/integrations/${b.slug}.svg`,
+        vendorUrl: b.vendorUrl,
+        supportEmail: b.supportEmail,
+        shortDescription: b.short,
+        description: b.description,
+        screenshots: [
+          `https://cdn.flowtora.com/integrations/${b.slug}/shot-01.png`,
+          `https://cdn.flowtora.com/integrations/${b.slug}/shot-02.png`,
+        ],
+        regions: b.regions,
+        availablePlans: b.plans,
+        envVarsRequired: b.authType === "API_KEY"
+          ? [`${b.slug.toUpperCase().replace(/-/g, "_")}_API_KEY`]
+          : b.authType === "OAUTH2"
+            ? [`${b.slug.toUpperCase().replace(/-/g, "_")}_CLIENT_ID`, `${b.slug.toUpperCase().replace(/-/g, "_")}_CLIENT_SECRET`]
+            : [],
+        redirectUri: b.authType === "OAUTH2" ? `https://flowtora.com/api/oauth/${b.slug}/callback` : null,
+        webhookEndpoint: `https://api.flowtora.com/webhooks/${b.slug}`,
+        configSchema: {
+          type: "object",
+          properties: {
+            apiKey: b.authType === "API_KEY" ? { type: "string", title: "API Key" } : undefined,
+            accountId: b.category === "ACCOUNTING" ? { type: "string", title: "Account ID" } : undefined,
+            storeUrl: b.category === "ECOMMERCE" ? { type: "string", title: "Store URL" } : undefined,
+          },
+          required: b.authType === "API_KEY" ? ["apiKey"] : [],
+        },
+        capabilities: b.capabilities,
+        oauthScopes: b.scopes ?? [],
+        outboundWebhooks: b.outboundWebhooks ?? [],
+        inboundWebhooks: b.inboundWebhooks ?? [],
+        defaultFieldMappings: b.fieldMappings ?? [],
+        documentation: b.docs ?? null,
+        faq: b.faq ?? null,
+        codeSamples: b.code ?? {},
+        defaultVersion: b.versions?.find((v) => v.isDefault)?.version ?? "1.0.0",
+        deprecatedAt: b.deprecatedDays != null ? daysAgo(b.deprecatedDays) : null,
+        sunsetAt: b.deprecatedDays != null ? new Date(Date.now() + 90 * DAY) : null,
+        internalOnly: b.status === "INTERNAL_ONLY",
+        requiresUpgrade: b.requiresUpgrade ?? false,
+        perCallCents: b.perCallCents ?? null,
+        passThroughFees: b.perCallCents ? `$${(b.perCallCents / 100).toFixed(4)}/call passed through` : null,
+      },
+    });
+    createdCount++;
+
+    // Versions
+    const versions = b.versions ?? [{ version: "1.0.0", changes: "Initial release.", releasedDays: 90, isDefault: true }];
+    for (const v of versions) {
+      await db.integrationVersion.create({
+        data: {
+          integrationId: created.id,
+          version: v.version,
+          changes: v.changes,
+          isDefault: !!v.isDefault,
+          deprecatedAt: v.deprecatedDays != null ? daysAgo(v.deprecatedDays) : null,
+          releasedAt: daysAgo(v.releasedDays),
+          tenantCount: v.isDefault ? Math.floor(tenantPool.length * 0.7) : Math.floor(tenantPool.length * 0.1),
+        },
+      });
+      versionCount++;
+    }
+
+    // Tenant connections — randomly attach a subset so adoption renders.
+    const adoptionRate = b.status === "ACTIVE" ? 0.7 :
+                          b.status === "BETA" ? 0.25 :
+                          b.status === "COMING_SOON" ? 0 :
+                          b.status === "DEPRECATED" ? 0.15 :
+                          b.status === "INTERNAL_ONLY" ? 0 : 0;
+    const targetCount = Math.round(tenantPool.length * adoptionRate);
+    const shuffled = [...tenantPool].sort(() => Math.random() - 0.5);
+    const selectedTenants = shuffled.slice(0, targetCount);
+    for (const t of selectedTenants) {
+      try {
+        await db.tenantIntegration.create({
+          data: {
+            tenantId: t.id,
+            provider: b.slug,
+            status: Math.random() < 0.85 ? "CONNECTED" : "ERRORED",
+            scope: b.capabilities[0]?.entity ?? null,
+            lastSyncAt: daysAgo(randInt(0, 14)),
+            recordsSynced: randInt(50, 5000),
+            errorCount: randInt(0, 5),
+            connectedAt: daysAgo(randInt(7, 180)),
+          },
+        });
+        tenantConnectionCount++;
+      } catch {
+        // unique-constraint conflict on (tenantId, provider) — skip
+      }
+    }
+    await db.integrationCatalog.update({
+      where: { id: created.id },
+      data: { connectedTenantCount: selectedTenants.length },
+    });
+
+    // Sync events — 30 days of synthetic telemetry per active integration.
+    // Use createMany with a sample-size cap so the seed runs in <2 min.
+    if (b.status === "ACTIVE" || b.status === "BETA") {
+      const baseSyncs = b.status === "ACTIVE" ? randInt(8, 18) : randInt(2, 6);
+      const errorRate = b.status === "ACTIVE" ? 0.02 : 0.05;
+      const events: Array<Record<string, unknown>> = [];
+      let dailySuccessTotal = 0;
+      let dailyErrorTotal = 0;
+      for (let day = 29; day >= 0; day--) {
+        const syncs = baseSyncs + Math.floor(Math.random() * 5);
+        for (let i = 0; i < syncs; i++) {
+          const success = Math.random() > errorRate;
+          if (success) dailySuccessTotal++; else dailyErrorTotal++;
+          const tenantId = Math.random() < 0.8 && selectedTenants.length > 0
+            ? rand(selectedTenants).id
+            : null;
+          events.push({
+            integrationId: created.id,
+            durationMs: randInt(80, success ? 500 : 2500),
+            success,
+            statusCode: success ? 200 : rand([429, 500, 502, 503]),
+            tenantId,
+            kind: rand(["sync.invoices", "sync.customers", "sync.orders", "webhook.received"] as const),
+            occurredAt: new Date(Date.now() - day * DAY - randInt(0, DAY)),
+          });
+        }
+      }
+      // Bulk insert in chunks of 200.
+      const chunkSize = 200;
+      for (let i = 0; i < events.length; i += chunkSize) {
+        const chunk = events.slice(i, i + chunkSize) as never;
+        await db.integrationSyncEvent.createMany({ data: chunk });
+      }
+      syncEventCount += events.length;
+      const total = dailySuccessTotal + dailyErrorTotal;
+      const uptime = total === 0 ? 99 : (dailySuccessTotal / total) * 100;
+      await db.integrationCatalog.update({
+        where: { id: created.id },
+        data: {
+          uptimePct90d: uptime,
+          syncCount7d: total > 0 ? Math.round((total / 30) * 7) : 0,
+          errorCount30d: dailyErrorTotal,
+        },
+      });
+    }
+
+    // Incidents — 1-3 per active integration so the recent-incidents card has data.
+    if (b.status === "ACTIVE" || b.status === "BETA" || b.status === "DEPRECATED") {
+      const incidentTitles = [
+        "Vendor API rate-limit exceeded",
+        "OAuth token refresh failures",
+        "Webhook delivery delays",
+        "Schema migration partial failure",
+        "Vendor outage — third-party reported",
+      ];
+      const incidentCount2 = randInt(1, 3);
+      for (let i = 0; i < incidentCount2; i++) {
+        const startedDays = randInt(7, 80);
+        const resolved = i < incidentCount2 - 1; // last one might still be open
+        await db.integrationIncident.create({
+          data: {
+            integrationId: created.id,
+            title: rand(incidentTitles),
+            description: i === 0 ? "Vendor experienced a 4h degradation. Mitigated by retry-with-backoff." : null,
+            severity: rand(["MINOR", "MAJOR", "CRITICAL"] as const),
+            status: resolved ? "RESOLVED" : rand(["INVESTIGATING", "MONITORING"] as const),
+            startedAt: daysAgo(startedDays),
+            resolvedAt: resolved ? daysAgo(startedDays - randInt(1, 5)) : null,
+          },
+        });
+        incidentCount++;
+      }
+    }
+
+    // Audit log entries — initial create + a recent edit.
+    await db.integrationCatalogAuditLog.create({
+      data: {
+        integrationId: created.id,
+        action: "created",
+        detail: "Catalog entry seeded.",
+        occurredAt: daysAgo(randInt(60, 320)),
+      },
+    });
+    auditCount++;
+    if (Math.random() < 0.6) {
+      await db.integrationCatalogAuditLog.create({
+        data: {
+          integrationId: created.id,
+          action: "config_updated",
+          detail: rand([
+            "Updated short description.",
+            "Bumped default version.",
+            "Added EU + UK regions.",
+            "Refined capability matrix.",
+            "Added inbound webhook event.",
+          ] as const),
+          occurredAt: daysAgo(randInt(0, 30)),
+        },
+      });
+      auditCount++;
+    }
+    if (b.deprecatedDays != null) {
+      await db.integrationCatalogAuditLog.create({
+        data: {
+          integrationId: created.id,
+          action: "deprecated",
+          detail: "Sunset scheduled.",
+          occurredAt: daysAgo(b.deprecatedDays),
+        },
+      });
+      auditCount++;
+    }
+  }
+
+  console.log(
+    `  ✓ ${createdCount} integrations, ${versionCount} versions, ${tenantConnectionCount} tenant connections, ${syncEventCount} sync events, ${incidentCount} incidents, ${auditCount} audit entries`,
   );
 }
 
