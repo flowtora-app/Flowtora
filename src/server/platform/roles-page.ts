@@ -80,6 +80,8 @@ export const PERMISSION_DESCRIPTIONS: Record<PlatformPermission, string> = {
   "features.manage":       "Edit feature catalog metadata.",
   "referrals.read":        "View tenant-to-tenant referral program metrics.",
   "referrals.manage":      "Edit referral reward structure and review fraud flags.",
+  "affiliates.read":       "View affiliate roster, applications, commissions, and creatives.",
+  "affiliates.manage":     "Approve/reject applications, edit tiers, and manage the creative library.",
   // Analytics
   "analytics.read":        "Read analytics dashboards.",
   "analytics.export":      "Export analytics datasets.",

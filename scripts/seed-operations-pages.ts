@@ -63,6 +63,7 @@ async function main() {
   await seedEmailCampaigns(platformUsers);           // Page 39
   await seedSequences(platformUsers, tenants);       // Page 40
   await seedReferrals(tenants);                       // Page 41
+  await seedAffiliates();                             // Page 42
 
   console.log("\n✓ Seed complete.\n");
   await db.$disconnect();
@@ -177,6 +178,20 @@ async function wipeOldSeed() {
     await db.tenantReferralCode.deleteMany({ where: { id: { in: seedCodes.map((c) => c.id) } } });
     console.log(`  deleted ${seedCodes.length} seed referral codes (cascades to funnel rows)`);
   }
+  // Page 42 — affiliate program seed wipe.
+  // Code prefix: SEED- on Affiliate; tier names start with [seed]; creative names too.
+  const seedAffiliates = await db.affiliate.findMany({
+    where: { code: { startsWith: "SEED-" } },
+    select: { id: true },
+  });
+  if (seedAffiliates.length) {
+    // Cascades wipe applications, clicks, messages.
+    await db.affiliate.deleteMany({ where: { id: { in: seedAffiliates.map((a) => a.id) } } });
+    console.log(`  deleted ${seedAffiliates.length} seed affiliates`);
+  }
+  await db.affiliateApplication.deleteMany({ where: { email: { endsWith: "@seed.flowtora.example" } } });
+  await db.affiliateTier.deleteMany({ where: { name: { startsWith: "[seed] " } } });
+  await db.affiliateCreative.deleteMany({ where: { name: { startsWith: "[seed] " } } });
   // Customers tagged seed (after orders are gone).
   await db.customer.deleteMany({ where: { tags: { has: "seed" } } });
   // Products tagged seed (use description marker since Product has no tags array).
@@ -2807,6 +2822,404 @@ async function seedReferrals(tenants: { id: string; name: string; slug: string }
 
   console.log(
     `  ✓ ${codes.length} referral codes, ${totalRows} funnel rows, ${totalSignups} signups, ${totalConversions} conversions, $${(totalRewards/100).toLocaleString()} rewards, ${fraudFlags} fraud flags`,
+  );
+}
+
+/* ── Page 42 — Affiliate Program ─────────────────────── */
+
+async function seedAffiliates() {
+  console.log("── Seeding affiliate program (Page 42)…");
+
+  // 1. Singleton settings.
+  const settings = await db.affiliateProgramSettings.upsert({
+    where: { id: "default" },
+    create: {
+      id: "default",
+      active: true,
+      acceptingApplications: true,
+      cookieDays: 90,
+      applicationMode: "MANUAL_REVIEW",
+      minPayoutCents: 5_000,
+      trackingDomain: "ref.flowtora.com",
+      notifyOnConversion: true,
+      termsUrl: "https://flowtora.com/legal/affiliate-terms",
+    },
+    update: { active: true, acceptingApplications: true },
+  });
+
+  // 2. Commission tiers.
+  const tierBlueprints = [
+    {
+      name: "[seed] Bronze", position: 0,
+      commissionPct: 15, recurring: true, capDurationMonths: 12,
+      minConversionsPerQuarter: 0, isDefault: true,
+      notes: "Entry tier. Promotes to Silver at 10 lifetime conversions.",
+    },
+    {
+      name: "[seed] Silver", position: 1,
+      commissionPct: 20, recurring: true, capDurationMonths: 24,
+      minConversionsPerQuarter: 3, minLifetimeConversions: 10,
+      notes: "Mid tier. Promotes to Gold at 25 lifetime conversions.",
+    },
+    {
+      name: "[seed] Gold", position: 2,
+      commissionPct: 30, recurring: true, capDurationMonths: null,
+      minConversionsPerQuarter: 8, minLifetimeConversions: 25,
+      notes: "Top tier. Lifetime recurring commission.",
+    },
+    {
+      name: "[seed] Launch Promo", position: 3,
+      commissionPct: null, commissionFlatCents: 5000, commissionKind: "FLAT" as const,
+      recurring: false, capDurationMonths: null,
+      minConversionsPerQuarter: 0,
+      notes: "Flat $50 per conversion — limited-time launch tier.",
+    },
+  ];
+  const tierMap = new Map<string, string>(); // name → id
+  for (const t of tierBlueprints) {
+    const created = await db.affiliateTier.create({
+      data: {
+        name: t.name,
+        position: t.position,
+        commissionKind: t.commissionKind ?? "PERCENTAGE",
+        commissionPct: t.commissionPct == null ? null : t.commissionPct,
+        commissionFlatCents: t.commissionFlatCents ?? null,
+        recurring: t.recurring,
+        capDurationMonths: t.capDurationMonths ?? null,
+        minConversionsPerQuarter: t.minConversionsPerQuarter,
+        minLifetimeConversions: t.minLifetimeConversions ?? null,
+        isDefault: t.isDefault ?? false,
+        notes: t.notes,
+      },
+    });
+    tierMap.set(t.name, created.id);
+  }
+  const bronzeId = tierMap.get("[seed] Bronze")!;
+  const silverId = tierMap.get("[seed] Silver")!;
+  const goldId   = tierMap.get("[seed] Gold")!;
+
+  // Update settings with default tier.
+  await db.affiliateProgramSettings.update({
+    where: { id: settings.id },
+    data: { defaultTierId: bronzeId },
+  });
+
+  // 3. Creatives.
+  const creativeBlueprints = [
+    {
+      kind: "BANNER" as const, name: "[seed] 728x90 leaderboard",
+      contentUrl: "https://cdn.flowtora.com/affiliates/728x90.png",
+      destinationPath: "/", width: 728, height: 90,
+      description: "Classic leaderboard banner — works in most blog headers.",
+    },
+    {
+      kind: "BANNER" as const, name: "[seed] 300x250 medium rectangle",
+      contentUrl: "https://cdn.flowtora.com/affiliates/300x250.png",
+      destinationPath: "/", width: 300, height: 250,
+      description: "Medium rectangle. Highest CTR slot for sidebar placements.",
+    },
+    {
+      kind: "TEXT_LINK" as const, name: "[seed] Try Flowtora — text link",
+      contentText: "Try Flowtora free for 14 days. The all-in-one shop OS for sign + print businesses.",
+      destinationPath: "/pricing",
+      description: "One-line callout. Drop into blog footers / forum signatures.",
+    },
+    {
+      kind: "EMAIL_TEMPLATE" as const, name: "[seed] Newsletter intro",
+      contentText: `Hi {{firstName}},
+
+I've been using Flowtora to run my sign shop for the last few months and it's transformed how we quote, produce, and bill jobs. Use my link below to get 20% off your first 3 months:
+
+→ https://ref.flowtora.com/r/{{code}}
+
+— {{affiliateName}}`,
+      destinationPath: "/pricing?utm_source=newsletter",
+      description: "Plain-text newsletter intro. Replaces {{firstName}} / {{code}} / {{affiliateName}} via affiliate dashboard.",
+    },
+    {
+      kind: "SOCIAL_POST" as const, name: "[seed] Twitter / X thread opener",
+      contentText: `5 things every sign shop needs to ditch the spreadsheet 🧵
+
+1. Real-time queue visibility
+2. Proof workflows that don't get lost in email
+3. Materials tracking that doesn't lie
+4. ...
+
+Tools I'm using → https://ref.flowtora.com/r/{{code}}`,
+      destinationPath: "/",
+      description: "Thread opener for Twitter / X. ~280 char first tweet, link in tweet 2.",
+    },
+    {
+      kind: "AD_CREATIVE" as const, name: "[seed] Google Ads RSA copy",
+      contentText: "Headline 1: Run Your Sign Shop From One Place\nHeadline 2: Quote → Produce → Bill\nHeadline 3: 14-Day Free Trial\n\nDescription 1: Replace 5 spreadsheets and 3 apps with Flowtora. Built for sign + print businesses.\nDescription 2: Try free for 14 days. Cancel anytime. Earn back the cost in your first job.",
+      destinationPath: "/pricing?utm_medium=cpc",
+      description: "Google Ads responsive search — 3 headlines + 2 descriptions ready to paste.",
+    },
+    {
+      kind: "VIDEO_SCRIPT" as const, name: "[seed] YouTube review outline",
+      contentText: `0:00 — Open: "I run a 3-person sign shop and I just switched our entire workflow to Flowtora..."
+0:30 — The before: 5 spreadsheets, paper proofs, shared inbox chaos
+1:30 — Walk through Flowtora's quote → order → proof flow
+4:00 — Materials + production tracking demo
+6:00 — Honest cons: it's still missing X, Y
+7:30 — Pricing breakdown
+8:30 — CTA: link in description for 20% off first 3 months`,
+      destinationPath: "/pricing?utm_medium=youtube",
+      description: "8-minute review outline. Beats / hooks already validated in similar SaaS niches.",
+    },
+  ];
+  const creativeMap = new Map<string, string>();
+  for (const c of creativeBlueprints) {
+    const created = await db.affiliateCreative.create({
+      data: {
+        kind: c.kind,
+        name: c.name,
+        contentUrl: c.contentUrl ?? null,
+        contentText: c.contentText ?? null,
+        destinationPath: c.destinationPath,
+        width: c.width ?? null,
+        height: c.height ?? null,
+        description: c.description,
+        active: true,
+      },
+    });
+    creativeMap.set(c.name, created.id);
+  }
+  const creativeIds = Array.from(creativeMap.values());
+
+  // 4. Affiliates with applications.
+  const affiliateBlueprints = [
+    {
+      name: "Mira Patel",        email: "mira@signsmithpodcast.com",
+      website: "https://signsmithpodcast.com", channels: "podcast, newsletter",
+      audience: 8500,  tier: goldId, status: "ACTIVE", clicks: 1240, conversions: 38,
+      pitch: "I host the SignSmith Podcast (8.5k weekly subs). I've been recommending Flowtora unofficially — let's make it official.",
+    },
+    {
+      name: "Carlos Rivera",     email: "hello@bigformatblog.com",
+      website: "https://bigformatblog.com", channels: "blog, youtube",
+      audience: 22_000, tier: silverId, status: "ACTIVE", clicks: 920, conversions: 24,
+      pitch: "I run BigFormat Blog and a YouTube channel about wide-format printing. My audience is mostly small print shops.",
+    },
+    {
+      name: "Yuki Tanaka",       email: "yuki@printpro-jp.com",
+      website: "https://printpro-jp.com", channels: "twitter, instagram",
+      audience: 4200,  tier: silverId, status: "ACTIVE", clicks: 480, conversions: 11,
+      pitch: "Japanese print-shop community on Twitter / IG. Translated material requests welcome.",
+    },
+    {
+      name: "Alex Kim",          email: "alex@signgrowth.io",
+      website: "https://signgrowth.io", channels: "newsletter, linkedin",
+      audience: 3800,  tier: bronzeId, status: "ACTIVE", clicks: 320, conversions: 6,
+      pitch: "I'm a SaaS marketer specifically for the sign + print niche. I'd love to bundle Flowtora into my recommended-stack content.",
+    },
+    {
+      name: "Priya Singh",       email: "priya@thesignshop.coach",
+      website: "https://thesignshop.coach", channels: "coaching cohort",
+      audience: 800,   tier: bronzeId, status: "ACTIVE", clicks: 180, conversions: 4,
+      pitch: "I coach 3 cohorts of sign shop owners per year (~250 people total). Flowtora would be a natural recommendation.",
+    },
+    {
+      name: "Devon Brooks",      email: "devon@signhustle.com",
+      website: "https://signhustle.com", channels: "instagram",
+      audience: 14_000, tier: bronzeId, status: "PAUSED", clicks: 240, conversions: 3,
+      pitch: "Instagram-first audience. Mostly aspiring sign shop owners.",
+    },
+  ];
+
+  let totalClicks = 0;
+  let totalConversions = 0;
+  let totalEarned = 0;
+
+  const affiliateRows: { id: string; code: string; tierId: string; clicks: number }[] = [];
+
+  for (const b of affiliateBlueprints) {
+    const code = `SEED-${b.name.replace(/[^A-Z]/gi, "").toUpperCase().slice(0, 4) || "AFF"}-${randInt(1000, 9999)}`;
+    const tier = await db.affiliateTier.findUnique({ where: { id: b.tier } });
+    const commissionPct = tier?.commissionPct == null ? 20 : Number(tier.commissionPct);
+    // Earnings ≈ conversions × $50 (conservative) — match what realistic
+    // commission lines in Page 24 would pay out. Adjust by tier.
+    const earnedCents = b.conversions * (b.tier === goldId ? 7500 :
+                                          b.tier === silverId ? 5000 : 3000);
+    const pendingPayoutCents = Math.round(earnedCents * 0.35); // 35% un-paid out
+
+    const aff = await db.affiliate.create({
+      data: {
+        code,
+        name: b.name,
+        email: b.email,
+        websiteUrl: b.website,
+        promoChannels: b.channels,
+        estimatedAudience: b.audience,
+        status: b.status as never,
+        tierId: b.tier,
+        commissionPct,
+        commissionDurationMonths: tier?.capDurationMonths ?? 12,
+        cookieDays: 90,
+        clicks: b.clicks,
+        conversions: b.conversions,
+        earnedCents,
+        pendingPayoutCents,
+        notes: `Application pitch: ${b.pitch}`,
+      },
+    });
+
+    // Link an approved application record.
+    await db.affiliateApplication.create({
+      data: {
+        name: b.name,
+        email: b.email.replace("@", "@seed."), // tag for wipe? simpler: use distinct domain
+        websiteUrl: b.website,
+        promoChannels: b.channels,
+        estimatedAudience: b.audience,
+        why: b.pitch,
+        status: "APPROVED",
+        reviewerNote: `Approved into ${tier?.name ?? "default"} tier.`,
+        reviewedAt: daysAgo(randInt(7, 60)),
+        affiliateId: aff.id,
+      },
+    });
+    // Override the email back to the real one — but we used a different one for app.
+    // Actually let's just leave the @seed.flowtora.example tagging on the app row.
+    await db.affiliateApplication.updateMany({
+      where: { affiliateId: aff.id },
+      data: { email: `${b.name.split(" ")[0]!.toLowerCase()}-${randInt(100, 999)}@seed.flowtora.example` },
+    });
+
+    affiliateRows.push({ id: aff.id, code, tierId: b.tier, clicks: b.clicks });
+    totalClicks += b.clicks;
+    totalConversions += b.conversions;
+    totalEarned += earnedCents;
+
+    // Click events — sample down to ~30 per affiliate so we don't blow
+    // up the table; the denorm counters above are the source of truth
+    // for the leaderboard, the click rows feed the trend chart + traffic
+    // sources breakdown on the detail page.
+    const clickSampleSize = Math.min(40, Math.max(5, Math.round(b.clicks / 30)));
+    const sources = ["blog", "twitter", "youtube", "newsletter", "instagram", "podcast", "linkedin"];
+    for (let i = 0; i < clickSampleSize; i++) {
+      const ageDays = randInt(0, 89);
+      const converted = Math.random() < (b.conversions / Math.max(b.clicks, 1));
+      await db.affiliateClick.create({
+        data: {
+          affiliateId: aff.id,
+          source: rand(sources),
+          ipHash: Math.random().toString(36).slice(2, 18),
+          userAgent: rand(["Mozilla/5.0 Chrome", "Mozilla/5.0 Safari", "Mozilla/5.0 Firefox"]),
+          referrer: b.website,
+          creativeId: rand(creativeIds),
+          converted,
+          occurredAt: daysAgo(ageDays),
+        },
+      });
+    }
+
+    // Communication thread — 2-4 messages per active affiliate.
+    if (b.status === "ACTIVE") {
+      const threadCount = randInt(2, 4);
+      for (let i = 0; i < threadCount; i++) {
+        const isOut = i % 2 === 0;
+        await db.affiliateMessage.create({
+          data: {
+            affiliateId: aff.id,
+            direction: isOut ? "OUT" : "IN",
+            subject: i === 0 ? "Welcome to the Flowtora affiliate program" : undefined,
+            body: isOut
+              ? rand([
+                  "Hey! Just confirming you're approved into the program. Let me know if you need any custom creative for your audience — happy to mock up something on-brand for your channel.",
+                  "Quick heads up: we just added a new launch promo tier. You're already on a higher tier so this doesn't affect you, but let your audience know there's a flat $50/conversion option for niche partners.",
+                  "Q3 is off to a great start — your conversions are up 18% MoM. If you're planning a content push, we can co-fund some of the production cost. Let me know.",
+                ])
+              : rand([
+                  "Thanks for the welcome! Quick question — is there a way to track conversions back to a specific blog post vs. newsletter?",
+                  "Got the new banners, dropping them into next week's newsletter. Will report back once it sends.",
+                  "FYI my audience asked about the multi-location pricing. Could you send the latest one-pager?",
+                ]),
+            authorId: null,
+            createdAt: daysAgo(randInt(1, 60)),
+          },
+        });
+      }
+    }
+  }
+
+  // 5. Pending applications (for the queue).
+  const pendingApps = [
+    {
+      name: "Jordan Lee", email: "jordan@printersweekly-seed.flowtora.example",
+      website: "https://printersweekly.io", channels: "blog, newsletter",
+      audience: 3200, why: "I write a weekly print-industry newsletter. Always looking for high-quality SaaS to recommend.",
+    },
+    {
+      name: "Sam Chen", email: "sam@signshoppodcast-seed.flowtora.example",
+      website: "https://signshoppodcast.fm", channels: "podcast",
+      audience: 1100, why: "Solo podcast about sign shop operations. Niche but engaged audience.",
+    },
+    {
+      name: "Riley Sosa", email: "riley@vinyltips-seed.flowtora.example",
+      website: "https://vinyltips.tv", channels: "youtube",
+      audience: 18_000, why: "YouTube channel focused on vinyl wrap and signage. 18k subs, ~500k views/year.",
+    },
+  ];
+  for (const a of pendingApps) {
+    await db.affiliateApplication.create({
+      data: {
+        name: a.name,
+        email: a.email,
+        websiteUrl: a.website,
+        promoChannels: a.channels,
+        estimatedAudience: a.audience,
+        why: a.why,
+        status: "PENDING",
+        createdAt: daysAgo(randInt(1, 14)),
+      },
+    });
+  }
+
+  // 6. Update creative click counts based on click rows just created.
+  const clickAggBy = await db.affiliateClick.groupBy({
+    by: ["creativeId"],
+    where: { creativeId: { in: creativeIds } },
+    _count: { _all: true },
+  });
+  for (const agg of clickAggBy) {
+    if (!agg.creativeId) continue;
+    await db.affiliateCreative.update({
+      where: { id: agg.creativeId },
+      data: { totalClicks: agg._count._all },
+    });
+  }
+
+  // 7. Synthetic commission lines so the Commissions tab shows data.
+  // Drive lines off the existing Page 24 PartnerCommissionLine model.
+  for (const a of affiliateRows) {
+    const tier = await db.affiliateTier.findUnique({ where: { id: a.tierId } });
+    const lineCount = randInt(2, 6);
+    const today = new Date();
+    const period = `${today.getFullYear()}-${String(today.getMonth() + 1).padStart(2, "0")}`;
+    for (let i = 0; i < lineCount; i++) {
+      const amount = tier?.commissionPct == null
+        ? (tier?.commissionFlatCents ?? 5000)
+        : Math.round((randInt(8000, 25000) * Number(tier.commissionPct)) / 100);
+      await db.partnerCommissionLine.create({
+        data: {
+          affiliateId: a.id,
+          payoutId: null,
+          kind: i === lineCount - 1 ? "BONUS" : "COMMISSION",
+          description: i === lineCount - 1
+            ? "[seed] Q3 performance bonus"
+            : `[seed] Commission on attributed payment ${randInt(1, 999).toString().padStart(3, "0")}`,
+          tenantId: null,
+          amount,
+          period,
+          earnedAt: daysAgo(randInt(0, 27)),
+        },
+      });
+    }
+  }
+
+  console.log(
+    `  ✓ ${affiliateRows.length} affiliates, ${tierBlueprints.length} tiers, ${creativeBlueprints.length} creatives, ${pendingApps.length} pending apps, ${totalClicks.toLocaleString()} clicks, ${totalConversions} conversions, $${(totalEarned/100).toLocaleString()} earned`,
   );
 }
 

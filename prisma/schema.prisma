@@ -8062,11 +8062,33 @@ model Affiliate {
 
   // Flat percentage commission (0–100) applied to attributed payments
   // for `commissionDurationMonths` from the tenant's signup date.
+  // Page 42 supersedes this with tier-based commissions; legacy rows
+  // without a tier fall back to these per-affiliate fields.
   commissionPct            Decimal @default(20) @db.Decimal(5, 2)
   commissionDurationMonths Int     @default(12)
 
   status    AffiliateStatus @default(ACTIVE)
   notes     String?
+
+  // ── Page 42 additions ──
+  /** Optional tier — when set, overrides the per-affiliate commissionPct
+   *  with the tier's commission settings. Null = legacy / un-tiered. */
+  tierId          String?
+  /** Public website / blog / social URL declared on application. */
+  websiteUrl      String?
+  /** Promo channels declared on application — free-form, e.g. "youtube, blog". */
+  promoChannels   String?
+  /** Audience size declared on application (newsletter subs, followers, etc). */
+  estimatedAudience Int?
+  /** Denormalised counters — populated by the click pixel + payout
+   *  pipeline so the affiliates table renders without per-row aggregates. */
+  clicks             Int @default(0)
+  conversions        Int @default(0)
+  earnedCents        Int @default(0)
+  pendingPayoutCents Int @default(0)
+  /** Snapshot of the cookie-attribution duration applied to this affiliate's
+   *  links — copied from program settings at create time. */
+  cookieDays         Int @default(90)
 
   createdAt DateTime @default(now())
   updatedAt DateTime @updatedAt
@@ -8076,8 +8098,14 @@ model Affiliate {
   payoutMethods   PartnerPayoutMethod[]
   payouts         PartnerPayout[]
   commissionLines PartnerCommissionLine[]
+  // Page 42 — affiliate program detail.
+  tier        AffiliateTier?         @relation(fields: [tierId], references: [id], onDelete: SetNull)
+  application AffiliateApplication?
+  trackingClicks AffiliateClick[]
+  messages       AffiliateMessage[]
 
   @@index([status])
+  @@index([tierId])
 }
 
 // ─────────────────────────────────────────────────────────────────
@@ -9479,4 +9507,207 @@ model TenantReferral {
   @@index([status, createdAt])
   @@index([fraudFlag, fraudResolution])
   @@index([codeId, status])
+}
+
+// ────────────────────────────────────────────────────────────
+// Page 42 — Affiliate Program (external partners).
+//
+// Distinct from Page 41 (Tenant-to-tenant referrals). External
+// partners sign up via an Application form, are reviewed by admins,
+// approved into one of N tiers (which determines commission rate),
+// and given a tracking link + creative library.
+//
+// Schema layout:
+//   AffiliateApplication       — pending review queue
+//   AffiliateTier              — commission tiers (Bronze / Silver / Gold)
+//   AffiliateClick             — per-click tracking events
+//   AffiliateCreative          — banners / text links / email tmpls / etc
+//   AffiliateMessage           — admin ↔ affiliate communication thread
+//   AffiliateProgramSettings   — singleton program config
+//
+// Commission lines + payouts already live on Page 24 (PartnerPayout,
+// PartnerCommissionLine). Page 42 reads them but doesn't duplicate.
+// ────────────────────────────────────────────────────────────
+
+enum AffiliateApplicationStatus {
+  PENDING
+  APPROVED
+  REJECTED
+  WITHDRAWN
+}
+
+enum AffiliateCommissionKind {
+  PERCENTAGE      // % of net payments
+  FLAT            // flat amount per conversion (in minor units)
+}
+
+enum AffiliateCreativeKind {
+  BANNER          // image creative for display ad networks
+  TEXT_LINK       // simple text + tracking link
+  EMAIL_TEMPLATE  // pre-formatted email pitch
+  SOCIAL_POST     // social media template
+  AD_CREATIVE     // search / display ad copy + headline
+  VIDEO_SCRIPT    // youtube / podcast script
+}
+
+enum AffiliateMessageDirection {
+  OUT             // platform staff → affiliate
+  IN              // affiliate → platform staff
+}
+
+model AffiliateApplication {
+  id String @id @default(cuid())
+
+  // Applicant fields — captured by the public sign-up form.
+  name              String
+  email             String
+  websiteUrl        String?
+  promoChannels     String?    // free-form, e.g. "youtube, blog, podcast"
+  estimatedAudience Int?
+  /** "Why do you want to be an affiliate?" pitch field. */
+  why               String?
+
+  status      AffiliateApplicationStatus @default(PENDING)
+  reviewerId  String?
+  reviewerNote String?
+  reviewedAt  DateTime?
+
+  /** Set when status = APPROVED — points at the created Affiliate row. */
+  affiliateId String?    @unique
+  affiliate   Affiliate? @relation(fields: [affiliateId], references: [id], onDelete: SetNull)
+
+  createdAt DateTime @default(now())
+  updatedAt DateTime @updatedAt
+
+  @@index([status, createdAt])
+}
+
+model AffiliateTier {
+  id   String @id @default(cuid())
+  name String @unique     // "Bronze", "Silver", "Gold", "Diamond"
+  /** Sort order — lowest = entry tier, highest = top. */
+  position Int @default(0)
+
+  /** Commission shape. */
+  commissionKind      AffiliateCommissionKind @default(PERCENTAGE)
+  /** Commission rate when kind = PERCENTAGE (0-100). */
+  commissionPct       Decimal? @db.Decimal(5, 2)
+  /** Flat amount (minor units) when kind = FLAT. */
+  commissionFlatCents Int?
+  /** Whether the commission recurs on every renewal payment. */
+  recurring           Boolean @default(true)
+  /** Cap the recurring commission to N months. Null = no cap. */
+  capDurationMonths   Int?
+
+  // ── Qualification ──
+  /** Min conversions per quarter to maintain this tier. */
+  minConversionsPerQuarter Int @default(0)
+  /** Min lifetime conversions to qualify for promotion to this tier. */
+  minLifetimeConversions   Int?
+
+  /** When true, new approved affiliates land here unless overridden. */
+  isDefault Boolean @default(false)
+  notes     String?
+
+  createdAt DateTime @default(now())
+  updatedAt DateTime @updatedAt
+
+  affiliates Affiliate[]
+}
+
+model AffiliateClick {
+  id          String @id @default(cuid())
+  affiliateId String
+  /** Where the click came from — UTM-ish source label. */
+  source      String?    // "blog", "twitter", "youtube", "newsletter"
+  /** Hashed IP for de-dup detection. */
+  ipHash      String?
+  userAgent   String?
+  /** Document referrer URL where the link was placed. */
+  referrer    String?
+  /** Optional tag of the creative asset that drove the click. */
+  creativeId  String?
+  /** True when this click also resulted in a signup (joined later). */
+  converted   Boolean @default(false)
+
+  occurredAt DateTime @default(now())
+
+  affiliate Affiliate         @relation(fields: [affiliateId], references: [id], onDelete: Cascade)
+  creative  AffiliateCreative? @relation(fields: [creativeId], references: [id], onDelete: SetNull)
+
+  @@index([affiliateId, occurredAt])
+  @@index([creativeId])
+}
+
+model AffiliateCreative {
+  id          String @id @default(cuid())
+  kind        AffiliateCreativeKind
+  name        String
+  /** Public hosting URL — image / video / asset bundle. */
+  contentUrl  String?
+  /** Free-form HTML / markdown / plain text body for embeddable assets. */
+  contentText String?
+  /** Default tracking-link path appended to the affiliate's domain.  */
+  destinationPath String  @default("/")
+  /** For BANNER kinds — pixel dimensions. */
+  width       Int?
+  height      Int?
+  /** Total clicks across all affiliates using this creative. */
+  totalClicks Int @default(0)
+  /** Toggle for whether the creative is offered in the library. */
+  active      Boolean @default(true)
+  /** Free-form admin description / usage instructions. */
+  description String?
+
+  clicks AffiliateClick[]
+
+  createdAt DateTime @default(now())
+  updatedAt DateTime @updatedAt
+
+  @@index([kind, active])
+}
+
+model AffiliateMessage {
+  id          String @id @default(cuid())
+  affiliateId String
+  direction   AffiliateMessageDirection
+  subject     String?
+  body        String
+  /** Platform staff who wrote OUT messages. */
+  authorId    String?
+
+  createdAt DateTime @default(now())
+
+  affiliate Affiliate @relation(fields: [affiliateId], references: [id], onDelete: Cascade)
+
+  @@index([affiliateId, createdAt])
+}
+
+model AffiliateProgramSettings {
+  id String @id @default("default")
+
+  /** Cookie-attribution window in days — how long after a click a
+   *  signup still counts as attributed to the affiliate. */
+  cookieDays            Int     @default(90)
+  /** Default tier for newly-approved affiliates. */
+  defaultTierId         String?
+  /** "AUTO_APPROVE" (link generated immediately) or "MANUAL_REVIEW"
+   *  (admin reviews each application). */
+  applicationMode       String  @default("MANUAL_REVIEW")
+  /** Min lifetime payout threshold in minor units before a payout fires. */
+  minPayoutCents        Int     @default(5000)
+  /** Subdomain used in tracking links — purely cosmetic, e.g. "ref.flowtora.com". */
+  trackingDomain        String?
+  /** Whether the public sign-up page is open. */
+  acceptingApplications Boolean @default(true)
+  /** Master switch — when off, affiliate links + dashboards 404. */
+  active                Boolean @default(true)
+  /** Whether to email referrals to the affiliate when they convert. */
+  notifyOnConversion    Boolean @default(true)
+  /** Public terms-of-service URL shown on the application form. */
+  termsUrl              String?
+
+  updatedById String?
+  updatedAt   DateTime @updatedAt
+  createdAt   DateTime @default(now())
 }

@@ -215,6 +215,9 @@ export type PlatformPermission =
   // Marketing — Page 41 referral program (settings, fraud queue review)
   | "referrals.read"
   | "referrals.manage"
+  // Marketing — Page 42 affiliate program (apps, tiers, creatives, settings)
+  | "affiliates.read"
+  | "affiliates.manage"
 
   // Analytics / BI
   | "analytics.read"
@@ -250,6 +253,7 @@ const PLATFORM_ALL: PlatformPermission[] = [
   "announcement.read", "announcement.write", "readiness.manage",
   "leads.read", "leads.manage", "plans.manage", "features.manage",
   "referrals.read", "referrals.manage",
+  "affiliates.read", "affiliates.manage",
   "analytics.read", "analytics.export", "revenue.read", "usage.read",
   "reports.read", "reports.create", "reports.edit", "reports.delete",
   "reports.schedule", "reports.export",
@@ -264,7 +268,7 @@ const PLATFORM_ALL: PlatformPermission[] = [
 const PLATFORM_BASELINE_READ: PlatformPermission[] = [
   "tenant.read", "billing.read", "staff.read", "users.read",
   "support.read", "health.read", "audit.read", "compliance.read",
-  "feature_flag.read", "announcement.read", "leads.read", "referrals.read",
+  "feature_flag.read", "announcement.read", "leads.read", "referrals.read", "affiliates.read",
   "analytics.read", "revenue.read", "usage.read",
   "reports.read", "reports.export", // every staff role reads + can export
   "system.read_settings", "notifications.read",
@@ -287,7 +291,7 @@ export const PLATFORM_ROLE_PERMISSIONS: Record<PlatformRole, PlatformPermission[
     "compliance.manage", "feature_flag.write",
     "announcement.write", "readiness.manage",
     "leads.manage", "plans.manage", "features.manage",
-    "referrals.manage",
+    "referrals.manage", "affiliates.manage",
     "analytics.export",
     "reports.create", "reports.edit", "reports.delete", "reports.schedule",
     "system.write_settings", "system.maintenance_mode", "system.feature_freeze",
@@ -315,7 +319,7 @@ export const PLATFORM_ROLE_PERMISSIONS: Record<PlatformRole, PlatformPermission[
     "tenant.suspend", "tenant.archive", "tenant.impersonate", "tenant.tag",
     "support.respond", "support.macro_manage", "support.feedback_triage",
     "announcement.write", "readiness.manage",
-    "leads.manage", "referrals.manage",
+    "leads.manage", "referrals.manage", "affiliates.manage",
     "analytics.export",
     "reports.create", "reports.edit", "reports.schedule",
     "notifications.manage",
@@ -357,6 +361,7 @@ export const PLATFORM_ROLE_PERMISSIONS: Record<PlatformRole, PlatformPermission[
     "announcement.read", "announcement.write",
     "features.manage", "plans.manage",
     "referrals.read", "referrals.manage",
+    "affiliates.read", "affiliates.manage",
     "analytics.read", "analytics.export",
     "notifications.read", "notifications.manage",
   ]),
