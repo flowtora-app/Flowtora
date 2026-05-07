@@ -71,6 +71,7 @@ async function main() {
   await seedApiAndWebhooks(platformUsers, tenants);   // Page 46
   await seedDeveloperDocs(platformUsers);             // Page 47
   await seedMarketplace(platformUsers, tenants);      // Page 48
+  await seedSso(platformUsers, tenants);              // Page 49
 
   console.log("\n✓ Seed complete.\n");
   await db.$disconnect();
@@ -265,6 +266,12 @@ async function wipeOldSeed() {
     console.log(`  deleted ${seedMpApps.length} seed marketplace apps (cascades versions + installs + reviews + …)`);
   }
   await db.marketplaceCategory.deleteMany({ where: { slug: { startsWith: "seed-" } } });
+  // Page 49 — SSO. Tenant configs are tied to tenants/providers; we
+  // delete configs by their displayName prefix tag, then templates,
+  // then any seed providers (those keyed GENERIC_* are real catalog
+  // entries — we keep them and just refresh their fields).
+  await db.ssoTenantConfig.deleteMany({ where: { displayName: { startsWith: "[seed] " } } });
+  await db.ssoIdpTemplate.deleteMany({ where: { name: { startsWith: "[seed] " } } });
   // Customers tagged seed (after orders are gone).
   await db.customer.deleteMany({ where: { tags: { has: "seed" } } });
   // Products tagged seed (use description marker since Product has no tags array).
@@ -6801,6 +6808,446 @@ async function seedMarketplace(
 
   console.log(
     `  ✓ ${catBlueprints.length} categories, ${appCount} apps, ${permCount} permissions, ${versionCount} versions, ${installCount} installs, ${reviewCount} reviews, ${submissionCount} submissions, ${payoutCount} payouts, ${auditCount} audit entries`,
+  );
+}
+
+/* ── Page 49 — SSO Providers ───────────────────── */
+
+async function seedSso(
+  staff: { id: string }[],
+  tenants: { id: string; name: string; slug: string }[],
+) {
+  console.log("── Seeding SSO providers (Page 49)…");
+  const reviewer = staff[0];
+  if (!reviewer) {
+    console.log("  skipped — no platform staff found");
+    return;
+  }
+
+  // 1. Settings singleton.
+  await db.ssoSettings.upsert({
+    where: { id: "default" },
+    create: {
+      id: "default",
+      enforceMfaWithSso: true,
+      idpInitiatedSsoAllowed: false,
+      sessionLifetimeHours: 12,
+      jitDeprovisionEnabled: false,
+    },
+    update: {},
+  });
+
+  // 2. Provider catalog — upsert all 11 entries.
+  type ProvBlueprint = {
+    key: "OKTA" | "AZURE_AD" | "GOOGLE" | "ONELOGIN" | "JUMPCLOUD" | "PING" |
+         "AUTH0" | "DUO" | "ADFS" | "GENERIC_SAML" | "GENERIC_OIDC";
+    name: string;
+    description: string;
+    defaultType: "SAML" | "OIDC";
+    defaultScopes: string[];
+    setupDocsUrl?: string;
+    notes?: string;
+  };
+  const providers: ProvBlueprint[] = [
+    { key: "OKTA",         name: "Okta",                 description: "SAML 2.0 + SCIM 2.0 supported. Most common for mid-market.",
+      defaultType: "SAML", defaultScopes: ["openid", "email", "profile", "groups"],
+      setupDocsUrl: "https://help.okta.com/saml-setup", notes: "Recommend default for new Enterprise tenants." },
+    { key: "AZURE_AD",     name: "Azure AD / Entra ID",  description: "SAML + OIDC + SCIM (Microsoft Graph).",
+      defaultType: "SAML", defaultScopes: ["openid", "email", "profile", "User.Read"],
+      setupDocsUrl: "https://learn.microsoft.com/azure/active-directory/saas-apps/" },
+    { key: "GOOGLE",       name: "Google Workspace",     description: "SAML 2.0 via Google Admin SSO.",
+      defaultType: "SAML", defaultScopes: ["openid", "email", "profile"] },
+    { key: "ONELOGIN",     name: "OneLogin",             description: "SAML + SCIM. Strong password-manager bundle.",
+      defaultType: "SAML", defaultScopes: ["openid", "email", "groups"] },
+    { key: "JUMPCLOUD",    name: "JumpCloud",            description: "Cloud directory + SAML/SCIM.",
+      defaultType: "SAML", defaultScopes: ["email", "groups"] },
+    { key: "PING",         name: "Ping Identity",        description: "Enterprise SAML/OIDC with strong audit story.",
+      defaultType: "SAML", defaultScopes: ["openid", "profile"] },
+    { key: "AUTH0",        name: "Auth0",                description: "OIDC-first, popular with B2C extensions.",
+      defaultType: "OIDC", defaultScopes: ["openid", "email", "profile"] },
+    { key: "DUO",          name: "Duo",                  description: "SSO + MFA. Common in healthcare + finance.",
+      defaultType: "SAML", defaultScopes: ["openid", "email"] },
+    { key: "ADFS",         name: "Microsoft AD FS",      description: "On-prem federation for legacy AD shops.",
+      defaultType: "SAML", defaultScopes: ["upn", "email", "groups"] },
+    { key: "GENERIC_SAML", name: "Generic SAML",         description: "Free-form SAML 2.0 for any IdP not in the catalog.",
+      defaultType: "SAML", defaultScopes: [] },
+    { key: "GENERIC_OIDC", name: "Generic OIDC",         description: "Free-form OIDC for any IdP not in the catalog.",
+      defaultType: "OIDC", defaultScopes: ["openid", "email", "profile"] },
+  ];
+  const provIdMap = new Map<string, string>();
+  for (const p of providers) {
+    const upserted = await db.ssoProvider.upsert({
+      where: { key: p.key },
+      create: {
+        key: p.key,
+        name: p.name,
+        description: p.description,
+        defaultType: p.defaultType,
+        defaultScopes: p.defaultScopes,
+        setupDocsUrl: p.setupDocsUrl ?? null,
+        notes: p.notes ?? null,
+        active: true,
+      },
+      update: {
+        name: p.name,
+        description: p.description,
+        defaultType: p.defaultType,
+        defaultScopes: p.defaultScopes,
+        setupDocsUrl: p.setupDocsUrl ?? null,
+        notes: p.notes ?? null,
+        active: true,
+      },
+      select: { id: true, key: true },
+    });
+    provIdMap.set(upserted.key, upserted.id);
+  }
+
+  // 3. Templates.
+  type TmplBlueprint = {
+    providerKey: ProvBlueprint["key"];
+    name: string;
+    type: "SAML" | "OIDC";
+    description: string;
+    snippet: string;
+  };
+  const templates: TmplBlueprint[] = [
+    {
+      providerKey: "OKTA",
+      name: "[seed] Okta SAML — typical setup",
+      type: "SAML",
+      description: "Drop into your Okta SAML app's Advanced Settings → Single sign-on URL field.",
+      snippet: `<EntityDescriptor xmlns="urn:oasis:names:tc:SAML:2.0:metadata"
+                  entityID="https://app.flowtora.com/saml/sp">
+  <SPSSODescriptor AuthnRequestsSigned="false"
+                   WantAssertionsSigned="true"
+                   protocolSupportEnumeration="urn:oasis:names:tc:SAML:2.0:protocol">
+    <AssertionConsumerService
+      Binding="urn:oasis:names:tc:SAML:2.0:bindings:HTTP-POST"
+      Location="https://app.flowtora.com/api/sso/saml/{providerId}/acs"
+      index="0"
+      isDefault="true" />
+  </SPSSODescriptor>
+</EntityDescriptor>`,
+    },
+    {
+      providerKey: "AZURE_AD",
+      name: "[seed] Azure AD — Enterprise app SAML",
+      type: "SAML",
+      description: "Identifier (Entity ID) + Reply URL config block for Azure Enterprise Applications.",
+      snippet: `Identifier (Entity ID): https://app.flowtora.com/saml/sp
+Reply URL (ACS): https://app.flowtora.com/api/sso/saml/{providerId}/acs
+Sign on URL: https://app.flowtora.com/sign-in?idp=azure
+User Attributes:
+  email = user.mail
+  given_name = user.givenname
+  family_name = user.surname
+  groups = user.groups`,
+    },
+    {
+      providerKey: "AUTH0",
+      name: "[seed] Auth0 — OIDC application",
+      type: "OIDC",
+      description: "JSON snippet for Auth0 Application Settings — paste-and-replace.",
+      snippet: `{
+  "client_id": "<your_client_id>",
+  "client_secret": "<your_client_secret>",
+  "discovery_url": "https://YOUR_TENANT.auth0.com/.well-known/openid-configuration",
+  "redirect_uri": "https://app.flowtora.com/api/sso/oidc/callback",
+  "scopes": ["openid", "email", "profile"],
+  "pkce": true
+}`,
+    },
+    {
+      providerKey: "GOOGLE",
+      name: "[seed] Google Workspace SAML",
+      type: "SAML",
+      description: "Step-by-step for the Google Admin SAML app.",
+      snippet: `Application name: Flowtora
+ACS URL: https://app.flowtora.com/api/sso/saml/{providerId}/acs
+Entity ID: https://app.flowtora.com/saml/sp
+Name ID format: EMAIL
+Attribute mapping:
+  basic_information.first_name → given_name
+  basic_information.last_name  → family_name
+  basic_information.primary_email → email`,
+    },
+  ];
+  for (const t of templates) {
+    await db.ssoIdpTemplate.create({
+      data: {
+        providerId: provIdMap.get(t.providerKey)!,
+        name: t.name,
+        type: t.type,
+        description: t.description,
+        snippet: t.snippet,
+        screenshots: [],
+      },
+    });
+  }
+
+  // 4. Per-tenant configs.
+  type ConfigBlueprint = {
+    tenantIdx: number;
+    providerKey: ProvBlueprint["key"];
+    type: "SAML" | "OIDC";
+    displayName: string;
+    status: "PENDING" | "TEST" | "ACTIVE" | "FAILED" | "DISABLED";
+    metadataUrl?: string;
+    entityId?: string;
+    sloUrl?: string;
+    issuer?: string;
+    clientId?: string;
+    discoveryUrl?: string;
+    scopes?: string[];
+    pkce?: boolean;
+    forceSso?: boolean;
+    jit?: boolean;
+    scimEnabled?: boolean;
+    allowedDomains?: string[];
+    attributes?: Record<string, string>;
+    groupRules?: Array<{ group: string; roleId: string }>;
+    lastError?: string;
+    lastLoginDays?: number;
+    lastSyncDays?: number;
+    metadataRefreshedDays?: number;
+    scimLogCount?: number;
+    scimErrorCount?: number;
+  };
+
+  const configBlueprints: ConfigBlueprint[] = [
+    {
+      tenantIdx: 0,
+      providerKey: "OKTA",
+      type: "SAML",
+      displayName: "[seed] Sign in with Okta",
+      status: "ACTIVE",
+      metadataUrl: "https://acme.okta.com/app/exk1abc/sso/saml/metadata",
+      entityId: "https://acme.okta.com",
+      sloUrl: "https://acme.okta.com/login/signout",
+      forceSso: true,
+      jit: true,
+      scimEnabled: true,
+      allowedDomains: ["acme.com", "acme.example"],
+      attributes: { email: "$NAMEID", given_name: "user.firstName", family_name: "user.lastName", groups: "user.memberships" },
+      groupRules: [
+        { group: "Engineering", roleId: "ADMIN" },
+        { group: "Support",     roleId: "MEMBER" },
+      ],
+      lastLoginDays: 0,
+      lastSyncDays: 0,
+      metadataRefreshedDays: 1,
+      scimLogCount: 12,
+      scimErrorCount: 1,
+    },
+    {
+      tenantIdx: 1,
+      providerKey: "AZURE_AD",
+      type: "SAML",
+      displayName: "[seed] Sign in with Microsoft",
+      status: "ACTIVE",
+      metadataUrl: "https://login.microsoftonline.com/aad-tenant-id/federationmetadata/2007-06/federationmetadata.xml",
+      entityId: "https://sts.windows.net/aad-tenant-id/",
+      forceSso: false,
+      jit: true,
+      scimEnabled: true,
+      allowedDomains: ["bigshop.com"],
+      attributes: { email: "user.mail", given_name: "user.givenname", family_name: "user.surname", groups: "user.groups" },
+      lastLoginDays: 0,
+      lastSyncDays: 1,
+      metadataRefreshedDays: 7,
+      scimLogCount: 8,
+      scimErrorCount: 0,
+    },
+    {
+      tenantIdx: 2,
+      providerKey: "GOOGLE",
+      type: "SAML",
+      displayName: "[seed] Sign in with Google",
+      status: "TEST",
+      metadataUrl: "https://accounts.google.com/o/saml2?idpid=ABC123",
+      entityId: "https://accounts.google.com/o/saml2?idpid=ABC123",
+      forceSso: false,
+      jit: true,
+      scimEnabled: false,
+      allowedDomains: ["pacificwest.example"],
+      attributes: { email: "$NAMEID", given_name: "user.givenname", family_name: "user.familyname" },
+      lastLoginDays: 3,
+      metadataRefreshedDays: 2,
+      scimLogCount: 0,
+      scimErrorCount: 0,
+    },
+  ];
+
+  // Add a couple of failed/pending entries against generic providers so the
+  // status filters render meaningful data even with few seed tenants.
+  if (tenants.length >= 1) {
+    configBlueprints.push({
+      tenantIdx: 0,
+      providerKey: "GENERIC_OIDC",
+      type: "OIDC",
+      displayName: "[seed] Sign in with custom OIDC",
+      status: "FAILED",
+      issuer: "https://idp.example.com/",
+      clientId: "fake-client-id",
+      discoveryUrl: "https://idp.example.com/.well-known/openid-configuration",
+      scopes: ["openid", "email", "profile"],
+      pkce: true,
+      forceSso: false,
+      jit: false,
+      scimEnabled: false,
+      allowedDomains: ["acme.com"],
+      lastError: "OIDC discovery returned 404 — verify the issuer URL",
+      lastLoginDays: undefined,
+      metadataRefreshedDays: undefined,
+      scimLogCount: 0,
+      scimErrorCount: 0,
+    });
+  }
+  if (tenants.length >= 2) {
+    configBlueprints.push({
+      tenantIdx: 1,
+      providerKey: "ONELOGIN",
+      type: "SAML",
+      displayName: "[seed] Sign in with OneLogin",
+      status: "PENDING",
+      metadataUrl: "https://bigshop.onelogin.com/saml/metadata/abc-123",
+      entityId: "https://bigshop.onelogin.com",
+      forceSso: false,
+      jit: true,
+      scimEnabled: false,
+      allowedDomains: ["bigshop.com"],
+      attributes: { email: "$NAMEID" },
+      lastLoginDays: undefined,
+      metadataRefreshedDays: undefined,
+      scimLogCount: 0,
+      scimErrorCount: 0,
+    });
+  }
+
+  let configCount = 0;
+  let scimLogCount = 0;
+  for (const b of configBlueprints) {
+    const tenant = tenants[b.tenantIdx];
+    if (!tenant) continue;
+    const providerId = provIdMap.get(b.providerKey);
+    if (!providerId) continue;
+
+    const acsUrl = b.type === "SAML"
+      ? `https://app.flowtora.com/api/sso/saml/${providerId}/acs?cfg=${tenant.id}`
+      : null;
+
+    const config = await db.ssoTenantConfig.upsert({
+      where: { tenantId_providerId: { tenantId: tenant.id, providerId } },
+      create: {
+        tenantId: tenant.id,
+        providerId,
+        type: b.type,
+        displayName: b.displayName,
+        status: b.status,
+        metadataUrl: b.metadataUrl ?? null,
+        entityId: b.entityId ?? null,
+        acsUrl,
+        sloUrl: b.sloUrl ?? null,
+        signatureAlgorithm: "RSA_SHA256",
+        attributeMappings: (b.attributes ?? {}) as never,
+        groupRules: (b.groupRules ?? []) as never,
+        issuer: b.issuer ?? null,
+        clientId: b.clientId ?? null,
+        clientSecret: b.clientId ? createHash("sha256").update("seed-secret").digest("hex") : null,
+        discoveryUrl: b.discoveryUrl ?? null,
+        scopes: b.scopes ?? [],
+        pkceEnabled: b.pkce ?? true,
+        jitProvisioningEnabled: b.jit ?? true,
+        forceSso: b.forceSso ?? false,
+        allowedEmailDomains: b.allowedDomains ?? [],
+        scimEnabled: b.scimEnabled ?? false,
+        scimBearerToken: b.scimEnabled ? `scim_${randomBytes(20).toString("hex")}` : null,
+        lastLoginAt: b.lastLoginDays != null ? daysAgo(b.lastLoginDays) : null,
+        lastSyncAt: b.lastSyncDays != null ? daysAgo(b.lastSyncDays) : null,
+        metadataLastRefreshedAt: b.metadataRefreshedDays != null ? daysAgo(b.metadataRefreshedDays) : null,
+        lastError: b.lastError ?? null,
+        createdById: reviewer.id,
+      },
+      update: {
+        type: b.type,
+        displayName: b.displayName,
+        status: b.status,
+        metadataUrl: b.metadataUrl ?? null,
+        entityId: b.entityId ?? null,
+        acsUrl: acsUrl ?? undefined,
+        sloUrl: b.sloUrl ?? null,
+        signatureAlgorithm: "RSA_SHA256",
+        attributeMappings: (b.attributes ?? {}) as never,
+        groupRules: (b.groupRules ?? []) as never,
+        issuer: b.issuer ?? null,
+        clientId: b.clientId ?? null,
+        discoveryUrl: b.discoveryUrl ?? null,
+        scopes: b.scopes ?? [],
+        pkceEnabled: b.pkce ?? true,
+        jitProvisioningEnabled: b.jit ?? true,
+        forceSso: b.forceSso ?? false,
+        allowedEmailDomains: b.allowedDomains ?? [],
+        scimEnabled: b.scimEnabled ?? false,
+        lastLoginAt: b.lastLoginDays != null ? daysAgo(b.lastLoginDays) : null,
+        lastSyncAt: b.lastSyncDays != null ? daysAgo(b.lastSyncDays) : null,
+        metadataLastRefreshedAt: b.metadataRefreshedDays != null ? daysAgo(b.metadataRefreshedDays) : null,
+        lastError: b.lastError ?? null,
+      },
+      select: { id: true },
+    });
+    configCount++;
+
+    // SCIM logs for SCIM-enabled configs.
+    const operations = ["USER_CREATE", "USER_UPDATE", "USER_PATCH", "USER_DELETE", "GROUP_CREATE", "GROUP_UPDATE"] as const;
+    const targetCount = b.scimLogCount ?? 0;
+    const errorCount = b.scimErrorCount ?? 0;
+    const events: Array<Record<string, unknown>> = [];
+    for (let i = 0; i < targetCount; i++) {
+      const op = operations[i % operations.length]!;
+      const isError = i < errorCount;
+      const isResource = op.startsWith("USER") ? "User" : "Group";
+      const httpCode = isError ? rand([400, 401, 409, 500] as const) : rand([200, 201, 204] as const);
+      events.push({
+        ssoConfigId: config.id,
+        tenantId: tenant.id,
+        operation: op,
+        resourceType: isResource,
+        resourceId: !isError ? `${isResource.toLowerCase()}_${randomBytes(4).toString("hex")}` : null,
+        externalId: `idp_${randomBytes(4).toString("hex")}`,
+        status: isError ? rand(["ERROR", "DEAD_LETTER"] as const) : "OK",
+        httpCode,
+        payload: {
+          schemas: ["urn:ietf:params:scim:schemas:core:2.0:User"],
+          userName: `user-${i}@${b.allowedDomains?.[0] ?? "example.com"}`,
+          active: true,
+          name: { givenName: "Sample", familyName: `User${i}` },
+          emails: [{ value: `user-${i}@${b.allowedDomains?.[0] ?? "example.com"}`, primary: true }],
+        },
+        responseBody: isError ? '{"error":"validation_failed"}' : '{"ok":true}',
+        errorMessage: isError
+          ? rand([
+              "External ID already exists for this tenant",
+              "Required attribute 'email' missing",
+              "User mapping returned no matching role",
+              "Upstream IdP returned malformed payload",
+            ] as const)
+          : null,
+        attempts: isError ? rand([1, 2, 3] as const) : 1,
+        occurredAt: daysAgo(randInt(0, 14)),
+      });
+    }
+    if (events.length > 0) {
+      // createMany for speed.
+      const chunkSize = 200;
+      for (let i = 0; i < events.length; i += chunkSize) {
+        await db.scimLog.createMany({ data: events.slice(i, i + chunkSize) as never });
+      }
+      scimLogCount += events.length;
+    }
+  }
+
+  console.log(
+    `  ✓ ${providers.length} providers, ${templates.length} templates, ${configCount} tenant configs, ${scimLogCount} SCIM events`,
   );
 }
 

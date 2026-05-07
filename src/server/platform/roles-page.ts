@@ -93,6 +93,9 @@ export const PERMISSION_DESCRIPTIONS: Record<PlatformPermission, string> = {
   "docs.publish":          "Publish doc pages, schedule publishes, roll back versions, and auto-publish OpenAPI specs.",
   "marketplace.read":      "View marketplace apps, submissions, reviews, and revenue-share statements.",
   "marketplace.manage":    "Approve apps, moderate reviews, configure revenue share, and run danger-zone actions.",
+  "sso.read":              "View SSO providers, per-tenant configurations, and SCIM logs.",
+  "sso.manage":            "Edit SSO/OIDC configurations, manage IdP templates, and configure SCIM provisioning.",
+  "sso.test_login":        "Run test login flows against tenant SSO configurations.",
   // Analytics
   "analytics.read":        "Read analytics dashboards.",
   "analytics.export":      "Export analytics datasets.",

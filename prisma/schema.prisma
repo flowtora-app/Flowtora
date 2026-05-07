@@ -417,6 +417,8 @@ model Tenant {
   referralCode           TenantReferralCode?
   referralsMade          TenantReferral[]   @relation("TenantReferralsMade")
   referralAsReferee      TenantReferral?    @relation("TenantReferralAsReferee")
+  // Page 49 — SSO configurations (one per provider per tenant).
+  ssoConfigs             SsoTenantConfig[]
 }
 
 // ────────────────────────────────────────────────────────────
@@ -6633,6 +6635,214 @@ enum MarketplaceRevenueShareTier {
   STANDARD     // 70/30
   PREFERRED    // 80/20
   PARTNER      // 85/15
+}
+
+// ────────────────────────────────────────────────────────────
+// Page 49 — SSO Providers.
+//
+// Per-tenant SSO config (SAML 2.0 / OIDC) and SCIM provisioning log.
+// SsoProvider is the catalog of supported IdPs. SsoTenantConfig is
+// the per-tenant binding to one of them. ScimLog captures every
+// inbound provisioning event from the IdP.
+// ────────────────────────────────────────────────────────────
+
+enum SsoProviderKey {
+  OKTA
+  AZURE_AD
+  GOOGLE
+  ONELOGIN
+  JUMPCLOUD
+  PING
+  AUTH0
+  DUO
+  ADFS
+  GENERIC_SAML
+  GENERIC_OIDC
+}
+
+enum SsoConfigType {
+  SAML
+  OIDC
+}
+
+enum SsoConfigStatus {
+  PENDING
+  TEST
+  ACTIVE
+  FAILED
+  DISABLED
+}
+
+enum ScimOperation {
+  USER_CREATE
+  USER_UPDATE
+  USER_DELETE
+  USER_PATCH
+  GROUP_CREATE
+  GROUP_UPDATE
+  GROUP_DELETE
+  GROUP_PATCH
+}
+
+enum ScimLogStatus {
+  OK
+  ERROR
+  RETRYING
+  DEAD_LETTER
+}
+
+enum SamlSignatureAlgorithm {
+  RSA_SHA1
+  RSA_SHA256
+  RSA_SHA512
+}
+
+model SsoProvider {
+  id          String         @id @default(cuid())
+  key         SsoProviderKey @unique
+  name        String
+  description String?
+  iconKey     String?
+  /** Default OAuth/scope list shown on the catalog tile. */
+  defaultScopes String[] @default([])
+  /** Whichever the provider commonly defaults to (most IdPs are dual-mode). */
+  defaultType SsoConfigType  @default(SAML)
+  active      Boolean        @default(true)
+  setupDocsUrl String?
+  /** Screenshot URLs of the IdP-side admin UI for help. */
+  screenshots String[] @default([])
+  /** Optional notes shown on the catalog tile. */
+  notes       String?
+
+  createdAt DateTime @default(now())
+  updatedAt DateTime @updatedAt
+
+  configs   SsoTenantConfig[]
+  templates SsoIdpTemplate[]
+}
+
+model SsoTenantConfig {
+  id         String          @id @default(cuid())
+  tenantId   String
+  providerId String
+
+  displayName String
+  type        SsoConfigType
+  status      SsoConfigStatus @default(PENDING)
+
+  // SAML fields
+  metadataUrl       String?
+  metadataXml       String?
+  entityId          String?
+  /** Flowtora-side ACS URL — derived but stored for the copy button. */
+  acsUrl            String?
+  sloUrl            String?
+  signatureAlgorithm SamlSignatureAlgorithm @default(RSA_SHA256)
+  encryptionCertPem String?
+  /** Attribute name mapping JSON: { email, given_name, family_name, groups }. */
+  attributeMappings Json @default("{}")
+  defaultRoleId     String?
+  /** Group → role rule list: [{ group: "Engineering", roleId: "..." }]. */
+  groupRules        Json @default("[]")
+
+  // OIDC fields
+  issuer       String?
+  clientId     String?
+  clientSecret String?
+  discoveryUrl String?
+  authorizeUrl String?
+  tokenUrl     String?
+  userInfoUrl  String?
+  scopes       String[] @default([])
+  pkceEnabled  Boolean  @default(true)
+
+  // Common
+  jitProvisioningEnabled Boolean  @default(true)
+  forceSso               Boolean  @default(false)
+  allowedEmailDomains    String[] @default([])
+  scimEnabled            Boolean  @default(false)
+  scimBearerToken        String?
+
+  // Telemetry
+  lastLoginAt             DateTime?
+  lastSyncAt              DateTime?
+  metadataLastRefreshedAt DateTime?
+  /** Free-form failure message when status == FAILED. */
+  lastError               String?
+
+  createdById String?
+  createdAt   DateTime @default(now())
+  updatedAt   DateTime @updatedAt
+
+  tenant   Tenant      @relation(fields: [tenantId],   references: [id], onDelete: Cascade)
+  provider SsoProvider @relation(fields: [providerId], references: [id], onDelete: Restrict)
+  scimLogs ScimLog[]
+
+  @@unique([tenantId, providerId])
+  @@index([tenantId])
+  @@index([status])
+}
+
+model ScimLog {
+  id          String         @id @default(cuid())
+  ssoConfigId String?
+  /** Tenant FK kept independent so the row survives config deletion. */
+  tenantId    String
+  operation   ScimOperation
+  /** "User" or "Group". */
+  resourceType String
+  /** Internal resource id once mapped. Null when create failed. */
+  resourceId  String?
+  /** External SCIM id from the IdP. */
+  externalId  String?
+
+  status     ScimLogStatus @default(OK)
+  /** HTTP status returned to the IdP. */
+  httpCode   Int?
+  payload    Json @default("{}")
+  responseBody String?
+  errorMessage String?
+  attempts   Int @default(1)
+
+  occurredAt DateTime @default(now())
+
+  config SsoTenantConfig? @relation(fields: [ssoConfigId], references: [id], onDelete: SetNull)
+
+  @@index([tenantId, occurredAt])
+  @@index([status, occurredAt])
+  @@index([operation, occurredAt])
+}
+
+model SsoIdpTemplate {
+  id         String        @id @default(cuid())
+  providerId String
+  name       String
+  type       SsoConfigType
+  /** Pre-filled XML/JSON snippet for tenant copy-paste. */
+  snippet    String
+  description String?
+  screenshots String[] @default([])
+
+  createdAt DateTime @default(now())
+  updatedAt DateTime @updatedAt
+
+  provider SsoProvider @relation(fields: [providerId], references: [id], onDelete: Cascade)
+
+  @@index([providerId])
+}
+
+model SsoSettings {
+  id String @id @default("default")
+
+  enforceMfaWithSso     Boolean @default(true)
+  idpInitiatedSsoAllowed Boolean @default(false)
+  /** Override session lifetime (hours). Null = platform default. */
+  sessionLifetimeHours  Int?
+  jitDeprovisionEnabled Boolean @default(false)
+
+  updatedById String?
+  updatedAt   DateTime @updatedAt
+  createdAt   DateTime @default(now())
 }
 
 model MarketplaceCategory {
