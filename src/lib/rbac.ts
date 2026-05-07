@@ -238,6 +238,10 @@ export type PlatformPermission =
   | "sso.read"
   | "sso.manage"
   | "sso.test_login"
+  // Compliance & Security — Page 50 Security Center
+  | "security.read"
+  | "security.manage"
+  | "security.findings.resolve"
 
   // Analytics / BI
   | "analytics.read"
@@ -280,6 +284,7 @@ const PLATFORM_ALL: PlatformPermission[] = [
   "docs.read", "docs.write", "docs.publish",
   "marketplace.read", "marketplace.manage",
   "sso.read", "sso.manage", "sso.test_login",
+  "security.read", "security.manage", "security.findings.resolve",
   "analytics.read", "analytics.export", "revenue.read", "usage.read",
   "reports.read", "reports.create", "reports.edit", "reports.delete",
   "reports.schedule", "reports.export",
@@ -294,7 +299,7 @@ const PLATFORM_ALL: PlatformPermission[] = [
 const PLATFORM_BASELINE_READ: PlatformPermission[] = [
   "tenant.read", "billing.read", "staff.read", "users.read",
   "support.read", "health.read", "audit.read", "compliance.read",
-  "feature_flag.read", "announcement.read", "leads.read", "referrals.read", "affiliates.read", "seo.read", "integrations.read", "webhooks.read", "docs.read", "marketplace.read", "sso.read",
+  "feature_flag.read", "announcement.read", "leads.read", "referrals.read", "affiliates.read", "seo.read", "integrations.read", "webhooks.read", "docs.read", "marketplace.read", "sso.read", "security.read",
   "analytics.read", "revenue.read", "usage.read",
   "reports.read", "reports.export", // every staff role reads + can export
   "system.read_settings", "notifications.read",
@@ -349,6 +354,7 @@ export const PLATFORM_ROLE_PERMISSIONS: Record<PlatformRole, PlatformPermission[
     "docs.write", "docs.publish",
     "marketplace.manage",
     "sso.manage", "sso.test_login",
+    "security.manage", "security.findings.resolve",
     "analytics.export",
     "reports.create", "reports.edit", "reports.schedule",
     "notifications.manage",
@@ -387,6 +393,7 @@ export const PLATFORM_ROLE_PERMISSIONS: Record<PlatformRole, PlatformPermission[
     "docs.write", "docs.publish", // owns developer docs + OpenAPI
     "marketplace.manage",         // owns marketplace approvals
     "sso.manage", "sso.test_login", // owns SSO + SCIM
+    "security.manage", "security.findings.resolve", // owns the security center
   ]),
   // Marketing — leads, announcements, public plan/feature copy.
   MARKETING_MANAGER: dedup([

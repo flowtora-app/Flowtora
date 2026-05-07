@@ -96,6 +96,9 @@ export const PERMISSION_DESCRIPTIONS: Record<PlatformPermission, string> = {
   "sso.read":              "View SSO providers, per-tenant configurations, and SCIM logs.",
   "sso.manage":            "Edit SSO/OIDC configurations, manage IdP templates, and configure SCIM provisioning.",
   "sso.test_login":        "Run test login flows against tenant SSO configurations.",
+  "security.read":         "View the Security Center — score, findings, suspicious activity, scans, pen tests.",
+  "security.manage":       "Configure Security Center thresholds, password policy, encryption posture, and pen-test records.",
+  "security.findings.resolve": "Resolve, dismiss, or assign security findings.",
   // Analytics
   "analytics.read":        "Read analytics dashboards.",
   "analytics.export":      "Export analytics datasets.",

@@ -72,6 +72,7 @@ async function main() {
   await seedDeveloperDocs(platformUsers);             // Page 47
   await seedMarketplace(platformUsers, tenants);      // Page 48
   await seedSso(platformUsers, tenants);              // Page 49
+  await seedSecurityCenter(platformUsers);            // Page 50
 
   console.log("\n✓ Seed complete.\n");
   await db.$disconnect();
@@ -272,6 +273,13 @@ async function wipeOldSeed() {
   // entries — we keep them and just refresh their fields).
   await db.ssoTenantConfig.deleteMany({ where: { displayName: { startsWith: "[seed] " } } });
   await db.ssoIdpTemplate.deleteMany({ where: { name: { startsWith: "[seed] " } } });
+  // Page 50 — Security Center wipe. Findings/scans/pen-tests/bug-bounty
+  // are tagged via title prefix or external-id prefix.
+  await db.securityFinding.deleteMany({ where: { title: { startsWith: "[seed] " } } });
+  await db.suspiciousActivity.deleteMany({ where: { summary: { startsWith: "[seed] " } } });
+  await db.vulnerabilityScan.deleteMany({ where: { scope: { startsWith: "[seed] " } } });
+  await db.penetrationTest.deleteMany({ where: { vendor: { startsWith: "[seed] " } } });
+  await db.bugBountyReport.deleteMany({ where: { externalId: { startsWith: "SEED-" } } });
   // Customers tagged seed (after orders are gone).
   await db.customer.deleteMany({ where: { tags: { has: "seed" } } });
   // Products tagged seed (use description marker since Product has no tags array).
@@ -7248,6 +7256,384 @@ Attribute mapping:
 
   console.log(
     `  ✓ ${providers.length} providers, ${templates.length} templates, ${configCount} tenant configs, ${scimLogCount} SCIM events`,
+  );
+}
+
+/* ── Page 50 — Security Center seed ────────────────────── */
+
+async function seedSecurityCenter(staff: { id: string; email: string; name: string | null }[]) {
+  console.log("── Seeding Security Center (Page 50)…");
+  if (staff.length === 0) {
+    console.log("  skipped — no platform staff");
+    return;
+  }
+
+  // 1. Settings singleton.
+  await db.securityCenterSettings.upsert({
+    where: { id: "default" },
+    create: {
+      id: "default",
+      cachedScore: 88,
+      cachedGrade: "B",
+      scoreComputedAt: minutesAgo(30),
+      failedLoginThreshold: 5,
+      failedLoginWindowMin: 15,
+      bannerOnHighSeverity: true,
+      realtimeFeedEnabled: true,
+      mttrTargetDays: 14,
+      passwordMinLength: 14,
+      passwordRequireMixed: true,
+      passwordMaxAgeDays: 180,
+      passwordHistoryDepth: 8,
+      passwordBreachCheck: true,
+    },
+    update: {
+      cachedScore: 88,
+      cachedGrade: "B",
+      scoreComputedAt: minutesAgo(30),
+    },
+  });
+
+  // 2. Encryption snapshot.
+  await db.encryptionStatus.upsert({
+    where: { id: "default" },
+    create: {
+      id: "default",
+      atRestAlgorithm:   "AES-256-GCM",
+      atRestState:       "HEALTHY",
+      inTransitProtocol: "TLS 1.3",
+      inTransitState:    "HEALTHY",
+      kmsProvider:       "AWS KMS · us-east-1",
+      kmsState:          "HEALTHY",
+      keyLastRotatedAt:  daysAgo(34),
+      keyRotationDueIn:  56,
+      encryptedSecrets:  428,
+      pendingMigrations: 6,
+      notes: "Auto-rotation cadence: 90 days. 6 legacy plaintext secrets queued for migration sweep this Friday.",
+    },
+    update: {
+      keyLastRotatedAt:  daysAgo(34),
+      keyRotationDueIn:  56,
+      encryptedSecrets:  428,
+      pendingMigrations: 6,
+    },
+  });
+
+  // 3. Vulnerability scan history (one row per source × past few weeks).
+  await db.vulnerabilityScan.createMany({
+    data: [
+      { source: "SNYK",                     status: "COMPLETE", startedAt: daysAgo(0.5), completedAt: daysAgo(0.4),
+        totalFindings: 12, critical: 0, high: 2, medium: 6, low: 4,
+        summary: "Scanned 14,892 deps; 2 new high-severity CVEs.", scope: "[seed] flowtora monorepo · main" },
+      { source: "DEPENDABOT",               status: "COMPLETE", startedAt: daysAgo(1),   completedAt: daysAgo(1),
+        totalFindings: 7,  critical: 0, high: 1, medium: 3, low: 3,
+        summary: "Auto-PRs opened for 4 patches.", scope: "[seed] flowtora-api" },
+      { source: "GITHUB_ADVANCED_SECURITY", status: "COMPLETE", startedAt: daysAgo(2),   completedAt: daysAgo(2),
+        totalFindings: 4,  critical: 0, high: 0, medium: 2, low: 2,
+        summary: "CodeQL pass — 2 medium logic flaws flagged.", scope: "[seed] flowtora-web" },
+      { source: "TRUFFLEHOG",               status: "COMPLETE", startedAt: daysAgo(3),   completedAt: daysAgo(3),
+        totalFindings: 1,  critical: 0, high: 1, medium: 0, low: 0,
+        summary: "1 stale Stripe key detected in test fixtures.", scope: "[seed] all repos · history" },
+      { source: "AWS_INSPECTOR",            status: "COMPLETE", startedAt: daysAgo(4),   completedAt: daysAgo(4),
+        totalFindings: 3,  critical: 0, high: 0, medium: 2, low: 1,
+        summary: "Misconfig drift: 2 SGs allow 0.0.0.0/0 on non-ALB ports.", scope: "[seed] aws/prod" },
+      { source: "SEMGREP",                  status: "RUNNING",  startedAt: minutesAgo(8),  completedAt: null,
+        totalFindings: 0,  critical: 0, high: 0, medium: 0, low: 0,
+        summary: null, scope: "[seed] flowtora monorepo · feature/security-center" },
+    ],
+  });
+
+  // 4. Penetration tests (annual + retest).
+  await db.penetrationTest.createMany({
+    data: [
+      { vendor: "[seed] NCC Group",       scope: "Full external app + API audit",
+        startedAt: daysAgo(120), completedAt: daysAgo(95),
+        status: "RETEST_PASSED", executiveSummaryUrl: "https://docs.flowtora.com/seed-pentest-q4-2025.pdf",
+        critical: 0, high: 1, medium: 4, low: 7, retestPassed: 1,
+        notes: "Findings cleared on retest; SAML XSW vulnerability fix verified." },
+      { vendor: "[seed] Bishop Fox",      scope: "Internal infrastructure + IAM",
+        startedAt: daysAgo(220), completedAt: daysAgo(195),
+        status: "COMPLETE", executiveSummaryUrl: "https://docs.flowtora.com/seed-pentest-internal.pdf",
+        critical: 0, high: 0, medium: 2, low: 5, retestPassed: 0 },
+      { vendor: "[seed] Cure53",          scope: "Browser extension hardening",
+        startedAt: daysAgo(45),  completedAt: daysAgo(15),
+        status: "RETEST_REQUIRED", executiveSummaryUrl: null,
+        critical: 1, high: 2, medium: 3, low: 2, retestPassed: 0,
+        notes: "Critical: postMessage origin check missing in chat panel iframe. Patch landed; retest scheduled." },
+      { vendor: "[seed] Trail of Bits",   scope: "Cryptographic review of SCIM bearer tokens",
+        startedAt: daysAgo(7),   completedAt: null,
+        status: "IN_PROGRESS", executiveSummaryUrl: null,
+        critical: 0, high: 0, medium: 0, low: 0, retestPassed: 0 },
+    ],
+  });
+
+  // 5. Bug bounty reports.
+  await db.bugBountyReport.createMany({
+    data: [
+      { platform: "HACKERONE", externalId: "SEED-1837421", reporter: "@h4ck3r-jane",
+        title: "[seed] Stored XSS in proof comment markdown renderer",
+        severity: "HIGH",     status: "RESOLVED",  payoutCents: 250000,
+        submittedAt: daysAgo(38), resolvedAt: daysAgo(22),
+        summary: "Sanitization bypass via SVG payload — fixed via DOMPurify upgrade." },
+      { platform: "HACKERONE", externalId: "SEED-1842903", reporter: "@bobsec",
+        title: "[seed] IDOR on tenant invoice export",
+        severity: "CRITICAL", status: "RESOLVED",  payoutCents: 600000,
+        submittedAt: daysAgo(60), resolvedAt: daysAgo(54),
+        summary: "Tenant scoping check missing on legacy invoice download route." },
+      { platform: "INTIGRITI", externalId: "SEED-9023",   reporter: "@rasvalt",
+        title: "[seed] Open redirect via SSO callback",
+        severity: "MEDIUM",   status: "CONFIRMED", payoutCents: 75000,
+        submittedAt: daysAgo(10), resolvedAt: null,
+        summary: "Insufficient allow-list on SAML RelayState parameter; fix in flight." },
+      { platform: "INTIGRITI", externalId: "SEED-9112",   reporter: "@dorigold",
+        title: "[seed] CSRF token reuse on session revocation endpoint",
+        severity: "LOW",      status: "TRIAGE",    payoutCents: 0,
+        submittedAt: daysAgo(2),  resolvedAt: null,
+        summary: "Reporter claims partial CSRF — under triage." },
+      { platform: "BUGCROWD", externalId: "SEED-bc-7733", reporter: "@nullbyte99",
+        title: "[seed] Information disclosure in 500 error stack trace",
+        severity: "LOW",      status: "INFORMATIVE", payoutCents: 0,
+        submittedAt: daysAgo(15), resolvedAt: daysAgo(12),
+        summary: "Stack trace leaked path to ENV file in non-prod cluster only — no production impact." },
+      { platform: "HACKERONE", externalId: "SEED-1855112", reporter: "@dupbot",
+        title: "[seed] CSRF on profile picture upload",
+        severity: "LOW",      status: "DUPLICATE", payoutCents: 0,
+        submittedAt: daysAgo(8),  resolvedAt: daysAgo(7),
+        summary: "Dup of issue closed last quarter." },
+    ],
+  });
+
+  // 6. Suspicious activity feed (~14 events).
+  await db.suspiciousActivity.createMany({
+    data: [
+      { kind: "FAILED_LOGIN_BURST", severity: "HIGH",   status: "OPEN",
+        userEmail: "owner@acme.example", userDisplayName: "Acme Owner",
+        ipAddress: "203.0.113.42", geoLocation: "Sofia, BG",
+        summary: "[seed] 12 failed logins in 4 minutes from a new IP",
+        occurredAt: minutesAgo(8) },
+      { kind: "UNUSUAL_GEO", severity: "MEDIUM", status: "INVESTIGATING",
+        userEmail: "csr@bigshop.example", userDisplayName: "Bigshop CSR",
+        ipAddress: "198.51.100.221", geoLocation: "Lagos, NG",
+        summary: "[seed] Login from country never used before by this account",
+        occurredAt: minutesAgo(45) },
+      { kind: "CONCURRENT_SESSIONS", severity: "MEDIUM", status: "OPEN",
+        userEmail: "admin@pacificwest.example", userDisplayName: "PW Admin",
+        ipAddress: "192.0.2.10", geoLocation: "San Diego, US",
+        summary: "[seed] 4 concurrent sessions across 3 distinct IPs",
+        occurredAt: minutesAgo(180) },
+      { kind: "BRUTE_FORCE", severity: "CRITICAL", status: "ACTION_TAKEN",
+        userEmail: null, userDisplayName: null,
+        ipAddress: "45.33.32.156", geoLocation: "Frankfurt, DE",
+        summary: "[seed] 800+ login attempts blocked at WAF — IP banned",
+        occurredAt: daysAgo(0.3),
+        resolvedAt: daysAgo(0.2), resolvedById: staff[0]!.id },
+      { kind: "LEAKED_CREDENTIAL", severity: "HIGH",   status: "OPEN",
+        userEmail: "designer@acme.example", userDisplayName: "Acme Designer",
+        ipAddress: null, geoLocation: null,
+        summary: "[seed] HaveIBeenPwned match — Adobe 2013 breach",
+        occurredAt: daysAgo(1) },
+      { kind: "IMPOSSIBLE_TRAVEL", severity: "HIGH",   status: "INVESTIGATING",
+        userEmail: "production@bigshop.example", userDisplayName: "Bigshop Production",
+        ipAddress: "104.16.18.19", geoLocation: "Tokyo, JP / Toronto, CA in 22 min",
+        summary: "[seed] Two logins 9,000 km apart inside 22 min window",
+        occurredAt: daysAgo(1.5) },
+      { kind: "TOR_EXIT_NODE", severity: "MEDIUM", status: "DISMISSED",
+        userEmail: "owner@pacificwest.example", userDisplayName: "PW Owner",
+        ipAddress: "185.220.101.4", geoLocation: "Tor exit (DE)",
+        summary: "[seed] Login via known Tor exit node (admin acknowledged)",
+        occurredAt: daysAgo(2),
+        resolvedAt: daysAgo(2), resolvedById: staff[0]!.id },
+      { kind: "NEW_DEVICE", severity: "LOW", status: "OPEN",
+        userEmail: "csr@acme.example", userDisplayName: "Acme CSR",
+        ipAddress: "203.0.113.119", geoLocation: "Austin, US",
+        summary: "[seed] First-time device fingerprint for this user",
+        occurredAt: daysAgo(2.5) },
+      { kind: "FAILED_LOGIN_BURST", severity: "MEDIUM", status: "DISMISSED",
+        userEmail: "accounting@bigshop.example", userDisplayName: "Bigshop Accounting",
+        ipAddress: "172.16.4.20", geoLocation: "Chicago, US",
+        summary: "[seed] 5 failed logins in 30s — typo recovery (user confirmed)",
+        occurredAt: daysAgo(3),
+        resolvedAt: daysAgo(2.9), resolvedById: staff[0]!.id },
+      { kind: "UNUSUAL_GEO", severity: "MEDIUM", status: "OPEN",
+        userEmail: "owner@bigshop.example", userDisplayName: "Bigshop Owner",
+        ipAddress: "8.8.8.8", geoLocation: "Mountain View, US",
+        summary: "[seed] Login from corporate VPN endpoint 1,400 km from usual",
+        occurredAt: daysAgo(4) },
+      { kind: "CONCURRENT_SESSIONS", severity: "LOW", status: "DISMISSED",
+        userEmail: "designer@bigshop.example", userDisplayName: "Bigshop Designer",
+        ipAddress: "10.0.0.1", geoLocation: "Seattle, US",
+        summary: "[seed] 2 sessions on laptop + tablet (expected)",
+        occurredAt: daysAgo(5),
+        resolvedAt: daysAgo(5), resolvedById: staff[0]!.id },
+      { kind: "BRUTE_FORCE", severity: "HIGH", status: "ACTION_TAKEN",
+        userEmail: null, userDisplayName: null,
+        ipAddress: "5.188.10.45", geoLocation: "Moscow, RU",
+        summary: "[seed] Credential stuffing burst — 300 IPs banned",
+        occurredAt: daysAgo(7),
+        resolvedAt: daysAgo(7), resolvedById: staff[0]!.id },
+      { kind: "LEAKED_CREDENTIAL", severity: "MEDIUM", status: "OPEN",
+        userEmail: "installer@pacificwest.example", userDisplayName: "PW Installer",
+        ipAddress: null, geoLocation: null,
+        summary: "[seed] HaveIBeenPwned match — LinkedIn 2012 breach",
+        occurredAt: daysAgo(8) },
+      { kind: "NEW_DEVICE", severity: "INFO", status: "DISMISSED",
+        userEmail: "production@acme.example", userDisplayName: "Acme Production",
+        ipAddress: "203.0.113.55", geoLocation: "Phoenix, US",
+        summary: "[seed] New iOS device, MDM-enrolled (auto-trusted)",
+        occurredAt: daysAgo(10),
+        resolvedAt: daysAgo(10), resolvedById: staff[0]!.id },
+    ],
+  });
+
+  // 7. Security findings (mix of sources).
+  type FBP = {
+    source: "VULNERABILITY_SCAN" | "SECRET_SCAN" | "DEPENDENCY_SCAN" | "CLOUD_POSTURE" | "PENETRATION_TEST" | "BUG_BOUNTY" | "MANUAL";
+    title: string;
+    severity: "CRITICAL" | "HIGH" | "MEDIUM" | "LOW" | "INFO";
+    status: "OPEN" | "IN_PROGRESS" | "REMEDIATED" | "ACCEPTED_RISK" | "FALSE_POSITIVE" | "WONT_FIX";
+    externalRef?: string; component?: string; version?: string; fixVersion?: string; score?: number;
+    daysAgoDetected: number; remediatedDaysAgo?: number; description?: string; assignedTo?: number;
+  };
+  const findings: FBP[] = [
+    // Dependency / vulnerability scan
+    { source: "DEPENDENCY_SCAN", title: "[seed] CVE-2024-37890 ws DoS via crafted upgrade headers",
+      severity: "HIGH", status: "OPEN",
+      externalRef: "CVE-2024-37890", component: "ws", version: "8.13.0", fixVersion: "8.17.1", score: 7.5,
+      daysAgoDetected: 1, description: "Upstream WebSocket lib accepts unbounded headers leading to OOM." },
+    { source: "DEPENDENCY_SCAN", title: "[seed] CVE-2024-21534 jsonpath-plus RCE via expression injection",
+      severity: "CRITICAL", status: "IN_PROGRESS",
+      externalRef: "CVE-2024-21534", component: "jsonpath-plus", version: "9.0.0", fixVersion: "10.0.7", score: 9.8,
+      daysAgoDetected: 3, assignedTo: 0,
+      description: "Untrusted input flows into JSONPath compiler — drop-in upgrade available." },
+    { source: "DEPENDENCY_SCAN", title: "[seed] CVE-2024-29415 ip package SSRF on private addresses",
+      severity: "MEDIUM", status: "OPEN",
+      externalRef: "CVE-2024-29415", component: "ip", version: "2.0.0", fixVersion: "2.0.1", score: 5.4,
+      daysAgoDetected: 5 },
+    { source: "DEPENDENCY_SCAN", title: "[seed] CVE-2024-46982 next.js cache poisoning",
+      severity: "HIGH", status: "REMEDIATED",
+      externalRef: "CVE-2024-46982", component: "next", version: "15.5.10", fixVersion: "15.5.15", score: 7.5,
+      daysAgoDetected: 14, remediatedDaysAgo: 9 },
+    { source: "VULNERABILITY_SCAN", title: "[seed] Prototype pollution in lodash.merge usage",
+      severity: "MEDIUM", status: "OPEN",
+      externalRef: "GHSA-jf85-cpcp-j695", component: "lodash", version: "4.17.20", fixVersion: "4.17.21", score: 6.5,
+      daysAgoDetected: 7 },
+    { source: "VULNERABILITY_SCAN", title: "[seed] Outdated jQuery 3.5.0 — XSS in HTML rewriting",
+      severity: "LOW", status: "WONT_FIX",
+      externalRef: "GHSA-mhpp-875w-9cpv", component: "jquery", version: "3.5.0", fixVersion: "3.5.1", score: 3.4,
+      daysAgoDetected: 90, description: "Only used by legacy admin tool flagged for retirement Q3." },
+
+    // Secret scanning
+    { source: "SECRET_SCAN", title: "[seed] Stripe live secret in test fixture",
+      severity: "HIGH", status: "REMEDIATED",
+      externalRef: "GH-SEC-44", component: "tests/billing/__fixtures__/stripe.ts", score: 7.0,
+      daysAgoDetected: 6, remediatedDaysAgo: 4,
+      description: "TruffleHog flagged sk_live_… in committed fixture; rotated and revoked." },
+    { source: "SECRET_SCAN", title: "[seed] AWS access key (IAM seeded for review env)",
+      severity: "MEDIUM", status: "OPEN",
+      externalRef: "GH-SEC-51", component: ".env.review", score: 5.0,
+      daysAgoDetected: 2 },
+    { source: "SECRET_SCAN", title: "[seed] Slack webhook URL leaked in CI log",
+      severity: "LOW", status: "REMEDIATED",
+      externalRef: "GH-SEC-47", component: ".github/workflows/deploy.yml", score: 3.5,
+      daysAgoDetected: 12, remediatedDaysAgo: 11 },
+
+    // Cloud posture
+    { source: "CLOUD_POSTURE", title: "[seed] S3 bucket policy allows unauthenticated GET",
+      severity: "HIGH", status: "IN_PROGRESS",
+      externalRef: "AWS-S3-1", component: "s3://flowtora-assets-staging", score: 7.2,
+      daysAgoDetected: 2, assignedTo: 0,
+      description: "Bucket policy missing PrincipalCondition; staging only — restricting now." },
+    { source: "CLOUD_POSTURE", title: "[seed] Security group allows 0.0.0.0/0 on port 5432",
+      severity: "CRITICAL", status: "REMEDIATED",
+      externalRef: "AWS-EC2-9", component: "sg-0a4b...c2", score: 9.1,
+      daysAgoDetected: 11, remediatedDaysAgo: 10,
+      description: "Postgres SG drift detected by AWS Config; rule retracted within 1h." },
+    { source: "CLOUD_POSTURE", title: "[seed] CloudFront distribution missing WAF",
+      severity: "MEDIUM", status: "OPEN",
+      externalRef: "AWS-CF-3", component: "d1abc23456.cloudfront.net", score: 6.0,
+      daysAgoDetected: 18 },
+    { source: "CLOUD_POSTURE", title: "[seed] RDS snapshot publicly shareable (manual snap)",
+      severity: "LOW", status: "ACCEPTED_RISK",
+      externalRef: "AWS-RDS-2", component: "rds:flowtora-prod", score: 2.5,
+      daysAgoDetected: 30,
+      description: "Manual snap created for forensic review; will revoke after retention window." },
+
+    // Pen test findings carried over
+    { source: "PENETRATION_TEST", title: "[seed] postMessage origin check missing in chat-panel iframe",
+      severity: "CRITICAL", status: "IN_PROGRESS",
+      externalRef: "Cure53-2026Q2-#1", component: "src/components/chat/ChatPanel.tsx", score: 9.0,
+      daysAgoDetected: 12, assignedTo: 0 },
+    { source: "PENETRATION_TEST", title: "[seed] CSRF protection bypass via SameSite=None",
+      severity: "MEDIUM", status: "REMEDIATED",
+      externalRef: "NCC-2025Q4-#3", component: "session cookie", score: 5.5,
+      daysAgoDetected: 100, remediatedDaysAgo: 92 },
+
+    // Bug bounty findings (mirror)
+    { source: "BUG_BOUNTY", title: "[seed] IDOR on tenant invoice export (H1 #1842903)",
+      severity: "CRITICAL", status: "REMEDIATED",
+      externalRef: "H1-1842903", component: "GET /api/invoices/[id]/export", score: 9.5,
+      daysAgoDetected: 60, remediatedDaysAgo: 54 },
+    { source: "BUG_BOUNTY", title: "[seed] Open redirect via SSO callback (Intigriti #9023)",
+      severity: "MEDIUM", status: "IN_PROGRESS",
+      externalRef: "INT-9023", component: "/api/sso/callback", score: 5.0,
+      daysAgoDetected: 10, assignedTo: 0 },
+  ];
+  await db.securityFinding.createMany({
+    data: findings.map((f) => {
+      const detectedAt = daysAgo(f.daysAgoDetected);
+      const remediatedAt = f.remediatedDaysAgo != null ? daysAgo(f.remediatedDaysAgo) : null;
+      const days = remediatedAt ? Math.max(0, f.daysAgoDetected - (f.remediatedDaysAgo ?? f.daysAgoDetected)) : null;
+      return {
+        source: f.source,
+        title: f.title,
+        description: f.description ?? null,
+        severity: f.severity,
+        status: f.status,
+        externalRef: f.externalRef ?? null,
+        component: f.component ?? null,
+        version: f.version ?? null,
+        fixVersion: f.fixVersion ?? null,
+        score: f.score ?? null,
+        detectedAt,
+        remediatedAt,
+        daysToRemediate: days,
+        assignedToId: f.assignedTo != null ? staff[f.assignedTo % staff.length]!.id : null,
+        resolvedById:  remediatedAt ? staff[0]!.id : null,
+      };
+    }),
+  });
+
+  // 8. Password-policy audit row per platform user.
+  for (const u of staff) {
+    const fail = Math.random();
+    await db.passwordPolicyAudit.upsert({
+      where: { userId: u.id },
+      create: {
+        userId: u.id,
+        meetsLength:       fail > 0.05,
+        meetsComplexity:   fail > 0.10,
+        meetsAge:          fail > 0.20,
+        meetsHistory:      fail > 0.05,
+        passesBreachCheck: fail > 0.08,
+        mfaEnabled:        fail > 0.15,
+        passwordAgeDays:   randInt(7, 240),
+        checkedAt: minutesAgo(randInt(5, 720)),
+      },
+      update: {
+        meetsLength:       fail > 0.05,
+        meetsComplexity:   fail > 0.10,
+        meetsAge:          fail > 0.20,
+        meetsHistory:      fail > 0.05,
+        passesBreachCheck: fail > 0.08,
+        mfaEnabled:        fail > 0.15,
+        passwordAgeDays:   randInt(7, 240),
+        checkedAt: minutesAgo(randInt(5, 720)),
+      },
+    });
+  }
+
+  console.log(
+    `  ✓ ${findings.length} findings, ~14 suspicious events, 6 scans, 4 pen tests, 6 bug-bounty reports, ${staff.length} pwd-audit rows`,
   );
 }
 
