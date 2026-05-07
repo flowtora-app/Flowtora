@@ -6581,6 +6581,311 @@ model DocPageComment {
   @@index([resolvedAt])
 }
 
+// ────────────────────────────────────────────────────────────
+// Page 48 — Marketplace.
+//
+// Third-party apps that tenants can install. Each app moves through
+// an approval workflow (Submitted → Automated checks → Security
+// review → Listing review → Approved/Rejected) before going live.
+// Once live, tenants install/uninstall and leave reviews; admins
+// monitor adoption + revenue share.
+// ────────────────────────────────────────────────────────────
+
+enum MarketplaceAppStatus {
+  DRAFT
+  IN_REVIEW
+  APPROVED
+  REJECTED
+  SUSPENDED
+}
+
+enum MarketplacePricingModel {
+  FREE
+  ONE_TIME
+  SUBSCRIPTION
+  USAGE
+}
+
+enum MarketplaceRiskLevel {
+  LOW
+  MEDIUM
+  HIGH
+  CRITICAL
+}
+
+enum MarketplaceReviewStatus {
+  PUBLISHED
+  HIDDEN
+  FLAGGED
+  REMOVED
+}
+
+enum MarketplaceSubmissionStage {
+  SUBMITTED
+  AUTOMATED_CHECKS
+  SECURITY_REVIEW
+  LISTING_REVIEW
+  APPROVED
+  REJECTED
+}
+
+enum MarketplaceRevenueShareTier {
+  STANDARD     // 70/30
+  PREFERRED    // 80/20
+  PARTNER      // 85/15
+}
+
+model MarketplaceCategory {
+  id          String  @id @default(cuid())
+  slug        String  @unique
+  name        String
+  description String?
+  iconKey     String?
+  /** When set, surfaces in the "Featured categories" rail. */
+  featuredOrder Int?
+  createdAt   DateTime @default(now())
+
+  apps MarketplaceApp[]
+}
+
+model MarketplaceApp {
+  id   String @id @default(cuid())
+  slug String @unique
+  name String
+  /** 1-line marketing tagline. */
+  tagline      String
+  iconUrl      String?
+  screenshots  String[] @default([])
+  videoUrl     String?
+  /** Long description (MDX). */
+  description  String
+
+  category   MarketplaceCategory @relation(fields: [categoryId], references: [id], onDelete: Restrict)
+  categoryId String
+
+  status   MarketplaceAppStatus @default(DRAFT)
+  featured Boolean              @default(false)
+
+  developerName  String
+  developerEmail String
+  /** Optional developer URL/repo. */
+  repoUrl        String?
+  supportUrl     String?
+  privacyUrl     String?
+  termsUrl       String?
+  eulaUrl        String?
+
+  pricingModel   MarketplacePricingModel @default(FREE)
+  /** Per-model details: { monthlyPriceCents, freeTrialDays, unitPriceCents, … }. */
+  pricingDetails Json @default("{}")
+
+  /** Raw uploaded manifest.json for the security review. */
+  manifestJson      Json @default("{}")
+  /** Pass/fail security checklist as a flat JSON object. */
+  securityChecklist Json @default("{}")
+
+  // Risk
+  riskScore   Int                 @default(50)
+  riskLevel   MarketplaceRiskLevel @default(MEDIUM)
+  riskReasons String[]            @default([])
+
+  // Compliance
+  soc2AttestationUrl String?
+  /** Sub-processor declaration, free-form markdown. */
+  subProcessors      String?
+  dataResidency      String?
+
+  // Revenue share
+  revenueShareTier MarketplaceRevenueShareTier @default(STANDARD)
+  payoutMethod     String?
+  /** "active", "needs_review", "missing", etc. */
+  taxStatus        String?
+
+  // Adoption denorms
+  installCount         Int    @default(0)
+  ratingAverage        Float?
+  ratingCount          Int    @default(0)
+  /** MRR contribution (gross) in minor units. */
+  mrrContributionCents Int    @default(0)
+
+  /** Currently-default version. */
+  currentVersion String?
+
+  // Lifecycle stamps
+  submittedAt     DateTime?
+  approvedAt      DateTime?
+  approvedById    String?
+  publishedAt     DateTime?
+  suspendedAt     DateTime?
+  suspendedById   String?
+  suspendedReason String?
+
+  createdAt DateTime @default(now())
+  updatedAt DateTime @updatedAt
+
+  versions      MarketplaceAppVersion[]
+  permissions   MarketplaceAppPermission[]
+  installations MarketplaceInstallation[]
+  reviews       MarketplaceReview[]
+  submissions   MarketplaceSubmission[]
+  auditLog      MarketplaceAppAudit[]
+  payouts       MarketplacePayoutStatement[]
+
+  @@index([status, createdAt])
+  @@index([categoryId])
+  @@index([featured])
+}
+
+model MarketplaceAppVersion {
+  id        String @id @default(cuid())
+  appId     String
+  version   String
+  /** Markdown changelog. */
+  changelog String?
+  /** Whether this version is the current default. */
+  isCurrent Boolean @default(false)
+  /** Manifest snapshot at this version. */
+  manifestJson Json @default("{}")
+  releasedAt DateTime @default(now())
+  /** How many tenants are pinned to this version (denormalised). */
+  installCount Int @default(0)
+
+  app MarketplaceApp @relation(fields: [appId], references: [id], onDelete: Cascade)
+
+  @@unique([appId, version])
+  @@index([appId, releasedAt])
+}
+
+model MarketplaceAppPermission {
+  id            String @id @default(cuid())
+  appId         String
+  scope         String
+  riskLevel     MarketplaceRiskLevel
+  /** Why the app needs this scope — shown to tenants on install. */
+  justification String
+
+  app MarketplaceApp @relation(fields: [appId], references: [id], onDelete: Cascade)
+
+  @@unique([appId, scope])
+}
+
+model MarketplaceInstallation {
+  id        String  @id @default(cuid())
+  appId     String
+  tenantId  String
+  installedAt   DateTime  @default(now())
+  uninstalledAt DateTime?
+  lastUsedAt    DateTime?
+  versionInstalled String
+
+  app MarketplaceApp @relation(fields: [appId], references: [id], onDelete: Cascade)
+
+  @@unique([appId, tenantId])
+  @@index([tenantId])
+  @@index([appId, installedAt])
+}
+
+model MarketplaceReview {
+  id         String                  @id @default(cuid())
+  appId      String
+  tenantId   String?
+  authorName String
+  /** 1-5 stars. */
+  rating     Int
+  title      String?
+  body       String
+  status     MarketplaceReviewStatus @default(PUBLISHED)
+
+  // Moderation
+  reply             String?
+  replyAuthorId     String?
+  flaggedAt         DateTime?
+  flaggedReason     String?
+  hiddenAt          DateTime?
+  hiddenById        String?
+  reviewerBanned    Boolean @default(false)
+
+  createdAt DateTime @default(now())
+  updatedAt DateTime @updatedAt
+
+  app MarketplaceApp @relation(fields: [appId], references: [id], onDelete: Cascade)
+
+  @@index([appId, createdAt])
+  @@index([status, createdAt])
+}
+
+model MarketplaceSubmission {
+  id            String                    @id @default(cuid())
+  appId         String
+  stage         MarketplaceSubmissionStage
+  assigneeId    String?
+  /** SLA deadline timestamp. */
+  slaDeadlineAt DateTime?
+  comments      String?
+  /** Checklist as JSON: [{label, checked, note}]. */
+  checklist     Json                     @default("[]")
+  enteredAt     DateTime                  @default(now())
+  exitedAt      DateTime?
+
+  app MarketplaceApp @relation(fields: [appId], references: [id], onDelete: Cascade)
+
+  @@index([appId, enteredAt])
+  @@index([stage, enteredAt])
+}
+
+model MarketplaceAppAudit {
+  id        String   @id @default(cuid())
+  appId     String
+  action    String
+  detail    String?
+  authorId  String?
+  occurredAt DateTime @default(now())
+
+  app MarketplaceApp @relation(fields: [appId], references: [id], onDelete: Cascade)
+
+  @@index([appId, occurredAt])
+}
+
+model MarketplacePayoutStatement {
+  id      String @id @default(cuid())
+  appId   String
+  /** "2026-04". */
+  period  String
+  installs        Int @default(0)
+  grossCents      Int @default(0)
+  flowtoraCutCents Int @default(0)
+  developerCutCents Int @default(0)
+  paid    Boolean  @default(false)
+  paidAt  DateTime?
+
+  app MarketplaceApp @relation(fields: [appId], references: [id], onDelete: Cascade)
+
+  @@unique([appId, period])
+}
+
+model MarketplaceSettings {
+  id String @id @default("default")
+
+  acceptingSubmissions Boolean @default(true)
+  defaultRevenueShareTier MarketplaceRevenueShareTier @default(STANDARD)
+  /** SLA for the listing review stage (in hours). */
+  reviewSlaHours       Int @default(72)
+  /** SLA for the security review stage (in hours). */
+  securityReviewSlaHours Int @default(168)
+  autoChecksEnabled Boolean @default(true)
+
+  // Submission gates
+  requireSoc2          Boolean @default(false)
+  requireScreenshots   Boolean @default(true)
+  minScreenshots       Int     @default(2)
+  requirePrivacyUrl    Boolean @default(true)
+  requireSupportUrl    Boolean @default(true)
+
+  updatedById String?
+  updatedAt   DateTime @updatedAt
+  createdAt   DateTime @default(now())
+}
+
 model OpenApiSpec {
   id      String @id @default(cuid())
   version String

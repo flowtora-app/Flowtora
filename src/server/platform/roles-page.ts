@@ -91,6 +91,8 @@ export const PERMISSION_DESCRIPTIONS: Record<PlatformPermission, string> = {
   "docs.read":             "View the developer documentation tree, page contents, and OpenAPI references.",
   "docs.write":            "Edit doc page drafts, comment on pages, and upload OpenAPI specs.",
   "docs.publish":          "Publish doc pages, schedule publishes, roll back versions, and auto-publish OpenAPI specs.",
+  "marketplace.read":      "View marketplace apps, submissions, reviews, and revenue-share statements.",
+  "marketplace.manage":    "Approve apps, moderate reviews, configure revenue share, and run danger-zone actions.",
   // Analytics
   "analytics.read":        "Read analytics dashboards.",
   "analytics.export":      "Export analytics datasets.",

@@ -70,6 +70,7 @@ async function main() {
   await seedIntegrationCatalog(tenants);              // Page 45
   await seedApiAndWebhooks(platformUsers, tenants);   // Page 46
   await seedDeveloperDocs(platformUsers);             // Page 47
+  await seedMarketplace(platformUsers, tenants);      // Page 48
 
   console.log("\n✓ Seed complete.\n");
   await db.$disconnect();
@@ -254,6 +255,16 @@ async function wipeOldSeed() {
   }
   await db.openApiSpec.deleteMany({ where: { version: { startsWith: "[seed]-" } } });
   await db.codeSample.deleteMany({ where: { endpointKey: { startsWith: "[seed] " } } });
+  // Page 48 — marketplace apps + categories tagged with [seed].
+  const seedMpApps = await db.marketplaceApp.findMany({
+    where: { name: { startsWith: "[seed] " } },
+    select: { id: true },
+  });
+  if (seedMpApps.length) {
+    await db.marketplaceApp.deleteMany({ where: { id: { in: seedMpApps.map((a) => a.id) } } });
+    console.log(`  deleted ${seedMpApps.length} seed marketplace apps (cascades versions + installs + reviews + …)`);
+  }
+  await db.marketplaceCategory.deleteMany({ where: { slug: { startsWith: "seed-" } } });
   // Customers tagged seed (after orders are gone).
   await db.customer.deleteMany({ where: { tags: { has: "seed" } } });
   // Products tagged seed (use description marker since Product has no tags array).
@@ -6126,6 +6137,670 @@ HttpRequest req = HttpRequest.newBuilder()
 
   console.log(
     `  ✓ ${pageCount} doc pages, ${versionCount} version snapshots, ${commentCount} comments, 3 OpenAPI specs, ${codeSampleCount} code samples`,
+  );
+}
+
+/* ── Page 48 — Marketplace ────────────────────── */
+
+async function seedMarketplace(
+  staff: { id: string }[],
+  tenants: { id: string; name: string; slug: string }[],
+) {
+  console.log("── Seeding marketplace (Page 48)…");
+  const reviewer = staff[0];
+  if (!reviewer) {
+    console.log("  skipped — no platform staff found");
+    return;
+  }
+
+  // 1. Settings singleton.
+  await db.marketplaceSettings.upsert({
+    where: { id: "default" },
+    create: {
+      id: "default",
+      acceptingSubmissions: true,
+      defaultRevenueShareTier: "STANDARD",
+      reviewSlaHours: 72,
+      securityReviewSlaHours: 168,
+      autoChecksEnabled: true,
+      requireSoc2: false,
+      requireScreenshots: true,
+      minScreenshots: 2,
+      requirePrivacyUrl: true,
+      requireSupportUrl: true,
+    },
+    update: {},
+  });
+
+  // 2. Categories.
+  type CatBlueprint = { slug: string; name: string; description: string; featuredOrder?: number };
+  const catBlueprints: CatBlueprint[] = [
+    { slug: "seed-productivity", name: "Productivity", description: "Tools that help shop owners get more done in a day.", featuredOrder: 0 },
+    { slug: "seed-design", name: "Design & Creative", description: "Asset libraries, mockup generators, and design import tools.", featuredOrder: 1 },
+    { slug: "seed-finance", name: "Finance & Accounting", description: "Tax tools, invoicing extensions, payment routers.", featuredOrder: 2 },
+    { slug: "seed-shipping", name: "Shipping & Logistics", description: "Carrier integrations, tracking enrichment, fulfillment.", featuredOrder: 3 },
+    { slug: "seed-analytics", name: "Analytics & BI", description: "Dashboards, attribution, and reporting layers.", featuredOrder: 4 },
+    { slug: "seed-customer", name: "Customer Communications", description: "SMS, email, chat, review-requesters.", featuredOrder: 5 },
+    { slug: "seed-equipment", name: "Equipment & Production", description: "RIP integrations, press telemetry, color management." },
+    { slug: "seed-hr", name: "HR & People Ops", description: "Time tracking, payroll bridges, scheduling." },
+  ];
+  const catMap = new Map<string, string>();
+  for (const c of catBlueprints) {
+    const created = await db.marketplaceCategory.create({
+      data: {
+        slug: c.slug, name: c.name, description: c.description,
+        featuredOrder: c.featuredOrder ?? null,
+      },
+    });
+    catMap.set(c.slug, created.id);
+  }
+
+  // 3. Apps.
+  type AppBlueprint = {
+    slug: string; name: string; tagline: string; description: string; iconUrl: string;
+    categorySlug: string;
+    status: "DRAFT" | "IN_REVIEW" | "APPROVED" | "REJECTED" | "SUSPENDED";
+    featured?: boolean;
+    pricingModel: "FREE" | "ONE_TIME" | "SUBSCRIPTION" | "USAGE";
+    pricingDetails: Record<string, unknown>;
+    developerName: string; developerEmail: string;
+    repoUrl?: string; supportUrl?: string; privacyUrl?: string; termsUrl?: string;
+    riskScore: number; riskLevel: "LOW" | "MEDIUM" | "HIGH" | "CRITICAL";
+    riskReasons?: string[];
+    revenueShareTier: "STANDARD" | "PREFERRED" | "PARTNER";
+    soc2AttestationUrl?: string; subProcessors?: string; dataResidency?: string;
+    payoutMethod?: string; taxStatus?: string;
+    installs: number;
+    ratingAvg: number | null; ratingCount: number;
+    mrrCents: number;
+    permissions: Array<{ scope: string; risk: "LOW" | "MEDIUM" | "HIGH" | "CRITICAL"; justification: string }>;
+    versions: Array<{ version: string; releasedDays: number; isCurrent?: boolean; changelog: string }>;
+    submissionStage: "SUBMITTED" | "AUTOMATED_CHECKS" | "SECURITY_REVIEW" | "LISTING_REVIEW" | "APPROVED" | "REJECTED";
+    submissionTimeline: Array<{ stage: "SUBMITTED" | "AUTOMATED_CHECKS" | "SECURITY_REVIEW" | "LISTING_REVIEW" | "APPROVED" | "REJECTED"; daysAgo: number; comments?: string }>;
+    suspendedReason?: string;
+    submittedDays?: number;
+    approvedDays?: number;
+  };
+
+  const appBlueprints: AppBlueprint[] = [
+    {
+      slug: "seed-quickbase-bridge", name: "[seed] QuickBase Bridge",
+      tagline: "Two-way sync of jobs to QuickBase tables.",
+      description: "## QuickBase Bridge\n\nFor shops running QuickBase as their secondary OS, this app syncs every Flowtora job into a QuickBase table — bidirectionally.\n\n- Two-way sync\n- Custom field mappings\n- Webhook on save",
+      iconUrl: "https://cdn.flowtora.com/marketplace/quickbase-bridge.svg",
+      categorySlug: "seed-productivity", status: "APPROVED", featured: true,
+      pricingModel: "SUBSCRIPTION", pricingDetails: { monthlyPriceCents: 2900, freeTrialDays: 14 },
+      developerName: "QBdge Labs", developerEmail: "support@qbdge.dev",
+      repoUrl: "https://github.com/qbdge/flowtora-app", supportUrl: "https://qbdge.dev/support", privacyUrl: "https://qbdge.dev/privacy", termsUrl: "https://qbdge.dev/terms",
+      riskScore: 35, riskLevel: "MEDIUM",
+      riskReasons: ["App holds tenants:write — bulk operations possible"],
+      revenueShareTier: "PREFERRED",
+      soc2AttestationUrl: "https://qbdge.dev/soc2.pdf",
+      subProcessors: "AWS (us-east-1), QuickBase API, Datadog (logs)",
+      dataResidency: "US",
+      payoutMethod: "Stripe Connect Express",
+      taxStatus: "1099 active",
+      installs: 18, ratingAvg: 4.6, ratingCount: 14, mrrCents: 33700,
+      permissions: [
+        { scope: "tenants:read",  risk: "LOW",  justification: "Read tenant info to construct sync URL." },
+        { scope: "tenants:write", risk: "HIGH", justification: "Apply changes from QuickBase back into Flowtora." },
+        { scope: "audit:read",    risk: "LOW",  justification: "Surface change history in QuickBase." },
+      ],
+      versions: [
+        { version: "1.0.0", releasedDays: 240, changelog: "Initial release." },
+        { version: "1.2.0", releasedDays: 90,  changelog: "Multi-table sync." },
+        { version: "1.3.1", releasedDays: 12,  isCurrent: true, changelog: "Fix: rate-limit handling under burst writes." },
+      ],
+      submissionStage: "APPROVED",
+      submissionTimeline: [
+        { stage: "SUBMITTED",        daysAgo: 250 },
+        { stage: "AUTOMATED_CHECKS", daysAgo: 249 },
+        { stage: "SECURITY_REVIEW",  daysAgo: 248, comments: "OK — scope justification looks solid." },
+        { stage: "LISTING_REVIEW",   daysAgo: 246 },
+        { stage: "APPROVED",         daysAgo: 245, comments: "Listed. Tier set to Preferred." },
+      ],
+      submittedDays: 250, approvedDays: 245,
+    },
+    {
+      slug: "seed-mockup-magic", name: "[seed] Mockup Magic",
+      tagline: "AI-rendered mockups from your job artwork.",
+      description: "## Mockup Magic\n\nAuto-generates customer-ready mockups (storefront, vehicle, banner) from any uploaded artwork. Built by an ex-Adobe team.",
+      iconUrl: "https://cdn.flowtora.com/marketplace/mockup-magic.svg",
+      categorySlug: "seed-design", status: "APPROVED", featured: true,
+      pricingModel: "USAGE", pricingDetails: { perRenderCents: 25, monthlyMinimumCents: 1500 },
+      developerName: "Mockup Magic Inc.", developerEmail: "hello@mockupmagic.io",
+      supportUrl: "https://mockupmagic.io/support", privacyUrl: "https://mockupmagic.io/privacy",
+      riskScore: 22, riskLevel: "LOW",
+      revenueShareTier: "PARTNER",
+      soc2AttestationUrl: "https://mockupmagic.io/soc2.pdf",
+      subProcessors: "AWS (us-east-1), Cloudflare Workers, OpenAI",
+      dataResidency: "US",
+      payoutMethod: "Wise · USD wire",
+      taxStatus: "1099 active",
+      installs: 47, ratingAvg: 4.8, ratingCount: 38, mrrCents: 89600,
+      permissions: [
+        { scope: "files:read",  risk: "LOW",    justification: "Read uploaded artwork for rendering." },
+        { scope: "jobs:read",   risk: "LOW",    justification: "Pull job context for the rendered mockup." },
+      ],
+      versions: [
+        { version: "2.0.0", releasedDays: 60, isCurrent: true, changelog: "v2 launch — supports vehicle mockups." },
+      ],
+      submissionStage: "APPROVED",
+      submissionTimeline: [
+        { stage: "SUBMITTED",        daysAgo: 80 },
+        { stage: "AUTOMATED_CHECKS", daysAgo: 79 },
+        { stage: "SECURITY_REVIEW",  daysAgo: 78 },
+        { stage: "LISTING_REVIEW",   daysAgo: 75 },
+        { stage: "APPROVED",         daysAgo: 73 },
+      ],
+      submittedDays: 80, approvedDays: 73,
+    },
+    {
+      slug: "seed-quicktax-sales", name: "[seed] QuickTax Sales",
+      tagline: "Auto-calc + file sales tax in 50 states.",
+      description: "## QuickTax Sales\n\nNexus-aware sales tax calculation + monthly filing for US shops.",
+      iconUrl: "https://cdn.flowtora.com/marketplace/quicktax.svg",
+      categorySlug: "seed-finance", status: "APPROVED",
+      pricingModel: "SUBSCRIPTION", pricingDetails: { monthlyPriceCents: 4900 },
+      developerName: "QuickTax LLC", developerEmail: "team@quicktax.com",
+      supportUrl: "https://quicktax.com/support", privacyUrl: "https://quicktax.com/privacy",
+      riskScore: 60, riskLevel: "HIGH",
+      riskReasons: ["Holds billing:write — can modify invoices in flight"],
+      revenueShareTier: "STANDARD",
+      soc2AttestationUrl: "https://quicktax.com/soc2.pdf",
+      subProcessors: "AWS (us-east-2), Avalara API, Stripe",
+      dataResidency: "US",
+      payoutMethod: "ACH",
+      taxStatus: "1099 active",
+      installs: 31, ratingAvg: 4.2, ratingCount: 22, mrrCents: 24500,
+      permissions: [
+        { scope: "billing:read",  risk: "MEDIUM", justification: "Read invoices to compute tax base." },
+        { scope: "billing:write", risk: "HIGH",   justification: "Apply tax line items to invoices." },
+        { scope: "tenants:read",  risk: "LOW",    justification: "Resolve tenant nexus state." },
+      ],
+      versions: [
+        { version: "3.4.0", releasedDays: 14, isCurrent: true, changelog: "Q1 nexus updates for AZ + CO." },
+      ],
+      submissionStage: "APPROVED",
+      submissionTimeline: [
+        { stage: "SUBMITTED",        daysAgo: 400 },
+        { stage: "APPROVED",         daysAgo: 380 },
+      ],
+      submittedDays: 400, approvedDays: 380,
+    },
+    {
+      slug: "seed-easyship-bridge", name: "[seed] EasyShip Bridge",
+      tagline: "Carrier discounts via EasyShip's network.",
+      description: "Cuts shipping costs ~40% by routing labels through EasyShip's bulk-rate carrier deals.",
+      iconUrl: "https://cdn.flowtora.com/marketplace/easyship.svg",
+      categorySlug: "seed-shipping", status: "APPROVED",
+      pricingModel: "FREE", pricingDetails: {},
+      developerName: "EasyShip Inc.", developerEmail: "partners@easyship.com",
+      supportUrl: "https://easyship.com/support",
+      riskScore: 18, riskLevel: "LOW",
+      revenueShareTier: "STANDARD",
+      installs: 22, ratingAvg: 4.4, ratingCount: 11, mrrCents: 0,
+      permissions: [
+        { scope: "shipments:read",  risk: "LOW", justification: "Read pending shipments to compute rates." },
+        { scope: "shipments:write", risk: "MEDIUM", justification: "Apply carrier + tracking number to shipments." },
+      ],
+      versions: [
+        { version: "1.0.0", releasedDays: 120, isCurrent: true, changelog: "Initial release." },
+      ],
+      submissionStage: "APPROVED",
+      submissionTimeline: [
+        { stage: "SUBMITTED",        daysAgo: 130 },
+        { stage: "APPROVED",         daysAgo: 122 },
+      ],
+      submittedDays: 130, approvedDays: 122,
+    },
+    {
+      slug: "seed-shopvision", name: "[seed] ShopVision",
+      tagline: "Real-time shop analytics + cohort studies.",
+      description: "Full-funnel analytics for sign + print shops. Tracks revenue per material, install time variance, and customer LTV.",
+      iconUrl: "https://cdn.flowtora.com/marketplace/shopvision.svg",
+      categorySlug: "seed-analytics", status: "APPROVED",
+      pricingModel: "SUBSCRIPTION", pricingDetails: { monthlyPriceCents: 9900 },
+      developerName: "ShopVision Analytics", developerEmail: "founders@shopvision.io",
+      supportUrl: "https://shopvision.io/help", privacyUrl: "https://shopvision.io/privacy",
+      riskScore: 25, riskLevel: "LOW",
+      revenueShareTier: "PREFERRED",
+      soc2AttestationUrl: "https://shopvision.io/soc2.pdf",
+      subProcessors: "GCP (us-central1), Snowflake, Hex",
+      dataResidency: "US",
+      payoutMethod: "Stripe Connect",
+      taxStatus: "1099 active",
+      installs: 14, ratingAvg: 4.9, ratingCount: 9, mrrCents: 56700,
+      permissions: [
+        { scope: "tenants:read",  risk: "LOW", justification: "Pull tenant metadata." },
+        { scope: "billing:read",  risk: "LOW", justification: "Aggregate revenue metrics." },
+        { scope: "jobs:read",     risk: "LOW", justification: "Build job-level analytics." },
+      ],
+      versions: [
+        { version: "1.5.0", releasedDays: 25, isCurrent: true, changelog: "Cohort retention chart." },
+      ],
+      submissionStage: "APPROVED",
+      submissionTimeline: [
+        { stage: "SUBMITTED",  daysAgo: 110 },
+        { stage: "APPROVED",   daysAgo: 100 },
+      ],
+      submittedDays: 110, approvedDays: 100,
+    },
+    {
+      slug: "seed-textback-pro", name: "[seed] Textback Pro",
+      tagline: "Automated SMS + voicemail drops to win back customers.",
+      description: "Scheduled SMS sequences for proof reminders, ready-for-pickup, and 30-day-after-install nudges. Built on Twilio.",
+      iconUrl: "https://cdn.flowtora.com/marketplace/textback.svg",
+      categorySlug: "seed-customer", status: "APPROVED",
+      pricingModel: "SUBSCRIPTION", pricingDetails: { monthlyPriceCents: 3900 },
+      developerName: "Textback Inc.", developerEmail: "hello@textback.app",
+      supportUrl: "https://textback.app/support", privacyUrl: "https://textback.app/privacy",
+      riskScore: 40, riskLevel: "MEDIUM",
+      riskReasons: ["Sends outbound SMS — abuse risk if mis-configured"],
+      revenueShareTier: "STANDARD",
+      installs: 26, ratingAvg: 4.1, ratingCount: 17, mrrCents: 18800,
+      permissions: [
+        { scope: "customers:read", risk: "LOW",    justification: "Read phone numbers." },
+        { scope: "messages:write", risk: "MEDIUM", justification: "Send SMS on tenant's behalf." },
+      ],
+      versions: [{ version: "1.4.2", releasedDays: 18, isCurrent: true, changelog: "Quiet-hours per timezone." }],
+      submissionStage: "APPROVED",
+      submissionTimeline: [
+        { stage: "SUBMITTED",  daysAgo: 200 },
+        { stage: "APPROVED",   daysAgo: 190 },
+      ],
+      submittedDays: 200, approvedDays: 190,
+    },
+    {
+      slug: "seed-calendarsync-plus", name: "[seed] CalendarSync Plus",
+      tagline: "Two-way Google Calendar sync for install crews.",
+      description: "Pushes scheduled installs to crew Google Calendars, pulls availability back.",
+      iconUrl: "https://cdn.flowtora.com/marketplace/calsync.svg",
+      categorySlug: "seed-productivity", status: "APPROVED",
+      pricingModel: "FREE", pricingDetails: {},
+      developerName: "CalendarSync Plus", developerEmail: "support@calsync.app",
+      supportUrl: "https://calsync.app/support",
+      riskScore: 12, riskLevel: "LOW",
+      revenueShareTier: "STANDARD",
+      installs: 12, ratingAvg: 4.3, ratingCount: 7, mrrCents: 0,
+      permissions: [
+        { scope: "calendar:read",  risk: "LOW", justification: "Read crew availability." },
+        { scope: "calendar:write", risk: "LOW", justification: "Create install events." },
+      ],
+      versions: [{ version: "1.0.0", releasedDays: 60, isCurrent: true, changelog: "Initial release." }],
+      submissionStage: "APPROVED",
+      submissionTimeline: [
+        { stage: "SUBMITTED", daysAgo: 70 },
+        { stage: "APPROVED",  daysAgo: 65 },
+      ],
+      submittedDays: 70, approvedDays: 65,
+    },
+    {
+      slug: "seed-payroll-bridge", name: "[seed] Payroll Bridge",
+      tagline: "Push job hours to Gusto / Rippling.",
+      description: "Sends time-tracked install hours to your payroll provider. Currently in security review.",
+      iconUrl: "https://cdn.flowtora.com/marketplace/payroll.svg",
+      categorySlug: "seed-hr", status: "IN_REVIEW",
+      pricingModel: "SUBSCRIPTION", pricingDetails: { monthlyPriceCents: 1900 },
+      developerName: "Payroll Bridge LLC", developerEmail: "ops@payrollbridge.dev",
+      supportUrl: "https://payrollbridge.dev/support", privacyUrl: "https://payrollbridge.dev/privacy",
+      riskScore: 55, riskLevel: "HIGH",
+      riskReasons: [
+        "Holds users:read at HIGH risk (PII)",
+        "Sends data to third-party payroll provider",
+      ],
+      revenueShareTier: "STANDARD",
+      installs: 0, ratingAvg: null, ratingCount: 0, mrrCents: 0,
+      permissions: [
+        { scope: "users:read",      risk: "HIGH",   justification: "Map Flowtora users to payroll employees." },
+        { scope: "jobs:read",       risk: "MEDIUM", justification: "Pull labor hours per job." },
+      ],
+      versions: [{ version: "0.9.0-beta.1", releasedDays: 5, isCurrent: true, changelog: "Initial submission." }],
+      submissionStage: "SECURITY_REVIEW",
+      submissionTimeline: [
+        { stage: "SUBMITTED",        daysAgo: 7 },
+        { stage: "AUTOMATED_CHECKS", daysAgo: 6 },
+        { stage: "SECURITY_REVIEW",  daysAgo: 4, comments: "Awaiting SOC 2 type II from developer." },
+      ],
+      submittedDays: 7,
+    },
+    {
+      slug: "seed-pantone-pro", name: "[seed] Pantone Pro",
+      tagline: "Pantone library lookup + PDF auto-tagging.",
+      description: "Match Pantone codes from uploaded artwork; tags PDF metadata so RIPs use correct ink mixes.",
+      iconUrl: "https://cdn.flowtora.com/marketplace/pantone.svg",
+      categorySlug: "seed-design", status: "DRAFT",
+      pricingModel: "ONE_TIME", pricingDetails: { oneTimePriceCents: 19900 },
+      developerName: "ColorOps Studio", developerEmail: "team@colorops.io",
+      privacyUrl: "https://colorops.io/privacy",
+      riskScore: 15, riskLevel: "LOW",
+      revenueShareTier: "STANDARD",
+      installs: 0, ratingAvg: null, ratingCount: 0, mrrCents: 0,
+      permissions: [
+        { scope: "files:read", risk: "LOW", justification: "Read uploaded artwork to detect colors." },
+      ],
+      versions: [{ version: "0.5.0-draft", releasedDays: 1, isCurrent: true, changelog: "First draft." }],
+      submissionStage: "SUBMITTED",
+      submissionTimeline: [
+        { stage: "SUBMITTED", daysAgo: 1 },
+      ],
+      submittedDays: 1,
+    },
+    {
+      slug: "seed-gauge-bridge", name: "[seed] Gauge Bridge",
+      tagline: "Connect HP / Roland press telemetry to job records.",
+      description: "Streams ink + media usage telemetry from HP/Roland presses into per-job records.",
+      iconUrl: "https://cdn.flowtora.com/marketplace/gauge.svg",
+      categorySlug: "seed-equipment", status: "APPROVED",
+      pricingModel: "SUBSCRIPTION", pricingDetails: { monthlyPriceCents: 14900 },
+      developerName: "Gauge Bridge GmbH", developerEmail: "support@gaugebridge.de",
+      supportUrl: "https://gaugebridge.de/support", privacyUrl: "https://gaugebridge.de/privacy",
+      riskScore: 30, riskLevel: "MEDIUM",
+      revenueShareTier: "PREFERRED",
+      soc2AttestationUrl: "https://gaugebridge.de/soc2.pdf",
+      subProcessors: "Hetzner (DE), AWS (eu-west-1)",
+      dataResidency: "EU",
+      payoutMethod: "SEPA",
+      taxStatus: "EU VAT registered",
+      installs: 8, ratingAvg: 4.7, ratingCount: 5, mrrCents: 11900,
+      permissions: [
+        { scope: "jobs:write",      risk: "MEDIUM", justification: "Append press telemetry to job records." },
+        { scope: "materials:read",  risk: "LOW",    justification: "Resolve material code → SKU." },
+      ],
+      versions: [{ version: "2.1.0", releasedDays: 9, isCurrent: true, changelog: "Roland VG3 support." }],
+      submissionStage: "APPROVED",
+      submissionTimeline: [
+        { stage: "SUBMITTED", daysAgo: 60 },
+        { stage: "APPROVED",  daysAgo: 50 },
+      ],
+      submittedDays: 60, approvedDays: 50,
+    },
+    {
+      slug: "seed-rogue-app", name: "[seed] RogueApp",
+      tagline: "(Suspended) High-risk integration removed for review.",
+      description: "App was suspended after a security incident — see audit log.",
+      iconUrl: "https://cdn.flowtora.com/marketplace/rogue.svg",
+      categorySlug: "seed-productivity", status: "SUSPENDED",
+      pricingModel: "FREE", pricingDetails: {},
+      developerName: "Unverified Developer", developerEmail: "anon@example.com",
+      riskScore: 88, riskLevel: "CRITICAL",
+      riskReasons: [
+        "Excessive scope requests (system:admin)",
+        "Failed automated CSP scan twice",
+        "Multiple HIGH-risk permission grants",
+      ],
+      revenueShareTier: "STANDARD",
+      installs: 0, ratingAvg: 2.1, ratingCount: 4, mrrCents: 0,
+      permissions: [
+        { scope: "system:admin", risk: "CRITICAL", justification: "Failed justification audit." },
+        { scope: "users:write",  risk: "HIGH",     justification: "Bulk modify users." },
+      ],
+      versions: [{ version: "1.0.0", releasedDays: 200, isCurrent: true, changelog: "Initial release." }],
+      submissionStage: "APPROVED",
+      submissionTimeline: [
+        { stage: "SUBMITTED", daysAgo: 220 },
+        { stage: "APPROVED",  daysAgo: 210 },
+      ],
+      submittedDays: 220, approvedDays: 210,
+      suspendedReason: "Failed scope-justification audit; pending dev response.",
+    },
+    {
+      slug: "seed-rejected-app", name: "[seed] RejectedTry",
+      tagline: "(Rejected) Did not pass security review.",
+      description: "App rejected — listed for audit purposes.",
+      iconUrl: "https://cdn.flowtora.com/marketplace/rejected.svg",
+      categorySlug: "seed-productivity", status: "REJECTED",
+      pricingModel: "FREE", pricingDetails: {},
+      developerName: "Try Hard Co.", developerEmail: "founder@tryhard.example",
+      riskScore: 72, riskLevel: "HIGH",
+      riskReasons: ["No SOC 2 attestation", "Could not demonstrate sandboxing"],
+      revenueShareTier: "STANDARD",
+      installs: 0, ratingAvg: null, ratingCount: 0, mrrCents: 0,
+      permissions: [
+        { scope: "tenants:write", risk: "HIGH", justification: "Bulk update across tenants." },
+      ],
+      versions: [{ version: "0.1.0", releasedDays: 90, isCurrent: true, changelog: "Initial submission." }],
+      submissionStage: "REJECTED",
+      submissionTimeline: [
+        { stage: "SUBMITTED",        daysAgo: 95 },
+        { stage: "AUTOMATED_CHECKS", daysAgo: 93 },
+        { stage: "SECURITY_REVIEW",  daysAgo: 91, comments: "Sandboxing missing." },
+        { stage: "REJECTED",         daysAgo: 88, comments: "Failed security review." },
+      ],
+      submittedDays: 95,
+    },
+  ];
+
+  let appCount = 0;
+  let permCount = 0;
+  let versionCount = 0;
+  let installCount = 0;
+  let reviewCount = 0;
+  let submissionCount = 0;
+  let payoutCount = 0;
+  let auditCount = 0;
+
+  const reviewBlueprints = [
+    "Saved us hours every week — easy to install.",
+    "Works exactly as advertised. Took 5min to set up.",
+    "Solid integration. Wish there was a higher-tier plan.",
+    "Crashed once during a sync but support fixed it fast.",
+    "Field mappings are confusing. Documentation needs work.",
+    "Best app on the marketplace, hands down.",
+    "Pricing is steep but worth it for our volume.",
+    "Caused duplicate invoices for two days; uninstalled.",
+    "Nice idea but missing key features for our shop.",
+    "Five stars. Would buy again.",
+  ];
+  const reviewerNames = ["Alex T.", "Brenda M.", "Chen W.", "Dana K.", "Eva R.", "Frank L.", "Gita N.", "Hassan O.", "Ivy P.", "Jules Q."];
+
+  for (const b of appBlueprints) {
+    const created = await db.marketplaceApp.create({
+      data: {
+        slug: b.slug,
+        name: b.name,
+        tagline: b.tagline,
+        description: b.description,
+        iconUrl: b.iconUrl,
+        screenshots: [
+          `${b.iconUrl.replace(".svg", "-shot-1.png")}`,
+          `${b.iconUrl.replace(".svg", "-shot-2.png")}`,
+        ],
+        categoryId: catMap.get(b.categorySlug)!,
+        status: b.status,
+        featured: b.featured ?? false,
+        developerName: b.developerName,
+        developerEmail: b.developerEmail,
+        repoUrl: b.repoUrl ?? null,
+        supportUrl: b.supportUrl ?? null,
+        privacyUrl: b.privacyUrl ?? null,
+        termsUrl: b.termsUrl ?? null,
+        pricingModel: b.pricingModel,
+        pricingDetails: b.pricingDetails as never,
+        manifestJson: {
+          name: b.name,
+          version: b.versions.find((v) => v.isCurrent)?.version ?? b.versions[0]!.version,
+          permissions: b.permissions.map((p) => p.scope),
+          entry: "/api/main",
+        } as never,
+        securityChecklist: {
+          csp: b.status !== "REJECTED" && b.status !== "SUSPENDED",
+          sandboxed: b.status !== "REJECTED",
+          scopesReviewed: b.status === "APPROVED" || b.status === "SUSPENDED",
+          ratLimited: b.status === "APPROVED",
+        } as never,
+        riskScore: b.riskScore,
+        riskLevel: b.riskLevel,
+        riskReasons: b.riskReasons ?? [],
+        soc2AttestationUrl: b.soc2AttestationUrl ?? null,
+        subProcessors: b.subProcessors ?? null,
+        dataResidency: b.dataResidency ?? null,
+        revenueShareTier: b.revenueShareTier,
+        payoutMethod: b.payoutMethod ?? null,
+        taxStatus: b.taxStatus ?? null,
+        installCount: b.installs,
+        ratingAverage: b.ratingAvg,
+        ratingCount: b.ratingCount,
+        mrrContributionCents: b.mrrCents,
+        currentVersion: b.versions.find((v) => v.isCurrent)?.version ?? b.versions[0]!.version,
+        submittedAt: b.submittedDays != null ? daysAgo(b.submittedDays) : null,
+        approvedAt: b.approvedDays != null ? daysAgo(b.approvedDays) : null,
+        approvedById: b.approvedDays != null ? reviewer.id : null,
+        publishedAt: b.status === "APPROVED" || b.status === "SUSPENDED" ? daysAgo(b.approvedDays ?? 30) : null,
+        suspendedAt: b.status === "SUSPENDED" ? daysAgo(15) : null,
+        suspendedById: b.status === "SUSPENDED" ? reviewer.id : null,
+        suspendedReason: b.suspendedReason ?? null,
+      },
+      select: { id: true },
+    });
+    appCount++;
+
+    // Permissions
+    for (const p of b.permissions) {
+      await db.marketplaceAppPermission.create({
+        data: {
+          appId: created.id,
+          scope: p.scope,
+          riskLevel: p.risk,
+          justification: p.justification,
+        },
+      });
+      permCount++;
+    }
+
+    // Versions
+    for (const v of b.versions) {
+      await db.marketplaceAppVersion.create({
+        data: {
+          appId: created.id,
+          version: v.version,
+          changelog: v.changelog,
+          isCurrent: v.isCurrent ?? false,
+          releasedAt: daysAgo(v.releasedDays),
+          installCount: v.isCurrent ? b.installs : 0,
+        },
+      });
+      versionCount++;
+    }
+
+    // Submissions
+    for (const s of b.submissionTimeline) {
+      const isLast = s === b.submissionTimeline[b.submissionTimeline.length - 1]!;
+      await db.marketplaceSubmission.create({
+        data: {
+          appId: created.id,
+          stage: s.stage,
+          assigneeId: reviewer.id,
+          comments: s.comments ?? null,
+          checklist: [
+            { label: "Manifest validates", checked: true },
+            { label: "Scopes justified",   checked: s.stage !== "SUBMITTED" && s.stage !== "AUTOMATED_CHECKS" },
+            { label: "SOC 2 reviewed",     checked: s.stage === "APPROVED" },
+            { label: "Listing copy okay",  checked: s.stage === "APPROVED" || s.stage === "LISTING_REVIEW" },
+          ] as never,
+          enteredAt: daysAgo(s.daysAgo),
+          exitedAt: isLast && (s.stage !== "APPROVED" && s.stage !== "REJECTED") ? null : daysAgo(s.daysAgo - 1),
+          slaDeadlineAt: !isLast ? null
+            : (s.stage === "APPROVED" || s.stage === "REJECTED" ? null : new Date(Date.now() + (s.stage === "SECURITY_REVIEW" ? 168 : 72) * 60 * 60 * 1000)),
+        },
+      });
+      submissionCount++;
+    }
+
+    // Installations + per-tenant trial — pick a slice of tenants up to b.installs.
+    const pool = [...tenants].sort(() => Math.random() - 0.5);
+    const targetCount = Math.min(b.installs, pool.length);
+    const targets = pool.slice(0, targetCount);
+    for (const t of targets) {
+      const installAge = randInt(1, b.submittedDays ?? 30);
+      const uninstall = Math.random() < 0.1; // 10% uninstall rate for adoption realism
+      await db.marketplaceInstallation.create({
+        data: {
+          appId: created.id,
+          tenantId: t.id,
+          versionInstalled: b.versions.find((v) => v.isCurrent)?.version ?? "1.0.0",
+          installedAt: daysAgo(installAge),
+          lastUsedAt: uninstall ? daysAgo(randInt(installAge - 5, installAge)) : daysAgo(randInt(0, 5)),
+          uninstalledAt: uninstall ? daysAgo(randInt(0, installAge)) : null,
+        },
+      });
+      installCount++;
+    }
+
+    // Reviews — number based on ratingCount (capped to make it fast).
+    const reviewSamples = Math.min(b.ratingCount, 8);
+    for (let i = 0; i < reviewSamples; i++) {
+      const rating = b.ratingAvg == null ? 3 : Math.max(1, Math.min(5, Math.round(b.ratingAvg + (Math.random() - 0.5))));
+      await db.marketplaceReview.create({
+        data: {
+          appId: created.id,
+          tenantId: targets[i % Math.max(1, targets.length)]?.id ?? null,
+          authorName: reviewerNames[i % reviewerNames.length]!,
+          rating,
+          title: i === 0 ? "Worth every penny" : null,
+          body: reviewBlueprints[i % reviewBlueprints.length]!,
+          status: i === 1 && b.status === "SUSPENDED" ? "FLAGGED" : "PUBLISHED",
+          flaggedReason: i === 1 && b.status === "SUSPENDED" ? "Reviewed by moderation team" : null,
+          reply: i === 0 ? "Thanks for the kind words!" : null,
+          createdAt: daysAgo(randInt(0, 60)),
+        },
+      });
+      reviewCount++;
+    }
+
+    // Payouts — generate ~3 monthly periods for paid apps.
+    if (b.mrrCents > 0) {
+      const now = new Date();
+      for (let m = 0; m < 4; m++) {
+        const period = `${now.getFullYear()}-${String(now.getMonth() + 1 - m).padStart(2, "0")}`;
+        const variance = 0.85 + Math.random() * 0.3;
+        const gross = Math.round(b.mrrCents * variance);
+        const developerPct = b.revenueShareTier === "PARTNER" ? 0.85 : b.revenueShareTier === "PREFERRED" ? 0.80 : 0.70;
+        const developerCut = Math.round(gross * developerPct);
+        const flowtoraCut = gross - developerCut;
+        await db.marketplacePayoutStatement.create({
+          data: {
+            appId: created.id,
+            period,
+            installs: Math.max(1, Math.round(b.installs * variance)),
+            grossCents: gross,
+            flowtoraCutCents: flowtoraCut,
+            developerCutCents: developerCut,
+            paid: m > 0,
+            paidAt: m > 0 ? daysAgo(m * 30) : null,
+          },
+        }).catch(() => {});
+        payoutCount++;
+      }
+    }
+
+    // Audit log entries
+    await db.marketplaceAppAudit.create({
+      data: { appId: created.id, action: "submitted", detail: "Initial submission.", authorId: reviewer.id, occurredAt: daysAgo(b.submittedDays ?? 30) },
+    });
+    auditCount++;
+    if (b.status === "APPROVED") {
+      await db.marketplaceAppAudit.create({
+        data: { appId: created.id, action: "approved", detail: `Approved into ${b.revenueShareTier} tier.`, authorId: reviewer.id, occurredAt: daysAgo(b.approvedDays ?? 25) },
+      });
+      auditCount++;
+    }
+    if (b.status === "SUSPENDED") {
+      await db.marketplaceAppAudit.create({
+        data: { appId: created.id, action: "suspended", detail: b.suspendedReason ?? "Suspended.", authorId: reviewer.id, occurredAt: daysAgo(15) },
+      });
+      auditCount++;
+    }
+    if (b.status === "REJECTED") {
+      await db.marketplaceAppAudit.create({
+        data: { appId: created.id, action: "rejected", detail: "Failed security review.", authorId: reviewer.id, occurredAt: daysAgo(88) },
+      });
+      auditCount++;
+    }
+  }
+
+  console.log(
+    `  ✓ ${catBlueprints.length} categories, ${appCount} apps, ${permCount} permissions, ${versionCount} versions, ${installCount} installs, ${reviewCount} reviews, ${submissionCount} submissions, ${payoutCount} payouts, ${auditCount} audit entries`,
   );
 }
 
