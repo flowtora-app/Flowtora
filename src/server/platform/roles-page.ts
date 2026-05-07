@@ -88,6 +88,9 @@ export const PERMISSION_DESCRIPTIONS: Record<PlatformPermission, string> = {
   "integrations.manage":   "Edit catalog entries, manage versions, deprecate integrations, and force-disconnect tenants.",
   "webhooks.read":         "View API keys, webhook endpoints, event catalog, and delivery logs.",
   "webhooks.manage":       "Create/rotate/revoke API keys, configure webhook endpoints, replay deliveries, and edit webhook settings.",
+  "docs.read":             "View the developer documentation tree, page contents, and OpenAPI references.",
+  "docs.write":            "Edit doc page drafts, comment on pages, and upload OpenAPI specs.",
+  "docs.publish":          "Publish doc pages, schedule publishes, roll back versions, and auto-publish OpenAPI specs.",
   // Analytics
   "analytics.read":        "Read analytics dashboards.",
   "analytics.export":      "Export analytics datasets.",

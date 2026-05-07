@@ -6439,6 +6439,190 @@ model WebhookDelivery {
   @@index([eventName, attemptedAt])
 }
 
+// ────────────────────────────────────────────────────────────
+// Page 47 — Developer Documentation.
+//
+// Authoring + publishing pipeline for the public Flowtora developer
+// docs and OpenAPI reference. Three-pane editor:
+//   - Sidebar tree of DocPage rows (folders + pages, by section)
+//   - Center MDX editor (body with frontmatter)
+//   - Right rail metadata
+//
+// Publishing model: DocPage holds the live body + bodyDraft.
+// Saving draft writes to bodyDraft; publishing copies bodyDraft into
+// body and stamps a DocPageVersion snapshot. Roll-back swaps in a
+// chosen historical version.
+//
+// OpenAPI specs are stored as raw YAML/JSON with a validation log.
+// Code samples are per-(endpoint, language) pairs that lint against
+// the sandbox API on save.
+// ────────────────────────────────────────────────────────────
+
+enum DocPageStatus {
+  DRAFT
+  REVIEW
+  PUBLISHED
+  ARCHIVED
+}
+
+enum DocSectionKey {
+  GETTING_STARTED
+  AUTHENTICATION
+  CONCEPTS
+  RESOURCES
+  WEBHOOKS
+  SDKS
+  RECIPES
+  MIGRATION_GUIDES
+  CHANGELOG
+  ERRORS_REFERENCE
+  RATE_LIMITS
+  GLOSSARY
+}
+
+model DocPage {
+  id   String @id @default(cuid())
+  /** URL slug, unique per section. The full public path is
+   *  derived from section + parent ancestors + slug. */
+  slug String @unique
+  title String
+
+  section  DocSectionKey
+  parentId String?
+  /** Sort order within parent. */
+  position Int           @default(0)
+
+  status   DocPageStatus @default(DRAFT)
+  /** Tree-style folder node — has children but no body. */
+  isFolder Boolean       @default(false)
+  /** External link node — title + URL only. */
+  externalUrl String?
+  /** Mark as deprecated (still shown but with a banner). */
+  deprecated Boolean     @default(false)
+
+  /** Currently-published MDX body. Empty string until first publish. */
+  body String @default("")
+  /** Working draft — what the editor opens. Diffs against body for
+   *  the "Diff vs Live" action. */
+  bodyDraft String?
+
+  /** Frontmatter JSON (custom keys per section: code samples, etc). */
+  frontmatter Json @default("{}")
+
+  // Right-rail metadata
+  /** Owner team string ("Engineering", "DevRel", etc). */
+  ownerTeam     String?
+  /** Reviewer user ids — pings them when status flips to REVIEW. */
+  reviewers     String[] @default([])
+  /** Auto-incremented version counter. Snapshotted to DocPageVersion. */
+  version       Int @default(1)
+  publishedVersion Int?
+  scheduledPublishAt DateTime?
+
+  // SEO
+  seoTitle       String?
+  seoDescription String?
+  canonical      String?
+  tags           String[] @default([])
+  relatedSlugs   String[] @default([])
+
+  authorId       String?
+  lastEditedById String?
+  publishedAt    DateTime?
+  publishedById  String?
+
+  createdAt DateTime @default(now())
+  updatedAt DateTime @updatedAt
+
+  versions DocPageVersion[]
+  comments DocPageComment[]
+
+  @@index([section, parentId, position])
+  @@index([status, updatedAt])
+  @@index([scheduledPublishAt])
+}
+
+model DocPageVersion {
+  id            String @id @default(cuid())
+  pageId        String
+  versionNumber Int
+  /** Snapshot of `body` at the time this version was created. */
+  body          String
+  frontmatter   Json @default("{}")
+  status        DocPageStatus
+  authorId      String?
+  changeNote    String?
+  /** Stamped when this version was the published one. Null = draft snapshot. */
+  publishedAt   DateTime?
+
+  createdAt DateTime @default(now())
+
+  page DocPage @relation(fields: [pageId], references: [id], onDelete: Cascade)
+
+  @@unique([pageId, versionNumber])
+  @@index([pageId, createdAt])
+}
+
+model DocPageComment {
+  id     String @id @default(cuid())
+  pageId String
+
+  authorId   String?
+  body       String
+  /** Resolved comments are kept around for audit, hidden in the inbox. */
+  resolvedAt DateTime?
+  resolvedById String?
+
+  createdAt DateTime @default(now())
+
+  page DocPage @relation(fields: [pageId], references: [id], onDelete: Cascade)
+
+  @@index([pageId, createdAt])
+  @@index([resolvedAt])
+}
+
+model OpenApiSpec {
+  id      String @id @default(cuid())
+  version String
+  /** Raw YAML or JSON body. */
+  body    String
+  /** Whether the body is JSON or YAML for the renderer. */
+  format  String @default("yaml")
+
+  validatedAt      DateTime?
+  validationErrors String[] @default([])
+
+  autoPublish Boolean @default(false)
+  publishedAt DateTime?
+
+  uploadedById String?
+  createdAt    DateTime @default(now())
+  updatedAt    DateTime @updatedAt
+
+  @@unique([version])
+  @@index([publishedAt])
+}
+
+model CodeSample {
+  id String @id @default(cuid())
+  /** Endpoint key like "GET /api/v1/tenants" — joins to OpenApiSpec
+   *  paths. */
+  endpointKey String
+  language    String
+  body        String
+
+  lintedAt    DateTime?
+  /** "ok" / "warnings" / "errors" — string for forwards-compat. */
+  lintStatus  String?
+  lintMessage String?
+
+  createdAt DateTime @default(now())
+  updatedAt DateTime @updatedAt
+
+  @@unique([endpointKey, language])
+  @@index([language, lintStatus])
+}
+
 model WebhookSettings {
   id String @id @default("default")
 

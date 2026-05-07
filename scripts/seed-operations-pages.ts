@@ -69,6 +69,7 @@ async function main() {
   await seedLeadInbox(platformUsers, tenants);        // Page 44
   await seedIntegrationCatalog(tenants);              // Page 45
   await seedApiAndWebhooks(platformUsers, tenants);   // Page 46
+  await seedDeveloperDocs(platformUsers);             // Page 47
 
   console.log("\n✓ Seed complete.\n");
   await db.$disconnect();
@@ -242,6 +243,17 @@ async function wipeOldSeed() {
     console.log(`  deleted ${seedEndpoints.length} seed webhook endpoints (cascades deliveries)`);
   }
   await db.webhookEvent.deleteMany({ where: { description: { startsWith: "[seed] " } } });
+  // Page 47 — doc pages tagged with [seed] in title; cascades versions + comments.
+  const seedDocPages = await db.docPage.findMany({
+    where: { title: { startsWith: "[seed] " } },
+    select: { id: true },
+  });
+  if (seedDocPages.length) {
+    await db.docPage.deleteMany({ where: { id: { in: seedDocPages.map((p) => p.id) } } });
+    console.log(`  deleted ${seedDocPages.length} seed doc pages (cascades versions + comments)`);
+  }
+  await db.openApiSpec.deleteMany({ where: { version: { startsWith: "[seed]-" } } });
+  await db.codeSample.deleteMany({ where: { endpointKey: { startsWith: "[seed] " } } });
   // Customers tagged seed (after orders are gone).
   await db.customer.deleteMany({ where: { tags: { has: "seed" } } });
   // Products tagged seed (use description marker since Product has no tags array).
@@ -5401,6 +5413,719 @@ async function seedApiAndWebhooks(
 
   console.log(
     `  ✓ ${eventCount} events, ${keyCount} API keys, ${usageCount.toLocaleString()} usage events, ${endpointCount} endpoints, ${deliveryCount.toLocaleString()} deliveries`,
+  );
+}
+
+/* ── Page 47 — Developer Documentation ─────────────── */
+
+async function seedDeveloperDocs(staff: { id: string }[]) {
+  console.log("── Seeding developer docs (Page 47)…");
+  const author = staff[0];
+  if (!author) {
+    console.log("  skipped — no platform staff found");
+    return;
+  }
+
+  type DocBlueprint = {
+    slug: string;
+    title: string;
+    section:
+      | "GETTING_STARTED" | "AUTHENTICATION" | "CONCEPTS" | "RESOURCES" | "WEBHOOKS"
+      | "SDKS" | "RECIPES" | "MIGRATION_GUIDES" | "CHANGELOG" | "ERRORS_REFERENCE"
+      | "RATE_LIMITS" | "GLOSSARY";
+    parentSlug?: string;
+    isFolder?: boolean;
+    externalUrl?: string;
+    deprecated?: boolean;
+    status: "DRAFT" | "REVIEW" | "PUBLISHED" | "ARCHIVED";
+    body: string;
+    ownerTeam?: string;
+    tags?: string[];
+    seoTitle?: string;
+    seoDescription?: string;
+  };
+
+  const docs: DocBlueprint[] = [
+    // GETTING_STARTED
+    { slug: "introduction", title: "[seed] Introduction", section: "GETTING_STARTED", status: "PUBLISHED",
+      ownerTeam: "DevRel", tags: ["onboarding"],
+      seoTitle: "Flowtora API — Introduction",
+      seoDescription: "Get started with the Flowtora REST API in 5 minutes.",
+      body: `# Introduction
+
+Flowtora is the all-in-one shop OS for sign and print businesses. The API
+exposes everything you can do in the dashboard — read tenant + customer +
+job data, push invoices, dispatch jobs, subscribe to webhooks.
+
+## Base URL
+
+\`\`\`
+https://api.flowtora.com
+\`\`\`
+
+## Authentication
+
+All requests require a bearer token. See [Authentication](/docs/authentication).
+
+<Callout>
+Sandbox environment lives at \`https://sandbox.api.flowtora.com\` — use
+sandbox-prefixed keys (\`ft_sand_…\`) for development.
+</Callout>
+
+## Quickstart
+
+\`\`\`bash
+curl https://api.flowtora.com/v1/tenants \\
+  -H "Authorization: Bearer <API_KEY>"
+\`\`\`
+` },
+    { slug: "quickstart", title: "[seed] 5-minute Quickstart", section: "GETTING_STARTED", status: "PUBLISHED",
+      ownerTeam: "DevRel",
+      body: `# 5-minute Quickstart
+
+1. Mint an API key from the platform admin.
+2. Make your first call.
+3. Subscribe to a webhook.
+
+\`\`\`bash
+curl -X POST https://api.flowtora.com/v1/jobs \\
+  -H "Authorization: Bearer <API_KEY>" \\
+  -H "Content-Type: application/json" \\
+  -d '{ "customerId": "cust_abc", "items": [{ "sku": "SIGN-12x18", "qty": 2 }] }'
+\`\`\`
+` },
+    { slug: "environments", title: "[seed] Environments (Production / Staging / Sandbox)", section: "GETTING_STARTED", status: "DRAFT",
+      ownerTeam: "DevRel", tags: ["environments"],
+      body: `# Environments
+
+| Environment | Base URL | Key prefix |
+|---|---|---|
+| Production  | \`https://api.flowtora.com\`         | \`ft_live_\` |
+| Staging     | \`https://staging.api.flowtora.com\` | \`ft_stg_\`  |
+| Sandbox     | \`https://sandbox.api.flowtora.com\` | \`ft_sand_\` |
+` },
+
+    // AUTHENTICATION
+    { slug: "auth-overview", title: "[seed] Authentication", section: "AUTHENTICATION", status: "PUBLISHED",
+      ownerTeam: "Engineering", tags: ["auth"],
+      body: `# Authentication
+
+Flowtora uses bearer tokens. Mint keys from **Platform → API Keys & Webhooks**.
+
+## Headers
+
+\`\`\`
+Authorization: Bearer <API_KEY>
+\`\`\`
+
+<Callout>
+Never commit keys to source control. Rotate keys every 90 days.
+</Callout>
+` },
+    { slug: "auth-scopes", title: "[seed] Scopes", section: "AUTHENTICATION", parentSlug: "auth-overview",
+      status: "PUBLISHED", ownerTeam: "Engineering",
+      body: `# Scopes
+
+API keys carry a scope list. Each scope follows a \`resource:action\` shape:
+
+- \`tenants:read\` — read tenant rows
+- \`tenants:write\` — create/update tenants
+- \`billing:read\` / \`billing:write\` — invoicing + payments
+- \`audit:read\` — read the audit log
+
+Best practice: mint per-service keys with the smallest scope that gets
+the job done.
+` },
+    { slug: "auth-ip-allowlist", title: "[seed] IP Allowlists", section: "AUTHENTICATION", parentSlug: "auth-overview",
+      status: "PUBLISHED", ownerTeam: "Security",
+      body: `# IP Allowlists
+
+Restrict a key to specific CIDR ranges. Useful for keys held by
+internal services with known egress IPs.
+
+\`\`\`
+ALLOW 10.0.0.0/8
+ALLOW 203.0.113.0/24
+\`\`\`
+` },
+
+    // CONCEPTS
+    { slug: "concepts-tenants", title: "[seed] Tenants", section: "CONCEPTS", status: "PUBLISHED",
+      ownerTeam: "Engineering", tags: ["data-model"],
+      body: `# Tenants
+
+A **tenant** is a workspace. Most resources are tenant-scoped.
+Some resources (notifications, webhooks) live at the platform layer.
+` },
+    { slug: "concepts-jobs", title: "[seed] Jobs", section: "CONCEPTS", status: "PUBLISHED",
+      ownerTeam: "Engineering",
+      body: `# Jobs
+
+A job is a unit of work flowing through the production pipeline:
+quote → order → production → install → close. Each transition emits
+a \`job.status_changed\` webhook.
+` },
+    { slug: "concepts-webhooks", title: "[seed] Webhooks (concept)", section: "CONCEPTS", status: "PUBLISHED",
+      body: `# Webhooks
+
+Subscribe to events to react to changes in real time. See
+[Webhooks](/docs/webhooks) for the full catalog.
+` },
+
+    // RESOURCES
+    { slug: "resources-folder", title: "[seed] Resources", section: "RESOURCES", isFolder: true, status: "PUBLISHED", body: "" },
+    { slug: "resource-tenants", title: "[seed] Tenants Resource", section: "RESOURCES", parentSlug: "resources-folder",
+      status: "PUBLISHED", ownerTeam: "Engineering", tags: ["resource"],
+      body: `# Tenants
+
+<Endpoint method="GET" path="/v1/tenants" />
+
+Returns the list of tenants the API key has access to.
+
+<Param name="page" type="integer" required={false}>1-indexed page number.</Param>
+<Param name="pageSize" type="integer" required={false}>Default 50, max 200.</Param>
+
+<Response status={200}>Returns a paginated list of tenants.</Response>
+` },
+    { slug: "resource-jobs", title: "[seed] Jobs Resource", section: "RESOURCES", parentSlug: "resources-folder",
+      status: "PUBLISHED", ownerTeam: "Engineering", tags: ["resource"],
+      body: `# Jobs
+
+<Endpoint method="POST" path="/v1/jobs" />
+
+Creates a new job in the tenant's workspace.
+
+\`\`\`json
+{
+  "customerId": "cust_abc",
+  "items": [{ "sku": "SIGN-12x18", "qty": 2 }],
+  "notes": "Rush order — install Friday"
+}
+\`\`\`
+` },
+    { slug: "resource-invoices", title: "[seed] Invoices Resource", section: "RESOURCES", parentSlug: "resources-folder",
+      status: "REVIEW", ownerTeam: "Engineering",
+      body: `# Invoices
+
+> 🚧 In review — final field shape pending design sync.
+
+<Endpoint method="GET" path="/v1/invoices/{id}" />
+` },
+    { slug: "resource-customers", title: "[seed] Customers Resource", section: "RESOURCES", parentSlug: "resources-folder",
+      status: "PUBLISHED", ownerTeam: "Engineering",
+      body: `# Customers
+
+<Endpoint method="GET" path="/v1/customers" />
+<Endpoint method="POST" path="/v1/customers" />
+<Endpoint method="GET" path="/v1/customers/{id}" />
+<Endpoint method="PATCH" path="/v1/customers/{id}" />
+` },
+
+    // WEBHOOKS
+    { slug: "webhooks-overview", title: "[seed] Webhooks Overview", section: "WEBHOOKS", status: "PUBLISHED",
+      ownerTeam: "Engineering", tags: ["webhooks"],
+      body: `# Webhooks
+
+Webhooks notify your service of changes. Each delivery is signed with
+HMAC-SHA256 using your endpoint's signing secret.
+
+## Verifying signatures
+
+Compute \`HMAC-SHA256(secret, body)\` and compare against the
+\`X-Flowtora-Signature\` header.
+
+\`\`\`node
+import crypto from "node:crypto";
+const expected = crypto.createHmac("sha256", secret).update(body).digest("hex");
+const got = headers["x-flowtora-signature"].replace("v1=", "");
+if (!crypto.timingSafeEqual(Buffer.from(expected), Buffer.from(got))) {
+  return res.status(401).end();
+}
+\`\`\`
+` },
+    { slug: "webhooks-retry-policy", title: "[seed] Retry Policy", section: "WEBHOOKS", parentSlug: "webhooks-overview",
+      status: "PUBLISHED",
+      body: `# Retry Policy
+
+We retry up to 5 times with exponential back-off (15s · 1m · 5m · 15m · 1h).
+Endpoints that fail 50 consecutive deliveries auto-disable.
+` },
+
+    // SDKS
+    { slug: "sdks-folder", title: "[seed] SDKs", section: "SDKS", isFolder: true, status: "PUBLISHED", body: "" },
+    { slug: "sdks-node", title: "[seed] Node.js SDK", section: "SDKS", parentSlug: "sdks-folder",
+      status: "PUBLISHED", ownerTeam: "DevRel",
+      body: `# @flowtora/sdk (Node.js)
+
+\`\`\`bash
+npm install @flowtora/sdk
+\`\`\`
+
+\`\`\`node
+import { Flowtora } from "@flowtora/sdk";
+const ft = new Flowtora({ apiKey: process.env.FLOWTORA_API_KEY });
+const tenants = await ft.tenants.list();
+\`\`\`
+` },
+    { slug: "sdks-python", title: "[seed] Python SDK", section: "SDKS", parentSlug: "sdks-folder",
+      status: "REVIEW", ownerTeam: "DevRel",
+      body: `# flowtora (Python)
+
+\`\`\`bash
+pip install flowtora
+\`\`\`
+
+\`\`\`python
+from flowtora import Flowtora
+ft = Flowtora(api_key=os.environ["FLOWTORA_API_KEY"])
+print(ft.tenants.list())
+\`\`\`
+` },
+    { slug: "sdks-github", title: "[seed] All SDKs (GitHub)", section: "SDKS", parentSlug: "sdks-folder",
+      externalUrl: "https://github.com/flowtora-app/sdks",
+      status: "PUBLISHED", body: "" },
+
+    // RECIPES
+    { slug: "recipe-import-csv", title: "[seed] Bulk-import customers from CSV", section: "RECIPES",
+      status: "PUBLISHED", ownerTeam: "DevRel",
+      body: `# Bulk-import customers from CSV
+
+Step-by-step: parse a CSV, idempotently upsert via \`POST /v1/customers\`,
+roll up errors into a report.
+
+\`\`\`node
+import fs from "node:fs/promises";
+import { parse } from "csv-parse/sync";
+const rows = parse(await fs.readFile("customers.csv"), { columns: true });
+for (const row of rows) {
+  await ft.customers.upsert({ external_id: row.id, ...row });
+}
+\`\`\`
+` },
+    { slug: "recipe-stripe-billing", title: "[seed] Wire Stripe webhooks → Flowtora invoices", section: "RECIPES",
+      status: "PUBLISHED", ownerTeam: "DevRel",
+      body: `# Stripe webhooks → Flowtora invoices
+
+When Stripe charges succeed, mark the matching Flowtora invoice paid.
+` },
+
+    // MIGRATION_GUIDES
+    { slug: "migration-2025-q4", title: "[seed] Migrating from v2024.06 → v2025.10", section: "MIGRATION_GUIDES",
+      status: "PUBLISHED", ownerTeam: "DevRel",
+      body: `# Migrating from v2024.06 → v2025.10
+
+## Breaking changes
+
+- \`Customer.email\` is now case-insensitive on lookup.
+- \`Job.status\` removed legacy values \`PROCESSING\` (use \`IN_PRODUCTION\`).
+
+## Non-breaking additions
+
+- New optional field \`Customer.preferredChannel\` (sms / email / phone).
+- New webhook event \`subscription.plan_changed\`.
+` },
+    { slug: "migration-2026-q1", title: "[seed] Migrating from v2025.10 → v2026.05", section: "MIGRATION_GUIDES",
+      status: "DRAFT", ownerTeam: "DevRel", deprecated: false,
+      body: `# Migrating from v2025.10 → v2026.05
+
+> 🚧 Draft — finalising before publication.
+
+Pagination cursors replace integer page numbers. Endpoints accepting
+\`?page=N\` will continue to work for 6 months.
+` },
+
+    // CHANGELOG
+    { slug: "changelog-2026-05", title: "[seed] 2026.05 Changelog", section: "CHANGELOG",
+      status: "PUBLISHED", ownerTeam: "DevRel",
+      body: `# 2026.05
+
+- **NEW**: \`marketing.referral.converted\` event (beta).
+- **NEW**: SDK getters for landing pages.
+- **DEPRECATED**: \`billing.coupon_redeemed\` event — use \`invoice.created\` with \`coupon\` field.
+- **FIX**: pagination off-by-one on \`GET /v1/jobs\` when \`pageSize=1\`.
+` },
+    { slug: "changelog-2026-04", title: "[seed] 2026.04 Changelog", section: "CHANGELOG",
+      status: "PUBLISHED", body: "# 2026.04\n\n- **NEW**: Affiliate Program v4 with Stripe Connect Express.\n" },
+    { slug: "changelog-2026-03", title: "[seed] 2026.03 Changelog", section: "CHANGELOG",
+      status: "PUBLISHED", body: "# 2026.03\n\n- **FIX**: Field-mapping editor crash on Salesforce Account.Name.\n" },
+
+    // ERRORS_REFERENCE
+    { slug: "errors-overview", title: "[seed] Error Reference", section: "ERRORS_REFERENCE",
+      status: "PUBLISHED", ownerTeam: "Engineering",
+      body: `# Error Reference
+
+All errors return JSON with \`code\`, \`message\`, and (optional) \`details\`.
+
+\`\`\`json
+{ "code": "validation_failed", "message": "Field 'email' is required" }
+\`\`\`
+
+| Code | HTTP | Description |
+|---|---|---|
+| \`unauthorized\`        | 401 | Bad or missing API key. |
+| \`forbidden\`           | 403 | Key lacks the required scope. |
+| \`not_found\`           | 404 | Resource doesn't exist. |
+| \`validation_failed\`   | 422 | Field-level validation failed. |
+| \`rate_limited\`        | 429 | Too many requests — back off. |
+| \`internal_error\`      | 500 | Something went wrong on our side. |
+` },
+
+    // RATE_LIMITS
+    { slug: "rate-limits-overview", title: "[seed] Rate Limits", section: "RATE_LIMITS",
+      status: "PUBLISHED", ownerTeam: "Engineering",
+      body: `# Rate Limits
+
+Default: **60 requests / minute** per API key.
+
+## Headers
+
+- \`X-RateLimit-Limit\` — your cap.
+- \`X-RateLimit-Remaining\` — calls remaining in current window.
+- \`X-RateLimit-Reset\` — unix timestamp when the window resets.
+
+When you hit the cap we return **HTTP 429** with a \`Retry-After\` header.
+` },
+
+    // GLOSSARY
+    { slug: "glossary", title: "[seed] Glossary", section: "GLOSSARY",
+      status: "PUBLISHED", ownerTeam: "DevRel",
+      body: `# Glossary
+
+- **Tenant** — A workspace; a single sign or print shop.
+- **Job** — A unit of production work (quote → order → install).
+- **Endpoint** — A subscribable webhook URL on the customer side.
+- **Scope** — A permission attached to an API key.
+- **Sandbox** — Throw-away environment for integration testing.
+` },
+    { slug: "old-deprecated-page", title: "[seed] Legacy GraphQL endpoint", section: "RESOURCES",
+      status: "ARCHIVED", deprecated: true, ownerTeam: "Engineering",
+      body: `# Legacy GraphQL endpoint
+
+> ⚠ Sunset 2026-06-01. Use the v1 REST endpoints instead.
+
+\`\`\`
+POST /graphql
+\`\`\`
+` },
+  ];
+
+  // Two-pass: create folders first so children can resolve parentId.
+  const slugToId = new Map<string, string>();
+  let pageCount = 0;
+  let versionCount = 0;
+  let commentCount = 0;
+
+  // Helper to compute next position within a section/parent group.
+  const positionTracker = new Map<string, number>();
+  const nextPosition = (section: string, parentId: string | null) => {
+    const key = `${section}:${parentId ?? "ROOT"}`;
+    const cur = positionTracker.get(key) ?? 0;
+    positionTracker.set(key, cur + 1);
+    return cur;
+  };
+
+  // First pass: folders + roots.
+  for (const d of docs) {
+    if (d.parentSlug) continue; // skip nested for round 1
+    const parentId = null;
+    const created = await db.docPage.create({
+      data: {
+        slug: d.slug,
+        title: d.title,
+        section: d.section,
+        parentId,
+        position: nextPosition(d.section, parentId),
+        status: d.status,
+        isFolder: !!d.isFolder,
+        externalUrl: d.externalUrl ?? null,
+        deprecated: !!d.deprecated,
+        body: d.status === "PUBLISHED" ? d.body : "",
+        bodyDraft: d.status === "PUBLISHED" ? null : d.body,
+        ownerTeam: d.ownerTeam ?? null,
+        seoTitle: d.seoTitle ?? null,
+        seoDescription: d.seoDescription ?? null,
+        tags: d.tags ?? [],
+        version: d.status === "PUBLISHED" ? 1 : 0,
+        publishedVersion: d.status === "PUBLISHED" ? 1 : null,
+        publishedAt: d.status === "PUBLISHED" ? daysAgo(randInt(7, 180)) : null,
+        publishedById: d.status === "PUBLISHED" ? author.id : null,
+        authorId: author.id,
+        lastEditedById: author.id,
+        createdAt: daysAgo(randInt(60, 365)),
+        updatedAt: daysAgo(randInt(0, 60)),
+      },
+      select: { id: true },
+    });
+    slugToId.set(d.slug, created.id);
+    pageCount++;
+    if (d.status === "PUBLISHED") {
+      await db.docPageVersion.create({
+        data: {
+          pageId: created.id,
+          versionNumber: 1,
+          body: d.body,
+          status: "PUBLISHED",
+          authorId: author.id,
+          changeNote: "Initial publication.",
+          publishedAt: daysAgo(randInt(7, 180)),
+          createdAt: daysAgo(randInt(7, 180)),
+        },
+      });
+      versionCount++;
+    }
+  }
+
+  // Second pass: nested children.
+  for (const d of docs) {
+    if (!d.parentSlug) continue;
+    const parentId = slugToId.get(d.parentSlug) ?? null;
+    const created = await db.docPage.create({
+      data: {
+        slug: d.slug,
+        title: d.title,
+        section: d.section,
+        parentId,
+        position: nextPosition(d.section, parentId),
+        status: d.status,
+        isFolder: !!d.isFolder,
+        externalUrl: d.externalUrl ?? null,
+        deprecated: !!d.deprecated,
+        body: d.status === "PUBLISHED" ? d.body : "",
+        bodyDraft: d.status === "PUBLISHED" ? null : d.body,
+        ownerTeam: d.ownerTeam ?? null,
+        seoTitle: d.seoTitle ?? null,
+        seoDescription: d.seoDescription ?? null,
+        tags: d.tags ?? [],
+        version: d.status === "PUBLISHED" ? 1 : 0,
+        publishedVersion: d.status === "PUBLISHED" ? 1 : null,
+        publishedAt: d.status === "PUBLISHED" ? daysAgo(randInt(7, 180)) : null,
+        publishedById: d.status === "PUBLISHED" ? author.id : null,
+        authorId: author.id,
+        lastEditedById: author.id,
+        createdAt: daysAgo(randInt(60, 365)),
+        updatedAt: daysAgo(randInt(0, 60)),
+      },
+      select: { id: true },
+    });
+    slugToId.set(d.slug, created.id);
+    pageCount++;
+    if (d.status === "PUBLISHED") {
+      await db.docPageVersion.create({
+        data: {
+          pageId: created.id,
+          versionNumber: 1,
+          body: d.body,
+          status: "PUBLISHED",
+          authorId: author.id,
+          changeNote: "Initial publication.",
+          publishedAt: daysAgo(randInt(7, 180)),
+          createdAt: daysAgo(randInt(7, 180)),
+        },
+      });
+      versionCount++;
+    }
+  }
+
+  // Add a couple of comments on review pages.
+  const reviewPages = await db.docPage.findMany({
+    where: { status: "REVIEW", title: { startsWith: "[seed] " } },
+    select: { id: true, slug: true },
+  });
+  for (const p of reviewPages) {
+    await db.docPageComment.create({
+      data: {
+        pageId: p.id,
+        body: "Field shape needs to match Stripe's `Invoice.lines` schema, not our internal `Order.items`.",
+        authorId: author.id,
+        createdAt: daysAgo(randInt(0, 5)),
+      },
+    });
+    commentCount++;
+    if (Math.random() < 0.5) {
+      await db.docPageComment.create({
+        data: {
+          pageId: p.id,
+          body: "+1 — let's also clarify what happens on partial refund.",
+          authorId: author.id,
+          createdAt: daysAgo(randInt(0, 3)),
+        },
+      });
+      commentCount++;
+    }
+  }
+
+  // Add second + third versions to a few popular pages so version
+  // history isn't trivial.
+  const versionTargets = ["introduction", "auth-overview", "webhooks-overview"];
+  for (const slug of versionTargets) {
+    const page = await db.docPage.findUnique({ where: { slug }, select: { id: true, version: true, body: true } });
+    if (!page) continue;
+    for (let i = 2; i <= 3; i++) {
+      await db.docPageVersion.create({
+        data: {
+          pageId: page.id,
+          versionNumber: i,
+          body: page.body,
+          status: "PUBLISHED",
+          authorId: author.id,
+          changeNote: i === 2 ? "Clarified sandbox environment naming." : "Added curl example to the quickstart.",
+          publishedAt: daysAgo(randInt(7, 60)),
+          createdAt: daysAgo(randInt(7, 60)),
+        },
+      });
+      versionCount++;
+    }
+    await db.docPage.update({
+      where: { id: page.id },
+      data: { version: 3, publishedVersion: 3 },
+    });
+  }
+
+  // OpenAPI spec.
+  const openApiBody = `openapi: 3.1.0
+info:
+  title: Flowtora API
+  version: 2026.05.0
+  description: |
+    REST API for the Flowtora platform. Authenticate with bearer
+    tokens minted from Platform → API Keys.
+servers:
+  - url: https://api.flowtora.com
+  - url: https://sandbox.api.flowtora.com
+paths:
+  /v1/tenants:
+    get:
+      summary: List tenants
+      tags: [Tenants]
+      responses:
+        "200": { description: OK }
+  /v1/jobs:
+    post:
+      summary: Create a job
+      tags: [Jobs]
+      responses:
+        "201": { description: Created }
+components:
+  securitySchemes:
+    bearer: { type: http, scheme: bearer }
+security:
+  - bearer: []
+`;
+  await db.openApiSpec.create({
+    data: {
+      version: "[seed]-2026.05.0",
+      body: openApiBody,
+      format: "yaml",
+      validatedAt: daysAgo(2),
+      validationErrors: [],
+      autoPublish: true,
+      publishedAt: daysAgo(2),
+      uploadedById: author.id,
+    },
+  });
+  await db.openApiSpec.create({
+    data: {
+      version: "[seed]-2026.04.0",
+      body: openApiBody.replace("2026.05.0", "2026.04.0"),
+      format: "yaml",
+      validatedAt: daysAgo(35),
+      validationErrors: [],
+      autoPublish: false,
+      publishedAt: daysAgo(35),
+      uploadedById: author.id,
+    },
+  });
+  await db.openApiSpec.create({
+    data: {
+      version: "[seed]-2026.06.0-rc1",
+      body: "openapi: 3.1.0\ninfo:\n  title: Flowtora API\n  version: 2026.06.0-rc1\n# missing paths block\n",
+      format: "yaml",
+      validatedAt: new Date(),
+      validationErrors: ["Missing `paths:` block."],
+      autoPublish: false,
+      publishedAt: null,
+      uploadedById: author.id,
+    },
+  });
+
+  // Code samples — 3 endpoints × 4-5 languages each.
+  const sampleEndpoints = [
+    { key: "[seed] GET /v1/tenants", samples: {
+        curl: `curl https://api.flowtora.com/v1/tenants \\
+  -H "Authorization: Bearer <API_KEY>"`,
+        node: `import { Flowtora } from "@flowtora/sdk";
+const ft = new Flowtora({ apiKey: process.env.FLOWTORA_API_KEY });
+const tenants = await ft.tenants.list();
+console.log(tenants);`,
+        python: `import os, requests
+r = requests.get(
+    "https://api.flowtora.com/v1/tenants",
+    headers={"Authorization": f"Bearer {os.environ['FLOWTORA_API_KEY']}"},
+)
+print(r.json())`,
+        ruby: `require "net/http"
+require "json"
+uri = URI("https://api.flowtora.com/v1/tenants")
+req = Net::HTTP::Get.new(uri)
+req["Authorization"] = "Bearer #{ENV.fetch("FLOWTORA_API_KEY")}"
+res = Net::HTTP.start(uri.host, uri.port, use_ssl: true) { |h| h.request(req) }
+puts JSON.parse(res.body)`,
+      } },
+    { key: "[seed] POST /v1/jobs", samples: {
+        curl: `curl -X POST https://api.flowtora.com/v1/jobs \\
+  -H "Authorization: Bearer <API_KEY>" \\
+  -H "Content-Type: application/json" \\
+  -d '{ "customerId": "cust_abc", "items": [{ "sku": "SIGN-12x18", "qty": 2 }] }'`,
+        node: `const job = await ft.jobs.create({
+  customerId: "cust_abc",
+  items: [{ sku: "SIGN-12x18", qty: 2 }],
+});`,
+        python: `job = ft.jobs.create(
+    customer_id="cust_abc",
+    items=[{"sku": "SIGN-12x18", "qty": 2}],
+)`,
+      } },
+    { key: "[seed] GET /v1/customers/{id}", samples: {
+        curl: `curl https://api.flowtora.com/v1/customers/cust_abc \\
+  -H "Authorization: Bearer <API_KEY>"`,
+        node: `const customer = await ft.customers.get("cust_abc");`,
+        go: `client := flowtora.NewClient(os.Getenv("FLOWTORA_API_KEY"))
+customer, err := client.Customers.Get(ctx, "cust_abc")`,
+        php: `$ft = new Flowtora\\Client(getenv("FLOWTORA_API_KEY"));
+$customer = $ft->customers->get("cust_abc");`,
+        // Intentional placeholder for the linter to flag.
+        java: `String key = "your-api-key"; // TODO replace
+HttpRequest req = HttpRequest.newBuilder()
+    .uri(URI.create("https://api.flowtora.com/v1/customers/cust_abc"))
+    .header("Authorization", "Bearer " + key)
+    .build();`,
+      } },
+  ];
+
+  let codeSampleCount = 0;
+  for (const e of sampleEndpoints) {
+    for (const [lang, body] of Object.entries(e.samples)) {
+      const lint = body.includes("your-api-key")
+        ? { status: "errors", message: "Placeholder secret detected — replace with `<API_KEY>` notation." }
+        : (lang === "curl" && !/Authorization|-H /.test(body))
+          ? { status: "warnings", message: "No Authorization header — sandbox calls will 401." }
+          : { status: "ok", message: null };
+      await db.codeSample.create({
+        data: {
+          endpointKey: e.key,
+          language: lang,
+          body,
+          lintedAt: daysAgo(randInt(0, 14)),
+          lintStatus: lint.status,
+          lintMessage: lint.message,
+        },
+      });
+      codeSampleCount++;
+    }
+  }
+
+  console.log(
+    `  ✓ ${pageCount} doc pages, ${versionCount} version snapshots, ${commentCount} comments, 3 OpenAPI specs, ${codeSampleCount} code samples`,
   );
 }
 

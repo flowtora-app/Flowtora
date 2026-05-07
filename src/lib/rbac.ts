@@ -227,6 +227,10 @@ export type PlatformPermission =
   // Integrations — Page 46 API keys + webhooks
   | "webhooks.read"
   | "webhooks.manage"
+  // Integrations — Page 47 developer documentation
+  | "docs.read"
+  | "docs.write"
+  | "docs.publish"
 
   // Analytics / BI
   | "analytics.read"
@@ -266,6 +270,7 @@ const PLATFORM_ALL: PlatformPermission[] = [
   "seo.read", "seo.manage",
   "integrations.read", "integrations.manage",
   "webhooks.read", "webhooks.manage",
+  "docs.read", "docs.write", "docs.publish",
   "analytics.read", "analytics.export", "revenue.read", "usage.read",
   "reports.read", "reports.create", "reports.edit", "reports.delete",
   "reports.schedule", "reports.export",
@@ -280,7 +285,7 @@ const PLATFORM_ALL: PlatformPermission[] = [
 const PLATFORM_BASELINE_READ: PlatformPermission[] = [
   "tenant.read", "billing.read", "staff.read", "users.read",
   "support.read", "health.read", "audit.read", "compliance.read",
-  "feature_flag.read", "announcement.read", "leads.read", "referrals.read", "affiliates.read", "seo.read", "integrations.read", "webhooks.read",
+  "feature_flag.read", "announcement.read", "leads.read", "referrals.read", "affiliates.read", "seo.read", "integrations.read", "webhooks.read", "docs.read",
   "analytics.read", "revenue.read", "usage.read",
   "reports.read", "reports.export", // every staff role reads + can export
   "system.read_settings", "notifications.read",
@@ -332,6 +337,7 @@ export const PLATFORM_ROLE_PERMISSIONS: Record<PlatformRole, PlatformPermission[
     "support.respond", "support.macro_manage", "support.feedback_triage",
     "announcement.write", "readiness.manage",
     "leads.manage", "referrals.manage", "affiliates.manage", "seo.manage", "integrations.manage", "webhooks.manage",
+    "docs.write", "docs.publish",
     "analytics.export",
     "reports.create", "reports.edit", "reports.schedule",
     "notifications.manage",
@@ -367,6 +373,7 @@ export const PLATFORM_ROLE_PERMISSIONS: Record<PlatformRole, PlatformPermission[
     "tenant.impersonate",   // for repro
     "integrations.manage",  // owns integration catalog + versions
     "webhooks.manage",      // owns API keys + webhook endpoints
+    "docs.write", "docs.publish", // owns developer docs + OpenAPI
   ]),
   // Marketing — leads, announcements, public plan/feature copy.
   MARKETING_MANAGER: dedup([
