@@ -91,6 +91,7 @@ const NAV_ITEMS: NavItem[] = [
   { href: "/platform/integrations/sso",             label: "SSO Providers",        icon: "Approvals" },
   // Pages 50-… — compliance & security
   { href: "/platform/security/center",              label: "Security Center",      icon: "Shield" },
+  { href: "/platform/security/compliance",          label: "Compliance",           icon: "Scale" },
 ];
 
 const COLLAPSE_KEY = "flowtora.platform-nav.collapsed";

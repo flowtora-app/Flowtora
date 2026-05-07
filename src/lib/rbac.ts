@@ -242,6 +242,11 @@ export type PlatformPermission =
   | "security.read"
   | "security.manage"
   | "security.findings.resolve"
+  // Compliance & Security — Page 51 Compliance program
+  | "compliance.policy.write"
+  | "compliance.evidence.upload"
+  | "compliance.vendor.review"
+  | "compliance.report.generate"
 
   // Analytics / BI
   | "analytics.read"
@@ -285,6 +290,7 @@ const PLATFORM_ALL: PlatformPermission[] = [
   "marketplace.read", "marketplace.manage",
   "sso.read", "sso.manage", "sso.test_login",
   "security.read", "security.manage", "security.findings.resolve",
+  "compliance.policy.write", "compliance.evidence.upload", "compliance.vendor.review", "compliance.report.generate",
   "analytics.read", "analytics.export", "revenue.read", "usage.read",
   "reports.read", "reports.create", "reports.edit", "reports.delete",
   "reports.schedule", "reports.export",
@@ -355,6 +361,8 @@ export const PLATFORM_ROLE_PERMISSIONS: Record<PlatformRole, PlatformPermission[
     "marketplace.manage",
     "sso.manage", "sso.test_login",
     "security.manage", "security.findings.resolve",
+    "compliance.manage", "compliance.policy.write", "compliance.evidence.upload",
+    "compliance.vendor.review", "compliance.report.generate",
     "analytics.export",
     "reports.create", "reports.edit", "reports.schedule",
     "notifications.manage",

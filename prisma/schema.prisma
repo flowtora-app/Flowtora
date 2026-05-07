@@ -419,6 +419,8 @@ model Tenant {
   referralAsReferee      TenantReferral?    @relation("TenantReferralAsReferee")
   // Page 49 — SSO configurations (one per provider per tenant).
   ssoConfigs             SsoTenantConfig[]
+  // Page 51 — Compliance — per-tenant DPA tracker (one row per tenant).
+  dpa                    TenantDpa?
 }
 
 // ────────────────────────────────────────────────────────────
@@ -11661,4 +11663,485 @@ model SecurityCenterSettings {
   updatedById String?
   updatedAt   DateTime @updatedAt
   createdAt   DateTime @default(now())
+}
+
+// ────────────────────────────────────────────────────────────
+// Page 51 — Compliance.
+// ────────────────────────────────────────────────────────────
+
+enum ComplianceFrameworkKey {
+  SOC2_TYPE_II
+  ISO_27001
+  GDPR
+  CCPA
+  HIPAA
+  PCI_DSS
+  FERPA
+  FEDRAMP
+}
+
+enum ComplianceFrameworkStatus {
+  IN_SCOPE
+  AUDIT_READY
+  CERTIFIED
+  NOT_IN_SCOPE
+  PLANNED
+}
+
+enum ComplianceControlStatus {
+  PASSING
+  FAILING
+  NOT_APPLICABLE
+  IN_REVIEW
+  PENDING_EVIDENCE
+}
+
+enum ComplianceControlDomain {
+  ACCESS_CONTROL
+  CHANGE_MANAGEMENT
+  INCIDENT_RESPONSE
+  BUSINESS_CONTINUITY
+  VENDOR_MANAGEMENT
+  DATA_PROTECTION
+  CRYPTOGRAPHY
+  RISK_MANAGEMENT
+  SECURE_SDLC
+  PHYSICAL_SECURITY
+  HR_SECURITY
+  MONITORING
+}
+
+enum EvidenceSource {
+  AUTO
+  MANUAL
+}
+
+enum EvidenceKind {
+  SCREENSHOT
+  EXPORT
+  LOG
+  ATTESTATION
+  CONFIG
+  REPORT
+  OTHER
+}
+
+enum CompliancePolicyStatus {
+  DRAFT
+  IN_REVIEW
+  APPROVED
+  RETIRED
+}
+
+enum SubProcessorRiskTier {
+  CRITICAL
+  HIGH
+  MEDIUM
+  LOW
+}
+
+enum SubProcessorCertification {
+  SOC2_TYPE_II
+  ISO_27001
+  GDPR_DPA
+  PCI_DSS
+  HIPAA_BAA
+  FEDRAMP_MODERATE
+  TRUSTED_CLOUD
+  HITRUST
+}
+
+enum DpaStatus {
+  NOT_REQUESTED
+  REQUESTED
+  PENDING_TENANT_SIGNATURE
+  PENDING_COUNTERSIGNATURE
+  SIGNED
+  EXPIRED
+}
+
+enum RiskLikelihood {
+  RARE
+  UNLIKELY
+  POSSIBLE
+  LIKELY
+  ALMOST_CERTAIN
+}
+
+enum RiskImpact {
+  NEGLIGIBLE
+  MINOR
+  MODERATE
+  MAJOR
+  SEVERE
+}
+
+enum RiskMitigationStatus {
+  IDENTIFIED
+  PLANNED
+  IN_PROGRESS
+  MITIGATED
+  ACCEPTED
+}
+
+enum VendorReviewStatus {
+  PENDING_QUESTIONNAIRE
+  IN_REVIEW
+  APPROVED
+  CONDITIONALLY_APPROVED
+  REJECTED
+  ARCHIVED
+}
+
+enum ComplianceReportKind {
+  SOC2_TYPE_I_PACKAGE
+  SOC2_TYPE_II_PACKAGE
+  ISO_27001_STATEMENT_OF_APPLICABILITY
+  GDPR_ARTICLE_30_RECORD
+  HIPAA_RISK_ASSESSMENT
+  PCI_DSS_AOC
+  CUSTOM
+}
+
+enum ComplianceReportStatus {
+  GENERATING
+  READY
+  DELIVERED
+  EXPIRED
+  FAILED
+}
+
+/** Top-level compliance program entry — one row per framework we track. */
+model ComplianceFramework {
+  id String @id @default(cuid())
+
+  key            ComplianceFrameworkKey       @unique
+  name           String
+  status         ComplianceFrameworkStatus    @default(PLANNED)
+  auditor        String?
+  /** Last completed audit / observation period end. */
+  lastAuditAt    DateTime?
+  /** Next audit start. */
+  nextAuditAt    DateTime?
+  /** Cached % of controls in PASSING state — recomputed by a job. */
+  passingPct     Int                          @default(0)
+  totalControls  Int                          @default(0)
+  passingCount   Int                          @default(0)
+  notes          String?
+
+  createdAt DateTime @default(now())
+  updatedAt DateTime @updatedAt
+
+  controls ComplianceControl[]
+  reports  ComplianceReport[]
+}
+
+/** Individual control. A control may map to multiple frameworks via
+ *  a many-to-many table. */
+model ComplianceControl {
+  id String @id @default(cuid())
+
+  /** Human control id like "AC-01" or "CC6.1". */
+  externalId  String  @unique
+  title       String
+  description String?
+  domain      ComplianceControlDomain
+  status      ComplianceControlStatus    @default(PENDING_EVIDENCE)
+  /** Owner email/name string — denormalized for display + retention. */
+  ownerEmail  String?
+  ownerName   String?
+
+  /** Test procedure narrative. */
+  testProcedure String?
+  /** Frequency: monthly / quarterly / annual. */
+  testFrequency String?
+
+  lastTestedAt DateTime?
+  nextTestAt   DateTime?
+
+  /** Whether an automated check evaluates this control. */
+  autoCheckEnabled Boolean  @default(false)
+  /** Last result of the auto check, if any: OK / FAIL / WARN. */
+  autoCheckResult  String?
+
+  /** Primary framework. We additionally track all framework
+   *  mappings via the join table below. */
+  primaryFrameworkId String
+  primaryFramework   ComplianceFramework @relation(fields: [primaryFrameworkId], references: [id], onDelete: Cascade)
+
+  /** Joined-evidence count cached for table rendering. */
+  evidenceCount Int @default(0)
+
+  createdAt DateTime @default(now())
+  updatedAt DateTime @updatedAt
+
+  evidence ControlEvidence[]
+  mappings ComplianceControlMapping[]
+
+  @@index([primaryFrameworkId, status])
+  @@index([domain, status])
+  @@index([nextTestAt])
+}
+
+/** Many-to-many mapping: one control can serve multiple frameworks. */
+model ComplianceControlMapping {
+  id String @id @default(cuid())
+
+  controlId   String
+  control     ComplianceControl   @relation(fields: [controlId], references: [id], onDelete: Cascade)
+  frameworkKey ComplianceFrameworkKey
+  /** Cross-mapped control id in the other framework. */
+  externalRef String
+
+  @@unique([controlId, frameworkKey, externalRef])
+}
+
+/** Evidence library entry — screenshot / export / log / attestation
+ *  / config snapshot. Auto-collected via integrations or manually
+ *  uploaded by a control owner. */
+model ControlEvidence {
+  id String @id @default(cuid())
+
+  controlId   String
+  control     ComplianceControl @relation(fields: [controlId], references: [id], onDelete: Cascade)
+
+  title       String
+  description String?
+  source      EvidenceSource    @default(MANUAL)
+  /** Where it came from: AWS CloudTrail, GitHub, Okta, Datadog, Manual upload. */
+  collector   String?
+  kind        EvidenceKind      @default(SCREENSHOT)
+  /** Public/protected URL or storage key for the file. */
+  fileUrl     String?
+  /** Hash for immutability check. */
+  fileHash    String?
+  fileBytes   Int?
+
+  collectedAt DateTime @default(now())
+  expiresAt   DateTime?
+  uploadedById String?
+
+  createdAt DateTime @default(now())
+
+  @@index([controlId, collectedAt])
+  @@index([source, collectedAt])
+}
+
+/** Internal compliance policy doc. Markdown editor on the page. */
+model CompliancePolicy {
+  id String @id @default(cuid())
+
+  /** URL-safe slug. */
+  slug      String @unique
+  title     String
+  description String?
+  /** Markdown body. */
+  body      String
+  /** Semantic version, e.g. 1.4. */
+  version   String
+  status    CompliancePolicyStatus @default(DRAFT)
+
+  ownerEmail String?
+  ownerName  String?
+
+  /** When the latest version was approved. */
+  lastApprovedAt DateTime?
+  lastReviewedAt DateTime?
+  nextReviewAt   DateTime?
+  /** Distribution list summary string for display. */
+  distribution   String?
+
+  createdAt DateTime @default(now())
+  updatedAt DateTime @updatedAt
+
+  acknowledgments PolicyAcknowledgment[]
+}
+
+/** One row per (policy, user) acknowledgment pair. Used for the
+ *  per-policy "% of staff acknowledged" tracker. */
+model PolicyAcknowledgment {
+  id String @id @default(cuid())
+
+  policyId String
+  policy   CompliancePolicy @relation(fields: [policyId], references: [id], onDelete: Cascade)
+  /** Free-form email/name — denormalized so we don't depend on
+   *  PlatformUser cleanup behavior. */
+  userEmail String
+  userName  String?
+
+  acknowledgedAt DateTime @default(now())
+  /** Version of the policy at the time of acknowledgement. */
+  policyVersion  String
+
+  @@unique([policyId, userEmail, policyVersion])
+  @@index([policyId, acknowledgedAt])
+}
+
+/** Public sub-processor list entry. */
+model SubProcessor {
+  id String @id @default(cuid())
+
+  name        String
+  /** Short description / purpose. */
+  purpose     String
+  /** Region / data residency. */
+  dataLocation String
+  /** Risk classification. */
+  riskTier    SubProcessorRiskTier @default(MEDIUM)
+
+  websiteUrl  String?
+  privacyUrl  String?
+  dpaUrl      String?
+  /** Whether we have a signed DPA on file. */
+  dpaOnFile   Boolean              @default(false)
+
+  certifications SubProcessorCertification[]
+
+  /** Whether this row is shown on the public /sub-processors page. */
+  publiclyListed Boolean @default(true)
+
+  lastReviewedAt DateTime?
+  nextReviewAt   DateTime?
+  notes          String?
+
+  createdAt DateTime @default(now())
+  updatedAt DateTime @updatedAt
+
+  @@index([publiclyListed, name])
+}
+
+/** Per-tenant DPA tracker. */
+model TenantDpa {
+  id String @id @default(cuid())
+
+  tenantId String   @unique
+  tenant   Tenant   @relation(fields: [tenantId], references: [id], onDelete: Cascade)
+
+  status   DpaStatus @default(NOT_REQUESTED)
+  /** Most recent template version sent. */
+  templateVersion String?
+  requestedAt     DateTime?
+  signedAt        DateTime?
+  countersignedAt DateTime?
+  expiresAt       DateTime?
+  /** Storage URL of the executed PDF. */
+  pdfUrl        String?
+  /** Free-form notes (e.g. negotiated changes). */
+  notes         String?
+
+  /** Tenant signer details — denormalized for display. */
+  tenantSignerName  String?
+  tenantSignerEmail String?
+  tenantSignerTitle String?
+
+  createdAt DateTime @default(now())
+  updatedAt DateTime @updatedAt
+}
+
+/** Risk register entry. likelihood × impact = risk score. */
+model RiskRegisterItem {
+  id String @id @default(cuid())
+
+  /** Stable human id like RISK-001. */
+  externalId  String @unique
+  title       String
+  description String?
+  ownerEmail  String?
+  ownerName   String?
+
+  likelihood RiskLikelihood
+  impact     RiskImpact
+  /** Cached score 1-25 (likelihood index 1..5 × impact index 1..5). */
+  score      Int
+  /** Residual after mitigation, same scale. */
+  residualScore Int @default(0)
+
+  status      RiskMitigationStatus @default(IDENTIFIED)
+  mitigation  String?
+
+  /** Last reviewed by the risk committee. */
+  reviewedAt  DateTime?
+  nextReviewAt DateTime?
+
+  /** Optional cross-link to a control id. */
+  controlExternalId String?
+
+  createdAt DateTime @default(now())
+  updatedAt DateTime @updatedAt
+
+  @@index([status, score])
+  @@index([nextReviewAt])
+}
+
+/** Vendor onboarding workflow row — per third-party vendor. */
+model VendorReview {
+  id String @id @default(cuid())
+
+  vendorName  String
+  vendorUrl   String?
+  ownerEmail  String?
+
+  status      VendorReviewStatus @default(PENDING_QUESTIONNAIRE)
+
+  /** Type of data the vendor processes (PII, PHI, financial, etc.). */
+  dataCategories String[]
+  /** Region of processing. */
+  region        String?
+  /** Certifications they hold. */
+  certifications SubProcessorCertification[]
+
+  /** CAIQ-Lite questionnaire body. */
+  questionnaireBody  String?
+  /** Score 0-100 from the questionnaire scoring rubric. */
+  questionnaireScore Int?
+
+  soc2Url     String?
+  contractUrl String?
+
+  approvedAt     DateTime?
+  rejectedReason String?
+
+  /** When this vendor needs to be re-reviewed. */
+  nextReviewAt DateTime?
+
+  createdAt DateTime @default(now())
+  updatedAt DateTime @updatedAt
+
+  @@index([status, createdAt])
+  @@index([nextReviewAt])
+}
+
+/** Auto-generated audit package — PDF + ZIP bundle. */
+model ComplianceReport {
+  id String @id @default(cuid())
+
+  kind      ComplianceReportKind
+  title     String
+  /** Optional framework focus. */
+  frameworkId String?
+  framework ComplianceFramework? @relation(fields: [frameworkId], references: [id], onDelete: SetNull)
+
+  status    ComplianceReportStatus @default(GENERATING)
+
+  /** Period start/end the report covers. */
+  periodStart DateTime?
+  periodEnd   DateTime?
+
+  /** Delivery URL for the PDF/ZIP bundle once ready. */
+  pdfUrl    String?
+  zipUrl    String?
+  bytes     Int?
+  /** Auditor email the bundle was delivered to (if any). */
+  deliveredTo String?
+  deliveredAt DateTime?
+
+  generatedById String?
+
+  notes String?
+
+  createdAt DateTime @default(now())
+  updatedAt DateTime @updatedAt
+
+  @@index([kind, createdAt])
+  @@index([status, createdAt])
 }

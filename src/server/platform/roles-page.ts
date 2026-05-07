@@ -99,6 +99,10 @@ export const PERMISSION_DESCRIPTIONS: Record<PlatformPermission, string> = {
   "security.read":         "View the Security Center — score, findings, suspicious activity, scans, pen tests.",
   "security.manage":       "Configure Security Center thresholds, password policy, encryption posture, and pen-test records.",
   "security.findings.resolve": "Resolve, dismiss, or assign security findings.",
+  "compliance.policy.write":   "Author, edit, and approve compliance policies.",
+  "compliance.evidence.upload": "Upload control evidence files and re-collect from integrations.",
+  "compliance.vendor.review":   "Run vendor security reviews — score CAIQ, approve/reject vendors.",
+  "compliance.report.generate": "Generate audit-package PDFs and ZIP bundles.",
   // Analytics
   "analytics.read":        "Read analytics dashboards.",
   "analytics.export":      "Export analytics datasets.",

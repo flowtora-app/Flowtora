@@ -73,6 +73,7 @@ async function main() {
   await seedMarketplace(platformUsers, tenants);      // Page 48
   await seedSso(platformUsers, tenants);              // Page 49
   await seedSecurityCenter(platformUsers);            // Page 50
+  await seedCompliance(tenants);                      // Page 51
 
   console.log("\n✓ Seed complete.\n");
   await db.$disconnect();
@@ -280,6 +281,17 @@ async function wipeOldSeed() {
   await db.vulnerabilityScan.deleteMany({ where: { scope: { startsWith: "[seed] " } } });
   await db.penetrationTest.deleteMany({ where: { vendor: { startsWith: "[seed] " } } });
   await db.bugBountyReport.deleteMany({ where: { externalId: { startsWith: "SEED-" } } });
+  // Page 51 — Compliance wipe. Frameworks/controls/etc. are tagged
+  // by external-id prefix or a "[seed]" title marker. We delete
+  // controls first (cascades evidence + mappings) then frameworks.
+  await db.controlEvidence.deleteMany({ where: { title: { startsWith: "[seed] " } } });
+  await db.complianceControl.deleteMany({ where: { externalId: { startsWith: "SEED-" } } });
+  await db.complianceFramework.deleteMany({ where: { name: { startsWith: "[seed] " } } });
+  await db.compliancePolicy.deleteMany({ where: { slug: { startsWith: "seed-" } } });
+  await db.subProcessor.deleteMany({ where: { name: { startsWith: "[seed] " } } });
+  await db.riskRegisterItem.deleteMany({ where: { externalId: { startsWith: "SEED-RISK-" } } });
+  await db.vendorReview.deleteMany({ where: { vendorName: { startsWith: "[seed] " } } });
+  await db.complianceReport.deleteMany({ where: { title: { startsWith: "[seed] " } } });
   // Customers tagged seed (after orders are gone).
   await db.customer.deleteMany({ where: { tags: { has: "seed" } } });
   // Products tagged seed (use description marker since Product has no tags array).
@@ -7634,6 +7646,835 @@ async function seedSecurityCenter(staff: { id: string; email: string; name: stri
 
   console.log(
     `  ✓ ${findings.length} findings, ~14 suspicious events, 6 scans, 4 pen tests, 6 bug-bounty reports, ${staff.length} pwd-audit rows`,
+  );
+}
+
+/* ── Page 51 — Compliance program seed ─────────────────── */
+
+async function seedCompliance(tenants: { id: string; name: string; slug: string }[]) {
+  console.log("── Seeding Compliance program (Page 51)…");
+
+  // 1. Frameworks — six tracked, three certified.
+  type FwBp = {
+    key: "SOC2_TYPE_II" | "ISO_27001" | "GDPR" | "CCPA" | "HIPAA" | "PCI_DSS" | "FERPA" | "FEDRAMP";
+    name: string;
+    status: "IN_SCOPE" | "AUDIT_READY" | "CERTIFIED" | "NOT_IN_SCOPE" | "PLANNED";
+    auditor?: string;
+    lastAuditDays?: number;
+    nextAuditDays?: number;
+    notes?: string;
+  };
+  const frameworks: FwBp[] = [
+    { key: "SOC2_TYPE_II", name: "[seed] SOC 2 Type II",
+      status: "CERTIFIED",
+      auditor: "Prescient Assurance", lastAuditDays: 95, nextAuditDays: 270,
+      notes: "Annual Type II observation period — 12 months." },
+    { key: "ISO_27001",   name: "[seed] ISO 27001:2022",
+      status: "CERTIFIED",
+      auditor: "Schellman", lastAuditDays: 180, nextAuditDays: 185,
+      notes: "Surveillance audit due in ~6 months." },
+    { key: "GDPR",        name: "[seed] GDPR (EU 2016/679)",
+      status: "AUDIT_READY",
+      auditor: "DataGuard", lastAuditDays: 130, nextAuditDays: 235,
+      notes: "Article 30 ROPA maintained quarterly." },
+    { key: "CCPA",        name: "[seed] CCPA / CPRA",
+      status: "AUDIT_READY",
+      lastAuditDays: 200, nextAuditDays: 165,
+      notes: "Self-attested — no third-party audit required." },
+    { key: "HIPAA",       name: "[seed] HIPAA (in-progress)",
+      status: "IN_SCOPE",
+      lastAuditDays: undefined, nextAuditDays: 90,
+      notes: "Healthcare tenants pending — BAA template ready." },
+    { key: "PCI_DSS",     name: "[seed] PCI DSS v4.0",
+      status: "PLANNED",
+      lastAuditDays: undefined, nextAuditDays: 365,
+      notes: "Out-of-scope until a card-present integration ships." },
+    { key: "FERPA",       name: "[seed] FERPA",
+      status: "NOT_IN_SCOPE",
+      notes: "Education-sector only — none currently in customer base." },
+    { key: "FEDRAMP",     name: "[seed] FedRAMP Moderate",
+      status: "PLANNED", nextAuditDays: 540,
+      notes: "GovCloud rollout in late 2026." },
+  ];
+  const fwIdByKey = new Map<string, string>();
+  for (const f of frameworks) {
+    const saved = await db.complianceFramework.upsert({
+      where: { key: f.key },
+      create: {
+        key: f.key,
+        name: f.name,
+        status: f.status,
+        auditor: f.auditor ?? null,
+        lastAuditAt: f.lastAuditDays != null ? daysAgo(f.lastAuditDays) : null,
+        nextAuditAt: f.nextAuditDays != null ? daysAgo(-f.nextAuditDays) : null,
+        notes: f.notes ?? null,
+      },
+      update: {
+        name: f.name,
+        status: f.status,
+        auditor: f.auditor ?? null,
+        lastAuditAt: f.lastAuditDays != null ? daysAgo(f.lastAuditDays) : null,
+        nextAuditAt: f.nextAuditDays != null ? daysAgo(-f.nextAuditDays) : null,
+        notes: f.notes ?? null,
+      },
+      select: { id: true, key: true },
+    });
+    fwIdByKey.set(saved.key, saved.id);
+  }
+
+  // 2. Controls (~20) with mappings.
+  type CtrlBp = {
+    externalId: string;
+    title: string;
+    description: string;
+    domain: "ACCESS_CONTROL" | "CHANGE_MANAGEMENT" | "INCIDENT_RESPONSE"
+          | "BUSINESS_CONTINUITY" | "VENDOR_MANAGEMENT" | "DATA_PROTECTION"
+          | "CRYPTOGRAPHY" | "RISK_MANAGEMENT" | "SECURE_SDLC"
+          | "PHYSICAL_SECURITY" | "HR_SECURITY" | "MONITORING";
+    status: "PASSING" | "FAILING" | "NOT_APPLICABLE" | "IN_REVIEW" | "PENDING_EVIDENCE";
+    primaryFw: FwBp["key"];
+    mappings: Array<{ fw: FwBp["key"]; ref: string }>;
+    owner: string;
+    testFrequency: string;
+    lastTestedDays?: number;
+    nextTestDays?: number;
+    auto: boolean;
+    autoResult?: string;
+  };
+  const controls: CtrlBp[] = [
+    { externalId: "SEED-CC6.1", title: "MFA enforced on all platform admin accounts",
+      description: "All Flowtora staff must complete TOTP/WebAuthn challenge to authenticate.",
+      domain: "ACCESS_CONTROL", status: "PASSING",
+      primaryFw: "SOC2_TYPE_II",
+      mappings: [{ fw: "ISO_27001", ref: "A.9.4.2" }, { fw: "HIPAA", ref: "§164.312(d)" }],
+      owner: "ciso@flowtora.com", testFrequency: "monthly",
+      lastTestedDays: 8, nextTestDays: 22, auto: true, autoResult: "OK" },
+    { externalId: "SEED-CC6.2", title: "Least-privilege RBAC enforced for staff actions",
+      description: "Role assignments reviewed quarterly; elevation requires audited justification.",
+      domain: "ACCESS_CONTROL", status: "PASSING",
+      primaryFw: "SOC2_TYPE_II",
+      mappings: [{ fw: "ISO_27001", ref: "A.9.2.3" }],
+      owner: "ciso@flowtora.com", testFrequency: "quarterly",
+      lastTestedDays: 14, nextTestDays: 76, auto: false },
+    { externalId: "SEED-CC7.2", title: "Continuous logging of privileged actions",
+      description: "All auditable platform actions persisted with hash-chain tamper detection.",
+      domain: "MONITORING", status: "PASSING",
+      primaryFw: "SOC2_TYPE_II",
+      mappings: [{ fw: "ISO_27001", ref: "A.12.4.1" }, { fw: "HIPAA", ref: "§164.308(a)(1)(ii)(D)" }],
+      owner: "engineering-lead@flowtora.com", testFrequency: "continuous",
+      lastTestedDays: 1, auto: true, autoResult: "OK" },
+    { externalId: "SEED-CC7.4", title: "Vulnerability scans at least weekly",
+      description: "Snyk + Dependabot run on every PR; weekly summary triaged by security team.",
+      domain: "SECURE_SDLC", status: "PASSING",
+      primaryFw: "SOC2_TYPE_II",
+      mappings: [{ fw: "ISO_27001", ref: "A.12.6.1" }],
+      owner: "security-eng@flowtora.com", testFrequency: "weekly",
+      lastTestedDays: 1, auto: true, autoResult: "OK" },
+    { externalId: "SEED-CC8.1", title: "Change management — code review + CI green",
+      description: "All deploys gated on review, automated tests, and successful build.",
+      domain: "CHANGE_MANAGEMENT", status: "PASSING",
+      primaryFw: "SOC2_TYPE_II",
+      mappings: [{ fw: "ISO_27001", ref: "A.14.2.2" }],
+      owner: "engineering-lead@flowtora.com", testFrequency: "continuous",
+      lastTestedDays: 0, auto: true, autoResult: "OK" },
+    { externalId: "SEED-CC9.1", title: "Encryption at rest + in transit",
+      description: "AES-256-GCM for stored data; TLS 1.3 for all transport.",
+      domain: "CRYPTOGRAPHY", status: "PASSING",
+      primaryFw: "SOC2_TYPE_II",
+      mappings: [{ fw: "ISO_27001", ref: "A.10.1.1" }, { fw: "HIPAA", ref: "§164.312(a)(2)(iv)" }, { fw: "PCI_DSS", ref: "Req. 4.1" }],
+      owner: "security-eng@flowtora.com", testFrequency: "monthly",
+      lastTestedDays: 5, nextTestDays: 25, auto: true, autoResult: "OK" },
+    { externalId: "SEED-A.16.1", title: "Incident response plan tested annually",
+      description: "Tabletop exercises run twice yearly; postmortems published.",
+      domain: "INCIDENT_RESPONSE", status: "IN_REVIEW",
+      primaryFw: "ISO_27001",
+      mappings: [{ fw: "SOC2_TYPE_II", ref: "CC7.4" }],
+      owner: "ciso@flowtora.com", testFrequency: "biannually",
+      lastTestedDays: 95, nextTestDays: 85, auto: false },
+    { externalId: "SEED-A.17.1", title: "Business continuity plan + recovery time objectives",
+      description: "Documented BCP with RTO 4h, RPO 1h. Annual restore test.",
+      domain: "BUSINESS_CONTINUITY", status: "PASSING",
+      primaryFw: "ISO_27001",
+      mappings: [],
+      owner: "operations@flowtora.com", testFrequency: "annually",
+      lastTestedDays: 220, nextTestDays: 145, auto: false },
+    { externalId: "SEED-A.7.2", title: "Background checks on staff with prod access",
+      description: "Pre-employment screening on all engineers + customer-data roles.",
+      domain: "HR_SECURITY", status: "PASSING",
+      primaryFw: "ISO_27001",
+      mappings: [],
+      owner: "people@flowtora.com", testFrequency: "as needed",
+      lastTestedDays: 60, auto: false },
+    { externalId: "SEED-GDPR-30", title: "Article 30 record of processing activities",
+      description: "Maintained ROPA with categories, retention, transfer, security.",
+      domain: "DATA_PROTECTION", status: "PASSING",
+      primaryFw: "GDPR",
+      mappings: [{ fw: "CCPA", ref: "§1798.130(a)(5)" }],
+      owner: "dpo@flowtora.com", testFrequency: "quarterly",
+      lastTestedDays: 30, nextTestDays: 60, auto: false },
+    { externalId: "SEED-GDPR-32", title: "Technical & organizational measures (TOMs)",
+      description: "Documented TOMs aligned with Article 32; reviewed when integrations change.",
+      domain: "DATA_PROTECTION", status: "PASSING",
+      primaryFw: "GDPR",
+      mappings: [{ fw: "ISO_27001", ref: "A.18.1.4" }],
+      owner: "dpo@flowtora.com", testFrequency: "annually",
+      lastTestedDays: 70, nextTestDays: 295, auto: false },
+    { externalId: "SEED-GDPR-33", title: "72-hour breach notification readiness",
+      description: "Runbook + DPA-defined notification template; on-call rotation.",
+      domain: "INCIDENT_RESPONSE", status: "PASSING",
+      primaryFw: "GDPR",
+      mappings: [],
+      owner: "dpo@flowtora.com", testFrequency: "biannually",
+      lastTestedDays: 110, auto: false },
+    { externalId: "SEED-VEN-1", title: "Vendor security review before onboarding",
+      description: "All vendors processing PII complete a CAIQ-Lite + SOC 2 review.",
+      domain: "VENDOR_MANAGEMENT", status: "PASSING",
+      primaryFw: "ISO_27001",
+      mappings: [{ fw: "SOC2_TYPE_II", ref: "CC9.2" }],
+      owner: "procurement@flowtora.com", testFrequency: "as needed",
+      lastTestedDays: 12, auto: false },
+    { externalId: "SEED-RISK-1", title: "Risk assessment refreshed annually",
+      description: "Risk committee meets quarterly; full register reviewed annually.",
+      domain: "RISK_MANAGEMENT", status: "PASSING",
+      primaryFw: "ISO_27001",
+      mappings: [],
+      owner: "ciso@flowtora.com", testFrequency: "annually",
+      lastTestedDays: 320, nextTestDays: 45, auto: false },
+    { externalId: "SEED-SDL-1", title: "Secret scanning on every commit",
+      description: "GitHub Advanced Security + TruffleHog on push; auto-block of leaks.",
+      domain: "SECURE_SDLC", status: "PASSING",
+      primaryFw: "SOC2_TYPE_II",
+      mappings: [],
+      owner: "security-eng@flowtora.com", testFrequency: "continuous",
+      lastTestedDays: 0, auto: true, autoResult: "OK" },
+    { externalId: "SEED-CC6.6", title: "Session timeout + session invalidation on password change",
+      description: "All sessions revoked on credential changes; max lifetime 12h.",
+      domain: "ACCESS_CONTROL", status: "PASSING",
+      primaryFw: "SOC2_TYPE_II",
+      mappings: [{ fw: "ISO_27001", ref: "A.9.4.2" }],
+      owner: "security-eng@flowtora.com", testFrequency: "monthly",
+      lastTestedDays: 6, auto: true, autoResult: "OK" },
+    { externalId: "SEED-MON-1", title: "24×7 alerting on production health metrics",
+      description: "PagerDuty rotation; SLO-based alerts; runbook per alert.",
+      domain: "MONITORING", status: "PENDING_EVIDENCE",
+      primaryFw: "SOC2_TYPE_II",
+      mappings: [{ fw: "ISO_27001", ref: "A.12.4.1" }],
+      owner: "operations@flowtora.com", testFrequency: "monthly",
+      auto: false },
+    { externalId: "SEED-PHY-1", title: "Physical security — cloud-only, no on-prem hosting",
+      description: "All compute in AWS regions with SOC 2 Type II + ISO 27001 hosts.",
+      domain: "PHYSICAL_SECURITY", status: "NOT_APPLICABLE",
+      primaryFw: "ISO_27001",
+      mappings: [{ fw: "SOC2_TYPE_II", ref: "CC6.4" }],
+      owner: "operations@flowtora.com", testFrequency: "annually",
+      auto: false },
+    { externalId: "SEED-BCP-2", title: "Quarterly DR restore drill",
+      description: "Restore latest snapshot to staging; verify integrity + RPO.",
+      domain: "BUSINESS_CONTINUITY", status: "FAILING",
+      primaryFw: "SOC2_TYPE_II",
+      mappings: [{ fw: "ISO_27001", ref: "A.17.1.2" }],
+      owner: "operations@flowtora.com", testFrequency: "quarterly",
+      lastTestedDays: 95, nextTestDays: -5, auto: false,
+      autoResult: undefined },
+    { externalId: "SEED-IR-2", title: "Forensic logging retained for 1 year",
+      description: "Audit log immutable; tamper-evident hash chain verified weekly.",
+      domain: "INCIDENT_RESPONSE", status: "PASSING",
+      primaryFw: "SOC2_TYPE_II",
+      mappings: [{ fw: "ISO_27001", ref: "A.12.4.1" }],
+      owner: "security-eng@flowtora.com", testFrequency: "weekly",
+      lastTestedDays: 4, auto: true, autoResult: "OK" },
+  ];
+  const ctrlIdByExtId = new Map<string, string>();
+  for (const c of controls) {
+    const saved = await db.complianceControl.upsert({
+      where: { externalId: c.externalId },
+      create: {
+        externalId: c.externalId, title: c.title, description: c.description,
+        domain: c.domain, status: c.status, ownerEmail: c.owner,
+        testFrequency: c.testFrequency,
+        lastTestedAt: c.lastTestedDays != null ? daysAgo(c.lastTestedDays) : null,
+        nextTestAt:   c.nextTestDays   != null ? daysAgo(-c.nextTestDays)  : null,
+        autoCheckEnabled: c.auto, autoCheckResult: c.autoResult ?? null,
+        primaryFrameworkId: fwIdByKey.get(c.primaryFw)!,
+      },
+      update: {
+        title: c.title, description: c.description,
+        domain: c.domain, status: c.status, ownerEmail: c.owner,
+        testFrequency: c.testFrequency,
+        lastTestedAt: c.lastTestedDays != null ? daysAgo(c.lastTestedDays) : null,
+        nextTestAt:   c.nextTestDays   != null ? daysAgo(-c.nextTestDays)  : null,
+        autoCheckEnabled: c.auto, autoCheckResult: c.autoResult ?? null,
+        primaryFrameworkId: fwIdByKey.get(c.primaryFw)!,
+      },
+      select: { id: true, externalId: true },
+    });
+    ctrlIdByExtId.set(saved.externalId, saved.id);
+    // Mappings.
+    for (const m of c.mappings) {
+      await db.complianceControlMapping.upsert({
+        where: {
+          controlId_frameworkKey_externalRef: {
+            controlId: saved.id, frameworkKey: m.fw, externalRef: m.ref,
+          },
+        },
+        create: { controlId: saved.id, frameworkKey: m.fw, externalRef: m.ref },
+        update: {},
+      });
+    }
+  }
+
+  // Recompute framework cached counts.
+  for (const [key, id] of fwIdByKey) {
+    const [total, passing] = await Promise.all([
+      db.complianceControl.count({ where: { primaryFrameworkId: id } }),
+      db.complianceControl.count({ where: { primaryFrameworkId: id, status: "PASSING" } }),
+    ]);
+    await db.complianceFramework.update({
+      where: { id },
+      data: {
+        totalControls: total,
+        passingCount: passing,
+        passingPct: total === 0 ? 0 : Math.round((passing / total) * 100),
+      },
+    });
+  }
+
+  // 3. Evidence (~30 entries, mix of auto and manual).
+  type EvBp = {
+    ctrlExtId: string; title: string; description: string;
+    source: "AUTO" | "MANUAL";
+    collector: string;
+    kind: "SCREENSHOT" | "EXPORT" | "LOG" | "ATTESTATION" | "CONFIG" | "REPORT" | "OTHER";
+    daysAgoCollected: number;
+  };
+  const ev: EvBp[] = [
+    { ctrlExtId: "SEED-CC6.1", title: "[seed] MFA enrollment report — Okta export",
+      description: "100% of platform admins enrolled with WebAuthn or TOTP",
+      source: "AUTO", collector: "Okta", kind: "EXPORT", daysAgoCollected: 8 },
+    { ctrlExtId: "SEED-CC6.1", title: "[seed] MFA challenge screenshot",
+      description: "Login flow showing TOTP prompt", source: "MANUAL",
+      collector: "Manual upload", kind: "SCREENSHOT", daysAgoCollected: 30 },
+    { ctrlExtId: "SEED-CC6.2", title: "[seed] RBAC role review attestation Q1",
+      description: "All staff roles reviewed by CISO; 4 over-privileged accounts demoted",
+      source: "MANUAL", collector: "Manual upload", kind: "ATTESTATION", daysAgoCollected: 14 },
+    { ctrlExtId: "SEED-CC7.2", title: "[seed] AuditLog hash-chain verifier output",
+      description: "Weekly cron run — chain intact for last 365 days",
+      source: "AUTO", collector: "Internal cron", kind: "LOG", daysAgoCollected: 1 },
+    { ctrlExtId: "SEED-CC7.4", title: "[seed] Snyk weekly summary",
+      description: "Last week: 0 critical, 2 high, 6 medium",
+      source: "AUTO", collector: "Snyk", kind: "REPORT", daysAgoCollected: 1 },
+    { ctrlExtId: "SEED-CC8.1", title: "[seed] GitHub branch-protection screenshot",
+      description: "main branch — required reviewers ≥1, status checks required",
+      source: "AUTO", collector: "GitHub", kind: "SCREENSHOT", daysAgoCollected: 4 },
+    { ctrlExtId: "SEED-CC8.1", title: "[seed] CI pipeline config",
+      description: "GitHub Actions workflow gating deploys",
+      source: "AUTO", collector: "GitHub", kind: "CONFIG", daysAgoCollected: 4 },
+    { ctrlExtId: "SEED-CC9.1", title: "[seed] AWS KMS key policy + rotation history",
+      description: "AES-256-GCM with 90-day rotation; last rotated 34d ago",
+      source: "AUTO", collector: "AWS CloudTrail", kind: "EXPORT", daysAgoCollected: 5 },
+    { ctrlExtId: "SEED-CC9.1", title: "[seed] TLS Labs A+ rating",
+      description: "Current grade: A+; HSTS enforced", source: "MANUAL",
+      collector: "Manual upload", kind: "SCREENSHOT", daysAgoCollected: 22 },
+    { ctrlExtId: "SEED-A.16.1", title: "[seed] Q4 tabletop exercise minutes",
+      description: "Simulated ransomware scenario; 14 action items closed",
+      source: "MANUAL", collector: "Manual upload", kind: "REPORT", daysAgoCollected: 95 },
+    { ctrlExtId: "SEED-A.17.1", title: "[seed] DR restore test — 2026-Q1",
+      description: "Restored prod snapshot to staging in 2h 47m (RTO target 4h)",
+      source: "MANUAL", collector: "Manual upload", kind: "REPORT", daysAgoCollected: 220 },
+    { ctrlExtId: "SEED-A.7.2", title: "[seed] Background-check provider attestation",
+      description: "Q1 batch — 3 new hires cleared", source: "MANUAL",
+      collector: "Checkr", kind: "ATTESTATION", daysAgoCollected: 60 },
+    { ctrlExtId: "SEED-GDPR-30", title: "[seed] ROPA — Q1 export",
+      description: "Article 30 record exported as CSV", source: "MANUAL",
+      collector: "Manual upload", kind: "EXPORT", daysAgoCollected: 30 },
+    { ctrlExtId: "SEED-GDPR-32", title: "[seed] TOMs document v3.2",
+      description: "Updated to reflect new pen-test findings", source: "MANUAL",
+      collector: "Manual upload", kind: "REPORT", daysAgoCollected: 70 },
+    { ctrlExtId: "SEED-VEN-1", title: "[seed] Vendor onboarding checklist — current",
+      description: "12-step checklist exported from internal CRM", source: "AUTO",
+      collector: "Manual upload", kind: "EXPORT", daysAgoCollected: 12 },
+    { ctrlExtId: "SEED-RISK-1", title: "[seed] Risk register — annual review minutes",
+      description: "All 32 risks reviewed; 4 status changes", source: "MANUAL",
+      collector: "Manual upload", kind: "REPORT", daysAgoCollected: 320 },
+    { ctrlExtId: "SEED-SDL-1", title: "[seed] TruffleHog config + recent run log",
+      description: "Pre-commit + push hooks; 1 detection auto-blocked last week",
+      source: "AUTO", collector: "GitHub Adv. Security", kind: "LOG", daysAgoCollected: 6 },
+    { ctrlExtId: "SEED-CC6.6", title: "[seed] Session lifetime config screenshot",
+      description: "NextAuth session configured for 12h max", source: "AUTO",
+      collector: "Manual upload", kind: "CONFIG", daysAgoCollected: 6 },
+    { ctrlExtId: "SEED-IR-2", title: "[seed] AuditLog retention dashboard",
+      description: "365-day retention shown in admin dashboard", source: "AUTO",
+      collector: "Datadog", kind: "SCREENSHOT", daysAgoCollected: 4 },
+    { ctrlExtId: "SEED-CC9.1", title: "[seed] Datadog TLS metric panel",
+      description: "TLS 1.3 negotiation rate >99.99% for last 30d", source: "AUTO",
+      collector: "Datadog", kind: "SCREENSHOT", daysAgoCollected: 9 },
+    { ctrlExtId: "SEED-GDPR-33", title: "[seed] Breach notification runbook v2.0",
+      description: "Includes DPA-defined notification template + on-call paths",
+      source: "MANUAL", collector: "Manual upload", kind: "OTHER", daysAgoCollected: 110 },
+  ];
+  await db.controlEvidence.createMany({
+    data: ev.map((e) => ({
+      controlId: ctrlIdByExtId.get(e.ctrlExtId)!,
+      title: e.title,
+      description: e.description,
+      source: e.source,
+      collector: e.collector,
+      kind: e.kind,
+      fileBytes: Math.floor(Math.random() * 800_000) + 50_000,
+      collectedAt: daysAgo(e.daysAgoCollected),
+    })),
+  });
+  // Update cached evidenceCount per control.
+  for (const [extId, id] of ctrlIdByExtId) {
+    const c = ev.filter((x) => x.ctrlExtId === extId).length;
+    await db.complianceControl.update({ where: { id }, data: { evidenceCount: c } });
+  }
+
+  // 4. Policies (~10) with sample acknowledgments.
+  type PolBp = {
+    slug: string; title: string; description: string; body: string;
+    version: string;
+    status: "DRAFT" | "IN_REVIEW" | "APPROVED" | "RETIRED";
+    owner: string;
+    distribution: string;
+    lastApprovedDays?: number;
+    lastReviewedDays?: number;
+    nextReviewDays?: number;
+    ackPct: number;
+  };
+  const policies: PolBp[] = [
+    { slug: "seed-information-security",
+      title: "Information Security Policy", version: "3.4", status: "APPROVED",
+      description: "Foundational policy describing the security program.",
+      body: "## Purpose\n\nDescribes the Flowtora security program — scope, roles, lifecycle.\n\n## Scope\nAll staff, contractors, and systems.\n\n## Roles\n- **CISO** — accountable.\n- **Security Engineering** — implements.\n\n## Review\nReviewed annually.",
+      owner: "ciso@flowtora.com", distribution: "All staff",
+      lastApprovedDays: 90, lastReviewedDays: 30, nextReviewDays: 275, ackPct: 0.95 },
+    { slug: "seed-access-control",
+      title: "Access Control Policy", version: "2.7", status: "APPROVED",
+      description: "RBAC, MFA, and joiner-mover-leaver process.",
+      body: "## RBAC\n- Least privilege.\n- Quarterly access reviews.\n\n## MFA\nWebAuthn/TOTP required for all admin accounts.\n\n## JML\n- Joiner: provisioned with role from HR.\n- Mover: re-evaluated within 7 days.\n- Leaver: revoked within 24h.",
+      owner: "ciso@flowtora.com", distribution: "All staff",
+      lastApprovedDays: 110, nextReviewDays: 255, ackPct: 0.90 },
+    { slug: "seed-acceptable-use",
+      title: "Acceptable Use Policy", version: "1.9", status: "APPROVED",
+      description: "Rules for use of company devices and accounts.",
+      body: "## Devices\n- Company laptops MDM-enrolled.\n- Disk encryption required.\n\n## Accounts\n- No password reuse.\n- Report phishing immediately.",
+      owner: "people@flowtora.com", distribution: "All staff",
+      lastApprovedDays: 200, nextReviewDays: 165, ackPct: 0.85 },
+    { slug: "seed-incident-response",
+      title: "Incident Response Plan", version: "2.1", status: "APPROVED",
+      description: "Triage, containment, eradication, recovery, lessons-learned.",
+      body: "## Triage\nOn-call assesses severity.\n\n## Roles\n- IC, scribe, comms.\n\n## Postmortem\nBlameless. Published within 7d.",
+      owner: "ciso@flowtora.com", distribution: "Engineering + Support",
+      lastApprovedDays: 60, nextReviewDays: 305, ackPct: 0.80 },
+    { slug: "seed-bcp-dr",
+      title: "Business Continuity & Disaster Recovery", version: "1.5", status: "APPROVED",
+      description: "RTO 4h, RPO 1h. Annual restore drill.",
+      body: "## Objectives\n- RTO: 4h\n- RPO: 1h\n\n## Test cadence\n- Quarterly tabletop\n- Annual full restore",
+      owner: "operations@flowtora.com", distribution: "Engineering + Operations",
+      lastApprovedDays: 220, nextReviewDays: 145, ackPct: 0.65 },
+    { slug: "seed-data-retention",
+      title: "Data Retention & Deletion", version: "1.2", status: "IN_REVIEW",
+      description: "Retention windows and deletion procedures.",
+      body: "## Tenant data\n- 90 days after cancellation, then deleted.\n\n## Audit logs\n- 365 days minimum.\n\n## Backups\n- 30-day rolling window.",
+      owner: "dpo@flowtora.com", distribution: "All staff",
+      lastReviewedDays: 14, nextReviewDays: 351, ackPct: 0.45 },
+    { slug: "seed-encryption",
+      title: "Encryption Policy", version: "2.0", status: "APPROVED",
+      description: "Approved algorithms + key management.",
+      body: "## At rest\nAES-256-GCM via AWS KMS.\n\n## In transit\nTLS 1.3.\n\n## Rotation\n90 days for data-encryption keys.",
+      owner: "security-eng@flowtora.com", distribution: "Engineering",
+      lastApprovedDays: 75, nextReviewDays: 290, ackPct: 0.95 },
+    { slug: "seed-vendor-management",
+      title: "Vendor Management Policy", version: "1.3", status: "APPROVED",
+      description: "Onboarding + ongoing review of third parties.",
+      body: "## Onboarding\nCAIQ-Lite + SOC 2 review required for any vendor processing PII.\n\n## Ongoing\nAnnual review.",
+      owner: "procurement@flowtora.com", distribution: "Procurement + Engineering",
+      lastApprovedDays: 130, nextReviewDays: 235, ackPct: 0.70 },
+    { slug: "seed-secure-sdlc",
+      title: "Secure SDLC Policy", version: "2.4", status: "APPROVED",
+      description: "Security checkpoints across the dev lifecycle.",
+      body: "## Phases\n- Design: threat model.\n- Code: review + secret scanning.\n- Deploy: sign-off + canary.",
+      owner: "engineering-lead@flowtora.com", distribution: "Engineering",
+      lastApprovedDays: 45, nextReviewDays: 320, ackPct: 0.85 },
+    { slug: "seed-vulnerability-management",
+      title: "Vulnerability Management Policy", version: "1.6", status: "DRAFT",
+      description: "Scan cadence, severity SLAs, exception process.",
+      body: "## SLA\n- Critical: 7d\n- High: 30d\n- Medium: 60d\n- Low: 90d",
+      owner: "security-eng@flowtora.com", distribution: "Engineering + Operations",
+      ackPct: 0 },
+  ];
+  for (const p of policies) {
+    const saved = await db.compliancePolicy.upsert({
+      where: { slug: p.slug },
+      create: {
+        slug: p.slug, title: p.title, description: p.description, body: p.body,
+        version: p.version, status: p.status,
+        ownerEmail: p.owner, distribution: p.distribution,
+        lastApprovedAt: p.lastApprovedDays != null ? daysAgo(p.lastApprovedDays) : null,
+        lastReviewedAt: p.lastReviewedDays != null ? daysAgo(p.lastReviewedDays) : null,
+        nextReviewAt:   p.nextReviewDays   != null ? daysAgo(-p.nextReviewDays)  : null,
+      },
+      update: {
+        title: p.title, description: p.description, body: p.body,
+        version: p.version, status: p.status,
+        ownerEmail: p.owner, distribution: p.distribution,
+        lastApprovedAt: p.lastApprovedDays != null ? daysAgo(p.lastApprovedDays) : null,
+        lastReviewedAt: p.lastReviewedDays != null ? daysAgo(p.lastReviewedDays) : null,
+        nextReviewAt:   p.nextReviewDays   != null ? daysAgo(-p.nextReviewDays)  : null,
+      },
+      select: { id: true, version: true },
+    });
+    // Synthesize acknowledgments from a fixed pool of seed-staff emails.
+    const pool = [
+      "owner@flowtora.com", "ciso@flowtora.com", "dpo@flowtora.com",
+      "security-eng@flowtora.com", "engineering-lead@flowtora.com",
+      "operations@flowtora.com", "people@flowtora.com",
+      "procurement@flowtora.com", "support-lead@flowtora.com", "billing@flowtora.com",
+    ];
+    const targetCount = Math.round(pool.length * p.ackPct);
+    const picked = sample(pool, targetCount);
+    if (picked.length > 0) {
+      await db.policyAcknowledgment.createMany({
+        data: picked.map((email) => ({
+          policyId: saved.id,
+          userEmail: email,
+          userName: email.split("@")[0]!,
+          policyVersion: saved.version,
+          acknowledgedAt: daysAgo(randInt(1, 60)),
+        })),
+        skipDuplicates: true,
+      });
+    }
+  }
+
+  // 5. Sub-processors (~9 — mostly real names).
+  type SpBp = {
+    name: string; purpose: string; dataLocation: string;
+    riskTier: "CRITICAL" | "HIGH" | "MEDIUM" | "LOW";
+    websiteUrl?: string; privacyUrl?: string;
+    dpaOnFile: boolean;
+    certs: Array<"SOC2_TYPE_II" | "ISO_27001" | "GDPR_DPA" | "PCI_DSS" | "HIPAA_BAA" | "FEDRAMP_MODERATE" | "TRUSTED_CLOUD" | "HITRUST">;
+    publiclyListed?: boolean;
+    lastReviewedDays?: number;
+    nextReviewDays?: number;
+    notes?: string;
+  };
+  const subProcessors: SpBp[] = [
+    { name: "[seed] Amazon Web Services", purpose: "Cloud infrastructure (compute, storage, KMS)",
+      dataLocation: "us-east-1 / eu-west-1", riskTier: "CRITICAL",
+      websiteUrl: "https://aws.amazon.com",
+      privacyUrl: "https://aws.amazon.com/privacy",
+      dpaOnFile: true, certs: ["SOC2_TYPE_II", "ISO_27001", "PCI_DSS", "HIPAA_BAA", "FEDRAMP_MODERATE"],
+      publiclyListed: true, lastReviewedDays: 60, nextReviewDays: 305 },
+    { name: "[seed] Neon Database",
+      purpose: "Managed Postgres database hosting",
+      dataLocation: "us-east-1 (AWS)", riskTier: "CRITICAL",
+      websiteUrl: "https://neon.tech",
+      dpaOnFile: true, certs: ["SOC2_TYPE_II", "GDPR_DPA"],
+      publiclyListed: true, lastReviewedDays: 70, nextReviewDays: 295 },
+    { name: "[seed] Vercel",
+      purpose: "Application hosting + edge network",
+      dataLocation: "Global edge (US/EU)", riskTier: "HIGH",
+      websiteUrl: "https://vercel.com",
+      dpaOnFile: true, certs: ["SOC2_TYPE_II", "ISO_27001", "GDPR_DPA"],
+      publiclyListed: true, lastReviewedDays: 80, nextReviewDays: 285 },
+    { name: "[seed] Stripe",
+      purpose: "Subscription billing + payment processing",
+      dataLocation: "Global", riskTier: "CRITICAL",
+      websiteUrl: "https://stripe.com",
+      dpaOnFile: true, certs: ["SOC2_TYPE_II", "ISO_27001", "PCI_DSS"],
+      publiclyListed: true, lastReviewedDays: 100, nextReviewDays: 265 },
+    { name: "[seed] Resend",
+      purpose: "Transactional email delivery",
+      dataLocation: "us-east-1 (AWS)", riskTier: "MEDIUM",
+      websiteUrl: "https://resend.com",
+      dpaOnFile: true, certs: ["SOC2_TYPE_II"],
+      publiclyListed: true, lastReviewedDays: 90, nextReviewDays: 275 },
+    { name: "[seed] Sentry",
+      purpose: "Error tracking + performance monitoring",
+      dataLocation: "us-east-1 (AWS)", riskTier: "MEDIUM",
+      websiteUrl: "https://sentry.io",
+      dpaOnFile: true, certs: ["SOC2_TYPE_II", "ISO_27001"],
+      publiclyListed: true, lastReviewedDays: 110, nextReviewDays: 255 },
+    { name: "[seed] PagerDuty",
+      purpose: "On-call paging + incident management",
+      dataLocation: "us-east-1 (AWS)", riskTier: "MEDIUM",
+      websiteUrl: "https://pagerduty.com",
+      dpaOnFile: true, certs: ["SOC2_TYPE_II", "ISO_27001"],
+      publiclyListed: false, lastReviewedDays: 130, nextReviewDays: 235 },
+    { name: "[seed] Cloudflare",
+      purpose: "DNS + edge security (WAF, DDoS)",
+      dataLocation: "Global", riskTier: "HIGH",
+      websiteUrl: "https://cloudflare.com",
+      dpaOnFile: true, certs: ["SOC2_TYPE_II", "ISO_27001", "PCI_DSS"],
+      publiclyListed: true, lastReviewedDays: 50, nextReviewDays: 315 },
+    { name: "[seed] HelpScout",
+      purpose: "Customer support inbox + KB",
+      dataLocation: "us-east-1 (AWS)", riskTier: "LOW",
+      websiteUrl: "https://helpscout.com",
+      dpaOnFile: false, certs: ["SOC2_TYPE_II"],
+      publiclyListed: true, lastReviewedDays: 200, nextReviewDays: 165,
+      notes: "DPA pending counter-signature from vendor side." },
+  ];
+  await db.subProcessor.createMany({
+    data: subProcessors.map((s) => ({
+      name: s.name, purpose: s.purpose, dataLocation: s.dataLocation,
+      riskTier: s.riskTier,
+      websiteUrl: s.websiteUrl ?? null,
+      privacyUrl: s.privacyUrl ?? null,
+      dpaOnFile: s.dpaOnFile,
+      certifications: s.certs,
+      publiclyListed: s.publiclyListed ?? true,
+      lastReviewedAt: s.lastReviewedDays != null ? daysAgo(s.lastReviewedDays) : null,
+      nextReviewAt:   s.nextReviewDays   != null ? daysAgo(-s.nextReviewDays)  : null,
+      notes: s.notes ?? null,
+    })),
+  });
+
+  // 6. Tenant DPAs — one per tenant with mixed status.
+  const dpaStatuses = ["SIGNED", "PENDING_TENANT_SIGNATURE", "REQUESTED"] as const;
+  for (let i = 0; i < tenants.length; i++) {
+    const t = tenants[i]!;
+    const status = dpaStatuses[i % dpaStatuses.length]!;
+    const isSigned = status === "SIGNED";
+    await db.tenantDpa.upsert({
+      where: { tenantId: t.id },
+      create: {
+        tenantId: t.id,
+        status,
+        templateVersion: "2026-Q1",
+        requestedAt: daysAgo(60),
+        signedAt: isSigned ? daysAgo(45) : null,
+        countersignedAt: isSigned ? daysAgo(43) : null,
+        expiresAt: isSigned ? daysAgo(-685) : null,
+        pdfUrl: isSigned ? `https://docs.flowtora.com/dpas/${t.slug}-2026.pdf` : null,
+        tenantSignerName: isSigned ? `${t.name} Counsel` : null,
+        tenantSignerEmail: isSigned ? `legal@${t.slug}.example` : null,
+        tenantSignerTitle: isSigned ? "General Counsel" : null,
+      },
+      update: {
+        status,
+        templateVersion: "2026-Q1",
+      },
+    });
+  }
+
+  // 7. Risk register (~10 risks with mitigations).
+  type RiskBp = {
+    extId: string; title: string; owner: string;
+    likelihood: "RARE" | "UNLIKELY" | "POSSIBLE" | "LIKELY" | "ALMOST_CERTAIN";
+    impact:     "NEGLIGIBLE" | "MINOR" | "MODERATE" | "MAJOR" | "SEVERE";
+    residualLikelihood: "RARE" | "UNLIKELY" | "POSSIBLE" | "LIKELY" | "ALMOST_CERTAIN";
+    residualImpact:     "NEGLIGIBLE" | "MINOR" | "MODERATE" | "MAJOR" | "SEVERE";
+    status: "IDENTIFIED" | "PLANNED" | "IN_PROGRESS" | "MITIGATED" | "ACCEPTED";
+    mitigation: string;
+    description?: string;
+    controlExternalId?: string;
+    nextReviewDays: number;
+  };
+  const RANK = { RARE: 1, UNLIKELY: 2, POSSIBLE: 3, LIKELY: 4, ALMOST_CERTAIN: 5 } as const;
+  const IRANK = { NEGLIGIBLE: 1, MINOR: 2, MODERATE: 3, MAJOR: 4, SEVERE: 5 } as const;
+  const risks: RiskBp[] = [
+    { extId: "SEED-RISK-001", title: "[seed] Compromise of platform admin credentials",
+      owner: "ciso@flowtora.com",
+      likelihood: "POSSIBLE", impact: "SEVERE",
+      residualLikelihood: "RARE", residualImpact: "MAJOR",
+      status: "IN_PROGRESS",
+      mitigation: "Mandatory WebAuthn/TOTP MFA, conditional access from corporate IPs, leaked-cred monitoring.",
+      controlExternalId: "SEED-CC6.1", nextReviewDays: 30 },
+    { extId: "SEED-RISK-002", title: "[seed] Database backup corruption",
+      owner: "operations@flowtora.com",
+      likelihood: "UNLIKELY", impact: "SEVERE",
+      residualLikelihood: "RARE", residualImpact: "MAJOR",
+      status: "MITIGATED",
+      mitigation: "Daily integrity verification, quarterly restore test, off-region backups.",
+      controlExternalId: "SEED-A.17.1", nextReviewDays: 90 },
+    { extId: "SEED-RISK-003", title: "[seed] Sub-processor data breach (Stripe / Neon / Resend)",
+      owner: "ciso@flowtora.com",
+      likelihood: "POSSIBLE", impact: "MAJOR",
+      residualLikelihood: "UNLIKELY", residualImpact: "MODERATE",
+      status: "ACCEPTED",
+      mitigation: "Vendor reviews, contractual audit rights, data-minimization. Residual accepted.",
+      nextReviewDays: 180 },
+    { extId: "SEED-RISK-004", title: "[seed] Insider threat — disgruntled engineer with prod access",
+      owner: "people@flowtora.com",
+      likelihood: "RARE", impact: "MAJOR",
+      residualLikelihood: "RARE", residualImpact: "MODERATE",
+      status: "IN_PROGRESS",
+      mitigation: "Background checks, audit-log monitoring, separation of duties, exit revocation SLA <24h.",
+      controlExternalId: "SEED-A.7.2", nextReviewDays: 60 },
+    { extId: "SEED-RISK-005", title: "[seed] DDoS-induced multi-day outage",
+      owner: "operations@flowtora.com",
+      likelihood: "UNLIKELY", impact: "MAJOR",
+      residualLikelihood: "RARE", residualImpact: "MINOR",
+      status: "MITIGATED",
+      mitigation: "Cloudflare WAF + rate-limiting; Vercel autoscaling; tested runbook.",
+      nextReviewDays: 120 },
+    { extId: "SEED-RISK-006", title: "[seed] Critical CVE in core dependency (next.js / prisma)",
+      owner: "engineering-lead@flowtora.com",
+      likelihood: "LIKELY", impact: "MAJOR",
+      residualLikelihood: "UNLIKELY", residualImpact: "MODERATE",
+      status: "IN_PROGRESS",
+      mitigation: "Snyk / Dependabot weekly + patch SLA: critical 7d, high 30d.",
+      controlExternalId: "SEED-CC7.4", nextReviewDays: 14 },
+    { extId: "SEED-RISK-007", title: "[seed] GDPR enforcement action over data transfer",
+      owner: "dpo@flowtora.com",
+      likelihood: "UNLIKELY", impact: "MAJOR",
+      residualLikelihood: "RARE", residualImpact: "MODERATE",
+      status: "MITIGATED",
+      mitigation: "EU data-residency option, SCCs in DPAs, no transfers outside adequacy zones.",
+      controlExternalId: "SEED-GDPR-32", nextReviewDays: 90 },
+    { extId: "SEED-RISK-008", title: "[seed] Misconfigured S3 bucket exposing tenant proofs",
+      owner: "security-eng@flowtora.com",
+      likelihood: "POSSIBLE", impact: "MAJOR",
+      residualLikelihood: "UNLIKELY", residualImpact: "MINOR",
+      status: "MITIGATED",
+      mitigation: "Bucket-policy linter in CI, AWS Config rules, automated remediation.",
+      nextReviewDays: 60 },
+    { extId: "SEED-RISK-009", title: "[seed] Phishing of finance team to wire funds",
+      owner: "people@flowtora.com",
+      likelihood: "POSSIBLE", impact: "MODERATE",
+      residualLikelihood: "RARE", residualImpact: "MODERATE",
+      status: "PLANNED",
+      mitigation: "Quarterly phishing simulations + dual-control approvals on wires >$5k.",
+      nextReviewDays: 30 },
+    { extId: "SEED-RISK-010", title: "[seed] Loss of CISO without succession plan",
+      owner: "ceo@flowtora.com",
+      likelihood: "UNLIKELY", impact: "MODERATE",
+      residualLikelihood: "RARE", residualImpact: "MINOR",
+      status: "IDENTIFIED",
+      mitigation: "Documented playbook + cross-training. Recruit deputy CISO.",
+      nextReviewDays: 180 },
+  ];
+  await db.riskRegisterItem.createMany({
+    data: risks.map((r) => ({
+      externalId: r.extId,
+      title: r.title,
+      description: r.description ?? null,
+      ownerEmail: r.owner,
+      likelihood: r.likelihood,
+      impact: r.impact,
+      score: RANK[r.likelihood] * IRANK[r.impact],
+      residualScore: RANK[r.residualLikelihood] * IRANK[r.residualImpact],
+      status: r.status,
+      mitigation: r.mitigation,
+      controlExternalId: r.controlExternalId ?? null,
+      reviewedAt: daysAgo(randInt(7, 60)),
+      nextReviewAt: daysAgo(-r.nextReviewDays),
+    })),
+  });
+
+  // 8. Vendor reviews (~6).
+  type VrBp = {
+    name: string; url?: string; owner: string;
+    status: "PENDING_QUESTIONNAIRE" | "IN_REVIEW" | "APPROVED" | "CONDITIONALLY_APPROVED" | "REJECTED" | "ARCHIVED";
+    region: string; data: string[];
+    certs: Array<"SOC2_TYPE_II" | "ISO_27001" | "GDPR_DPA" | "PCI_DSS" | "HIPAA_BAA" | "FEDRAMP_MODERATE" | "TRUSTED_CLOUD" | "HITRUST">;
+    score?: number;
+    soc2?: string;
+    nextReviewDays?: number;
+  };
+  const vendors: VrBp[] = [
+    { name: "[seed] Snyk",
+      url: "https://snyk.io", owner: "security-eng@flowtora.com",
+      status: "APPROVED", region: "us-east-1",
+      data: ["dependency metadata"], certs: ["SOC2_TYPE_II", "ISO_27001"],
+      score: 92,
+      soc2: "https://docs.flowtora.com/vendor-soc2/snyk.pdf",
+      nextReviewDays: 305 },
+    { name: "[seed] Linear",
+      url: "https://linear.app", owner: "engineering-lead@flowtora.com",
+      status: "APPROVED", region: "us-east-1",
+      data: ["issue metadata"], certs: ["SOC2_TYPE_II"],
+      score: 86, nextReviewDays: 275 },
+    { name: "[seed] Notion",
+      url: "https://notion.so", owner: "people@flowtora.com",
+      status: "CONDITIONALLY_APPROVED", region: "Global",
+      data: ["internal docs"], certs: ["SOC2_TYPE_II", "ISO_27001"],
+      score: 74, nextReviewDays: 60,
+      soc2: "https://docs.flowtora.com/vendor-soc2/notion.pdf" },
+    { name: "[seed] Loom",
+      url: "https://loom.com", owner: "support-lead@flowtora.com",
+      status: "IN_REVIEW", region: "us-east-1",
+      data: ["screen recordings"], certs: ["SOC2_TYPE_II"],
+      score: 68 },
+    { name: "[seed] Calendly",
+      url: "https://calendly.com", owner: "sales-ops@flowtora.com",
+      status: "PENDING_QUESTIONNAIRE", region: "us-east-1",
+      data: ["scheduling metadata"], certs: ["SOC2_TYPE_II"] },
+    { name: "[seed] Figma",
+      url: "https://figma.com", owner: "design-lead@flowtora.com",
+      status: "APPROVED", region: "us-east-1",
+      data: ["design assets"], certs: ["SOC2_TYPE_II", "ISO_27001"],
+      score: 90, nextReviewDays: 295 },
+    { name: "[seed] LegacyTool Inc.",
+      url: "https://legacy.example", owner: "operations@flowtora.com",
+      status: "REJECTED", region: "us-west-2",
+      data: ["customer PII"], certs: [],
+      score: 32 },
+  ];
+  await db.vendorReview.createMany({
+    data: vendors.map((v) => ({
+      vendorName: v.name, vendorUrl: v.url ?? null, ownerEmail: v.owner,
+      status: v.status, region: v.region,
+      dataCategories: v.data, certifications: v.certs,
+      questionnaireBody: null,
+      questionnaireScore: v.score ?? null,
+      soc2Url: v.soc2 ?? null,
+      contractUrl: null,
+      approvedAt: v.status === "APPROVED" || v.status === "CONDITIONALLY_APPROVED" ? daysAgo(randInt(20, 200)) : null,
+      rejectedReason: v.status === "REJECTED"
+        ? "No SOC 2; insufficient encryption-at-rest controls. Recommended alternative."
+        : null,
+      nextReviewAt: v.nextReviewDays != null ? daysAgo(-v.nextReviewDays) : null,
+    })),
+  });
+
+  // 9. Compliance reports — 3 sample audit packages.
+  await db.complianceReport.createMany({
+    data: [
+      { kind: "SOC2_TYPE_II_PACKAGE",
+        title: "[seed] SOC 2 Type II 2025 audit package",
+        frameworkId: fwIdByKey.get("SOC2_TYPE_II")!,
+        status: "READY",
+        periodStart: daysAgo(460),
+        periodEnd:   daysAgo(95),
+        pdfUrl: "https://docs.flowtora.com/audits/soc2-type-ii-2025.pdf",
+        zipUrl: "https://docs.flowtora.com/audits/soc2-type-ii-2025.zip",
+        bytes: 4_200_000,
+        deliveredTo: "auditor@prescient-assurance.example",
+        deliveredAt: daysAgo(94),
+        notes: "Final report — no qualified opinions." },
+      { kind: "ISO_27001_STATEMENT_OF_APPLICABILITY",
+        title: "[seed] ISO 27001 Statement of Applicability — 2026",
+        frameworkId: fwIdByKey.get("ISO_27001")!,
+        status: "READY",
+        periodStart: daysAgo(180), periodEnd: daysAgo(0),
+        pdfUrl: "https://docs.flowtora.com/audits/iso27001-soa-2026.pdf",
+        bytes: 2_800_000,
+        notes: "All Annex A controls evaluated; 4 marked NOT_APPLICABLE with justification." },
+      { kind: "GDPR_ARTICLE_30_RECORD",
+        title: "[seed] GDPR Article 30 Record — Q1 2026",
+        frameworkId: fwIdByKey.get("GDPR")!,
+        status: "READY",
+        periodStart: daysAgo(90), periodEnd: daysAgo(0),
+        pdfUrl: "https://docs.flowtora.com/audits/ropa-2026-q1.pdf",
+        bytes: 1_900_000 },
+      { kind: "CUSTOM",
+        title: "[seed] Penetration Test Executive Summary 2026-Q1",
+        frameworkId: null,
+        status: "DELIVERED",
+        periodStart: daysAgo(120), periodEnd: daysAgo(95),
+        pdfUrl: "https://docs.flowtora.com/audits/pentest-2026-q1-summary.pdf",
+        bytes: 1_100_000,
+        deliveredTo: "compliance@flowtora.com",
+        deliveredAt: daysAgo(90) },
+    ],
+  });
+
+  console.log(
+    `  ✓ ${frameworks.length} frameworks, ${controls.length} controls, ${ev.length} evidence rows, ${policies.length} policies, ${subProcessors.length} sub-processors, ${tenants.length} tenant DPAs, ${risks.length} risks, ${vendors.length} vendor reviews, 4 reports`,
   );
 }
 
