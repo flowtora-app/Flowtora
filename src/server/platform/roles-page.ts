@@ -117,6 +117,8 @@ export const PERMISSION_DESCRIPTIONS: Record<PlatformPermission, string> = {
   "network.read":     "View IP allow/block lists, geo restrictions, feed toggles, DDoS events, WAF rules.",
   "network.manage":   "Edit allowlists, blocklists, per-tenant network mode, geo restrictions, feed toggles, bot settings.",
   "network.waf.write": "Author + edit WAF rules (managed + custom).",
+  "system.status.read":   "View System Status — service grid, dependency graph, latency + error charts.",
+  "system.status.manage": "Edit service catalog, dependencies, override status, ack alerts, log deploys.",
   // Analytics
   "analytics.read":        "Read analytics dashboards.",
   "analytics.export":      "Export analytics datasets.",

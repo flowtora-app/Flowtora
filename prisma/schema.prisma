@@ -13348,3 +13348,199 @@ model WafRule {
   @@index([type, enabled])
   @@index([priority])
 }
+
+// ────────────────────────────────────────────────────────────
+// Page 56 — System Status.
+// ────────────────────────────────────────────────────────────
+
+enum SystemServiceKind {
+  API
+  WEB_APP
+  AUTH
+  DB_PRIMARY
+  DB_REPLICA
+  REDIS
+  QUEUE_WORKER
+  OBJECT_STORAGE
+  SEARCH
+  EMAIL
+  WEBHOOKS
+  CDN
+  WEBSOCKET
+  AI
+  CRON
+  OTHER
+}
+
+enum SystemServiceStatus {
+  OPERATIONAL
+  DEGRADED
+  PARTIAL_OUTAGE
+  MAJOR_OUTAGE
+  MAINTENANCE
+}
+
+enum ServiceAlertSeverity {
+  PAGE
+  WARNING
+  INFO
+}
+
+enum ServiceAlertStatus {
+  FIRING
+  ACKNOWLEDGED
+  RESOLVED
+  SUPPRESSED
+}
+
+enum ServiceDeployStatus {
+  IN_PROGRESS
+  SUCCEEDED
+  FAILED
+  ROLLED_BACK
+}
+
+/** A platform service we monitor. The "Service grid" cards on the
+ *  System Status page each render one of these rows. */
+model SystemService {
+  id String @id @default(cuid())
+
+  /** URL-safe slug. */
+  slug         String  @unique
+  name         String
+  kind         SystemServiceKind
+  description  String?
+
+  /** Current rolled-up status (re-computed on metric ingest + alert). */
+  status       SystemServiceStatus @default(OPERATIONAL)
+
+  /** Optional region tag (e.g. "us-east-1", "global"). */
+  region       String?
+
+  /** 30-day uptime percentage (0..100, 4 decimals). Cached. */
+  uptime30dPct Float   @default(100)
+  /** 90-day uptime percentage (0..100). Cached. */
+  uptime90dPct Float   @default(100)
+
+  /** Latest sample summary — denormalized for fast card render. */
+  latestRps      Int?
+  latestErrorPct Float?
+  latestP50Ms    Int?
+  latestP95Ms    Int?
+  latestP99Ms    Int?
+  latestCpuPct   Float?
+  latestMemPct   Float?
+
+  /** Optional cross-link to a runbook (slug). */
+  runbookSlug  String?
+
+  /** Free-form display order — lower first on the grid. */
+  displayOrder Int     @default(100)
+
+  createdAt DateTime @default(now())
+  updatedAt DateTime @updatedAt
+
+  metrics       ServiceMetricSample[]
+  alerts        ServiceAlert[]
+  deploys       ServiceDeployMarker[]
+  /** Directed dependencies from this service (we depend on these). */
+  dependsOn     ServiceDependency[]   @relation("ServiceDependsOn")
+  /** Reverse — services that depend on us. */
+  dependedOnBy  ServiceDependency[]   @relation("ServiceDependedOnBy")
+
+  @@index([status, displayOrder])
+}
+
+/** Time-series sample. We keep enough samples for the 1h/6h/24h/7d/30d charts. */
+model ServiceMetricSample {
+  id String @id @default(cuid())
+
+  serviceId String
+  service   SystemService @relation(fields: [serviceId], references: [id], onDelete: Cascade)
+
+  occurredAt DateTime
+  /** Requests per second. */
+  rps        Int
+  /** Error rate percentage 0..100. */
+  errorPct   Float
+  /** Latency milliseconds. */
+  p50Ms      Int
+  p95Ms      Int
+  p99Ms      Int
+  /** CPU + memory utilisation percentage 0..100. */
+  cpuPct     Float
+  memPct     Float
+
+  @@unique([serviceId, occurredAt])
+  @@index([serviceId, occurredAt])
+}
+
+/** Currently-firing alert tied to a service. */
+model ServiceAlert {
+  id String @id @default(cuid())
+
+  serviceId String
+  service   SystemService @relation(fields: [serviceId], references: [id], onDelete: Cascade)
+
+  severity   ServiceAlertSeverity @default(WARNING)
+  status     ServiceAlertStatus   @default(FIRING)
+  /** Short alert title (e.g. "p95 latency >500ms for 5m"). */
+  title      String
+  description String?
+  /** Source: Datadog / Prometheus / PagerDuty / Manual. */
+  source     String?
+  /** Counter-style — how many times this alert has fired. */
+  fireCount  Int     @default(1)
+
+  firedAt        DateTime @default(now())
+  acknowledgedAt DateTime?
+  resolvedAt     DateTime?
+  acknowledgedById String?
+
+  @@index([serviceId, status])
+  @@index([severity, status])
+}
+
+/** Recent deploy marker overlaid on the service detail charts. */
+model ServiceDeployMarker {
+  id String @id @default(cuid())
+
+  serviceId String
+  service   SystemService @relation(fields: [serviceId], references: [id], onDelete: Cascade)
+
+  deployedAt DateTime @default(now())
+  /** Short deploy ref (e.g. "v1.42.7" / commit SHA). */
+  ref        String
+  /** Display title — what changed. */
+  title      String?
+  /** "Vercel", "GitHub Actions", "Manual" etc. */
+  source     String?
+  status     ServiceDeployStatus @default(SUCCEEDED)
+
+  /** Whether the chart should mark this deploy with a vertical line. */
+  showOnChart Boolean @default(true)
+
+  createdAt DateTime @default(now())
+
+  @@index([serviceId, deployedAt])
+}
+
+/** Directional edge between two services for the dependency graph. */
+model ServiceDependency {
+  id String @id @default(cuid())
+
+  fromId String
+  from   SystemService @relation("ServiceDependsOn", fields: [fromId], references: [id], onDelete: Cascade)
+
+  toId   String
+  to     SystemService @relation("ServiceDependedOnBy", fields: [toId], references: [id], onDelete: Cascade)
+
+  /** Optional kind of dependency: "calls", "reads", "publishes". */
+  kind String?
+  /** Whether the dependency is critical (failure here cascades). */
+  critical Boolean @default(false)
+
+  createdAt DateTime @default(now())
+
+  @@unique([fromId, toId])
+}

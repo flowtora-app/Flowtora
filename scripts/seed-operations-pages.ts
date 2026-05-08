@@ -78,6 +78,7 @@ async function main() {
   await seedBackups(platformUsers, tenants);          // Page 53
   await seedIncidents(platformUsers, tenants);        // Page 54
   await seedNetwork(platformUsers, tenants);          // Page 55
+  await seedSystemStatus();                            // Page 56
 
   console.log("\n✓ Seed complete.\n");
   await db.$disconnect();
@@ -315,6 +316,8 @@ async function wipeOldSeed() {
   await db.networkFeedToggle.deleteMany({ where: { sourceName: { startsWith: "[seed] " } } });
   await db.ddosEvent.deleteMany({ where: { summary: { startsWith: "[seed] " } } });
   await db.wafRule.deleteMany({ where: { name: { startsWith: "[seed] " } } });
+  // Page 56 — System status wipe (cascades samples / alerts / deploys / dependencies).
+  await db.systemService.deleteMany({ where: { slug: { startsWith: "seed-" } } });
   // Customers tagged seed (after orders are gone).
   await db.customer.deleteMany({ where: { tags: { has: "seed" } } });
   // Products tagged seed (use description marker since Product has no tags array).
@@ -10177,6 +10180,341 @@ async function seedNetwork(
 
   console.log(
     `  ✓ ${rules.length} network rules, ${geoEntries.length} geo, ${feeds.length} feeds, 5 DDoS events, 10 WAF rules, ${tenants.length} tenant configs`,
+  );
+}
+
+/* ── Page 56 — System Status seed ──────────────────────── */
+
+async function seedSystemStatus() {
+  console.log("── Seeding System Status (Page 56)…");
+
+  type SvcBp = {
+    slug: string;
+    name: string;
+    kind: "API" | "WEB_APP" | "AUTH" | "DB_PRIMARY" | "DB_REPLICA" | "REDIS"
+        | "QUEUE_WORKER" | "OBJECT_STORAGE" | "SEARCH" | "EMAIL" | "WEBHOOKS"
+        | "CDN" | "WEBSOCKET" | "AI" | "CRON" | "OTHER";
+    description: string;
+    status: "OPERATIONAL" | "DEGRADED" | "PARTIAL_OUTAGE" | "MAJOR_OUTAGE" | "MAINTENANCE";
+    region: string;
+    uptime30dPct: number;
+    uptime90dPct: number;
+    runbookSlug?: string;
+    /** Baseline metric ranges. */
+    baseRps:    [number, number];
+    baseErr:    [number, number]; // 0..100
+    baseP50:    [number, number];
+    baseP95:    [number, number];
+    baseP99:    [number, number];
+    baseCpu:    [number, number];
+    baseMem:    [number, number];
+    /** Whether to inject a degradation in the last 12h for the spark. */
+    degradedTail?: boolean;
+    displayOrder: number;
+  };
+  const services: SvcBp[] = [
+    { slug: "seed-api", name: "Public API", kind: "API",
+      description: "REST API gateway", status: "OPERATIONAL",
+      region: "global", uptime30dPct: 99.98, uptime90dPct: 99.95,
+      runbookSlug: "seed-deploy-rollback",
+      baseRps: [380, 460], baseErr: [0.05, 0.4], baseP50: [40, 80], baseP95: [120, 220], baseP99: [220, 380],
+      baseCpu: [25, 45], baseMem: [40, 60],
+      displayOrder: 10 },
+    { slug: "seed-web", name: "Web app", kind: "WEB_APP",
+      description: "app.flowtora.com — Next.js + Vercel", status: "OPERATIONAL",
+      region: "global", uptime30dPct: 99.99, uptime90dPct: 99.97,
+      baseRps: [220, 300], baseErr: [0.02, 0.3], baseP50: [60, 110], baseP95: [180, 280], baseP99: [320, 480],
+      baseCpu: [15, 30], baseMem: [30, 50],
+      displayOrder: 20 },
+    { slug: "seed-auth", name: "Auth", kind: "AUTH",
+      description: "NextAuth + 2FA + SAML", status: "OPERATIONAL",
+      region: "global", uptime30dPct: 99.99, uptime90dPct: 99.96,
+      runbookSlug: "seed-saml-callback-failure",
+      baseRps: [60, 100], baseErr: [0.01, 0.2], baseP50: [30, 70], baseP95: [80, 160], baseP99: [140, 260],
+      baseCpu: [10, 25], baseMem: [25, 45],
+      displayOrder: 30 },
+    { slug: "seed-db-primary", name: "DB primary", kind: "DB_PRIMARY",
+      description: "Neon Postgres — primary", status: "OPERATIONAL",
+      region: "us-east-1", uptime30dPct: 99.99, uptime90dPct: 99.99,
+      runbookSlug: "seed-postgres-replica-lag",
+      baseRps: [880, 1200], baseErr: [0.01, 0.05], baseP50: [2, 8], baseP95: [10, 28], baseP99: [25, 60],
+      baseCpu: [40, 65], baseMem: [60, 80],
+      displayOrder: 40 },
+    { slug: "seed-db-replica", name: "DB replica (eu-west-1)", kind: "DB_REPLICA",
+      description: "Neon read replica — Europe", status: "DEGRADED",
+      region: "eu-west-1", uptime30dPct: 99.92, uptime90dPct: 99.88,
+      runbookSlug: "seed-postgres-replica-lag",
+      baseRps: [380, 520], baseErr: [0.05, 0.3], baseP50: [4, 18], baseP95: [22, 80], baseP99: [60, 180],
+      baseCpu: [55, 78], baseMem: [70, 88],
+      degradedTail: true,
+      displayOrder: 41 },
+    { slug: "seed-redis", name: "Redis", kind: "REDIS",
+      description: "ElastiCache — sessions + queues", status: "OPERATIONAL",
+      region: "us-east-1", uptime30dPct: 99.97, uptime90dPct: 99.93,
+      runbookSlug: "seed-redis-failover",
+      baseRps: [1800, 2400], baseErr: [0, 0.05], baseP50: [1, 3], baseP95: [4, 9], baseP99: [9, 22],
+      baseCpu: [35, 55], baseMem: [50, 70],
+      displayOrder: 50 },
+    { slug: "seed-queue", name: "Queue workers", kind: "QUEUE_WORKER",
+      description: "Background job runners", status: "OPERATIONAL",
+      region: "us-east-1", uptime30dPct: 99.96, uptime90dPct: 99.93,
+      baseRps: [40, 80], baseErr: [0.5, 1.5], baseP50: [200, 400], baseP95: [800, 1600], baseP99: [1600, 3200],
+      baseCpu: [40, 70], baseMem: [50, 75],
+      displayOrder: 60 },
+    { slug: "seed-storage", name: "Object storage", kind: "OBJECT_STORAGE",
+      description: "S3 + Cloudflare R2 mirror", status: "OPERATIONAL",
+      region: "us-east-1", uptime30dPct: 99.99, uptime90dPct: 99.98,
+      baseRps: [180, 280], baseErr: [0.01, 0.1], baseP50: [10, 30], baseP95: [40, 100], baseP99: [80, 220],
+      baseCpu: [20, 40], baseMem: [30, 50],
+      displayOrder: 70 },
+    { slug: "seed-search", name: "Search", kind: "SEARCH",
+      description: "Elasticsearch", status: "MAINTENANCE",
+      region: "us-east-1", uptime30dPct: 99.85, uptime90dPct: 99.80,
+      baseRps: [80, 140], baseErr: [0.1, 0.5], baseP50: [40, 90], baseP95: [120, 280], baseP99: [220, 480],
+      baseCpu: [60, 85], baseMem: [70, 90],
+      degradedTail: true,
+      displayOrder: 80 },
+    { slug: "seed-email", name: "Email delivery", kind: "EMAIL",
+      description: "Resend transactional email", status: "OPERATIONAL",
+      region: "global", uptime30dPct: 99.95, uptime90dPct: 99.90,
+      baseRps: [10, 30], baseErr: [0.05, 0.4], baseP50: [60, 140], baseP95: [180, 380], baseP99: [320, 720],
+      baseCpu: [10, 25], baseMem: [20, 40],
+      displayOrder: 90 },
+    { slug: "seed-webhooks", name: "Webhooks", kind: "WEBHOOKS",
+      description: "Outbound webhook fanout", status: "OPERATIONAL",
+      region: "global", uptime30dPct: 99.96, uptime90dPct: 99.93,
+      baseRps: [60, 120], baseErr: [0.5, 2.0], baseP50: [80, 180], baseP95: [220, 480], baseP99: [380, 880],
+      baseCpu: [25, 45], baseMem: [35, 55],
+      displayOrder: 100 },
+    { slug: "seed-cdn", name: "CDN", kind: "CDN",
+      description: "Cloudflare + Vercel edge", status: "OPERATIONAL",
+      region: "global", uptime30dPct: 99.99, uptime90dPct: 99.99,
+      baseRps: [4800, 6800], baseErr: [0.01, 0.1], baseP50: [10, 25], baseP95: [40, 90], baseP99: [80, 180],
+      baseCpu: [10, 20], baseMem: [15, 30],
+      displayOrder: 110 },
+    { slug: "seed-ws", name: "WebSocket", kind: "WEBSOCKET",
+      description: "Realtime channel", status: "OPERATIONAL",
+      region: "global", uptime30dPct: 99.94, uptime90dPct: 99.90,
+      baseRps: [180, 280], baseErr: [0.05, 0.3], baseP50: [10, 25], baseP95: [40, 80], baseP99: [80, 180],
+      baseCpu: [20, 40], baseMem: [25, 50],
+      displayOrder: 120 },
+    { slug: "seed-ai", name: "AI services", kind: "AI",
+      description: "Anthropic-backed AI helpers", status: "OPERATIONAL",
+      region: "global", uptime30dPct: 99.92, uptime90dPct: 99.85,
+      baseRps: [4, 18], baseErr: [0.5, 2.0], baseP50: [800, 1800], baseP95: [2400, 4400], baseP99: [4000, 7200],
+      baseCpu: [5, 15], baseMem: [10, 20],
+      displayOrder: 130 },
+    { slug: "seed-cron", name: "Cron / scheduler", kind: "CRON",
+      description: "Scheduled jobs runner", status: "OPERATIONAL",
+      region: "us-east-1", uptime30dPct: 99.98, uptime90dPct: 99.95,
+      baseRps: [1, 4], baseErr: [0.5, 1.5], baseP50: [120, 300], baseP95: [400, 1200], baseP99: [800, 2400],
+      baseCpu: [10, 25], baseMem: [15, 30],
+      displayOrder: 140 },
+  ];
+
+  const idBySlug = new Map<string, string>();
+  for (const s of services) {
+    const saved = await db.systemService.upsert({
+      where: { slug: s.slug },
+      create: {
+        slug: s.slug, name: s.name, kind: s.kind, description: s.description,
+        status: s.status, region: s.region,
+        uptime30dPct: s.uptime30dPct, uptime90dPct: s.uptime90dPct,
+        runbookSlug: s.runbookSlug ?? null,
+        displayOrder: s.displayOrder,
+      },
+      update: {
+        name: s.name, kind: s.kind, description: s.description,
+        status: s.status, region: s.region,
+        uptime30dPct: s.uptime30dPct, uptime90dPct: s.uptime90dPct,
+        runbookSlug: s.runbookSlug ?? null,
+        displayOrder: s.displayOrder,
+      },
+      select: { id: true },
+    });
+    idBySlug.set(s.slug, saved.id);
+  }
+
+  // Dependencies (directional).
+  const depEdges: Array<{ from: string; to: string; kind: string; critical: boolean }> = [
+    { from: "seed-web",      to: "seed-api",          kind: "calls",      critical: true  },
+    { from: "seed-web",      to: "seed-cdn",          kind: "fronted-by", critical: false },
+    { from: "seed-web",      to: "seed-ws",           kind: "calls",      critical: false },
+    { from: "seed-api",      to: "seed-auth",         kind: "calls",      critical: true  },
+    { from: "seed-api",      to: "seed-db-primary",   kind: "writes",     critical: true  },
+    { from: "seed-api",      to: "seed-redis",        kind: "calls",      critical: true  },
+    { from: "seed-api",      to: "seed-search",       kind: "calls",      critical: false },
+    { from: "seed-api",      to: "seed-storage",      kind: "calls",      critical: false },
+    { from: "seed-api",      to: "seed-queue",        kind: "publishes",  critical: false },
+    { from: "seed-api",      to: "seed-ai",           kind: "calls",      critical: false },
+    { from: "seed-auth",     to: "seed-db-primary",   kind: "reads",      critical: true  },
+    { from: "seed-auth",     to: "seed-redis",        kind: "calls",      critical: true  },
+    { from: "seed-queue",    to: "seed-db-primary",   kind: "writes",     critical: true  },
+    { from: "seed-queue",    to: "seed-redis",        kind: "calls",      critical: true  },
+    { from: "seed-queue",    to: "seed-email",        kind: "calls",      critical: false },
+    { from: "seed-queue",    to: "seed-webhooks",     kind: "publishes",  critical: false },
+    { from: "seed-cron",     to: "seed-queue",        kind: "publishes",  critical: false },
+    { from: "seed-cron",     to: "seed-db-primary",   kind: "writes",     critical: false },
+    { from: "seed-db-replica", to: "seed-db-primary", kind: "replicates", critical: true  },
+    { from: "seed-webhooks", to: "seed-redis",        kind: "calls",      critical: false },
+    { from: "seed-storage",  to: "seed-cdn",          kind: "fronted-by", critical: false },
+    { from: "seed-ws",       to: "seed-redis",        kind: "calls",      critical: false },
+  ];
+  for (const e of depEdges) {
+    const fromId = idBySlug.get(e.from);
+    const toId = idBySlug.get(e.to);
+    if (!fromId || !toId) continue;
+    await db.serviceDependency.upsert({
+      where: { fromId_toId: { fromId, toId } },
+      create: { fromId, toId, kind: e.kind, critical: e.critical },
+      update: { kind: e.kind, critical: e.critical },
+    });
+  }
+
+  // Time-series samples — last 24h, 30-min granularity (48 samples per service).
+  // Heavy-ish but capped at 15 services × 48 = 720 rows.
+  const now = Date.now();
+  const stepMs = 30 * 60_000;
+  const totalSamples = 48;
+  const sampleRows: Array<{
+    serviceId: string;
+    occurredAt: Date;
+    rps: number; errorPct: number; p50Ms: number; p95Ms: number; p99Ms: number;
+    cpuPct: number; memPct: number;
+  }> = [];
+  for (const s of services) {
+    const id = idBySlug.get(s.slug);
+    if (!id) continue;
+    let lastRps = randInt(s.baseRps[0], s.baseRps[1]);
+    let lastErr = Math.random() * (s.baseErr[1] - s.baseErr[0]) + s.baseErr[0];
+    let lastP50 = randInt(s.baseP50[0], s.baseP50[1]);
+    let lastP95 = randInt(s.baseP95[0], s.baseP95[1]);
+    let lastP99 = randInt(s.baseP99[0], s.baseP99[1]);
+    let lastCpu = Math.random() * (s.baseCpu[1] - s.baseCpu[0]) + s.baseCpu[0];
+    let lastMem = Math.random() * (s.baseMem[1] - s.baseMem[0]) + s.baseMem[0];
+    for (let i = 0; i < totalSamples; i++) {
+      const t = new Date(now - (totalSamples - 1 - i) * stepMs);
+      // Drift gently within the band.
+      lastRps = Math.max(0, Math.round(lastRps * (0.95 + Math.random() * 0.1)));
+      lastErr = Math.min(20, Math.max(0, lastErr + (Math.random() - 0.5) * 0.2));
+      lastP50 = Math.max(1, Math.round(lastP50 * (0.95 + Math.random() * 0.1)));
+      lastP95 = Math.max(2, Math.round(lastP95 * (0.95 + Math.random() * 0.1)));
+      lastP99 = Math.max(3, Math.round(lastP99 * (0.95 + Math.random() * 0.1)));
+      lastCpu = Math.min(100, Math.max(0, lastCpu + (Math.random() - 0.5) * 5));
+      lastMem = Math.min(100, Math.max(0, lastMem + (Math.random() - 0.5) * 3));
+      // For services flagged degradedTail, push the last 12h higher.
+      if (s.degradedTail && i > totalSamples - 24) {
+        lastErr = Math.min(20, lastErr * 1.6 + 0.5);
+        lastP95 = Math.round(lastP95 * 1.4);
+        lastP99 = Math.round(lastP99 * 1.6);
+        lastCpu = Math.min(100, lastCpu * 1.15);
+      }
+      sampleRows.push({
+        serviceId: id, occurredAt: t,
+        rps: lastRps, errorPct: Math.round(lastErr * 100) / 100,
+        p50Ms: lastP50, p95Ms: lastP95, p99Ms: lastP99,
+        cpuPct: Math.round(lastCpu * 10) / 10, memPct: Math.round(lastMem * 10) / 10,
+      });
+    }
+    // Update latest-* on the service row.
+    const last = sampleRows[sampleRows.length - 1]!;
+    await db.systemService.update({
+      where: { id },
+      data: {
+        latestRps: last.rps, latestErrorPct: last.errorPct,
+        latestP50Ms: last.p50Ms, latestP95Ms: last.p95Ms, latestP99Ms: last.p99Ms,
+        latestCpuPct: last.cpuPct, latestMemPct: last.memPct,
+      },
+    });
+  }
+  // Bulk insert in chunks.
+  for (let i = 0; i < sampleRows.length; i += 200) {
+    await db.serviceMetricSample.createMany({
+      data: sampleRows.slice(i, i + 200),
+      skipDuplicates: true,
+    });
+  }
+
+  // Alerts — a few firing on degraded services.
+  if (idBySlug.has("seed-db-replica")) {
+    await db.serviceAlert.create({
+      data: {
+        serviceId: idBySlug.get("seed-db-replica")!,
+        severity: "WARNING", status: "FIRING",
+        title: "[seed] Replica lag >60s for 5min",
+        description: "Replica is behind primary; check replication slot status.",
+        source: "Datadog", fireCount: 4,
+        firedAt: new Date(Date.now() - 12 * 60_000),
+      },
+    });
+  }
+  if (idBySlug.has("seed-search")) {
+    await db.serviceAlert.create({
+      data: {
+        serviceId: idBySlug.get("seed-search")!,
+        severity: "INFO", status: "ACKNOWLEDGED",
+        title: "[seed] Search reindex in progress",
+        description: "Maintenance window auto-acknowledged.",
+        source: "Manual", fireCount: 1,
+        firedAt: new Date(Date.now() - 70 * 60_000),
+        acknowledgedAt: new Date(Date.now() - 60 * 60_000),
+      },
+    });
+  }
+  if (idBySlug.has("seed-queue")) {
+    await db.serviceAlert.create({
+      data: {
+        serviceId: idBySlug.get("seed-queue")!,
+        severity: "WARNING", status: "RESOLVED",
+        title: "[seed] Queue depth elevated",
+        description: "Resolved after autoscaler kicked in.",
+        source: "Datadog", fireCount: 1,
+        firedAt: new Date(Date.now() - 240 * 60_000),
+        resolvedAt: new Date(Date.now() - 180 * 60_000),
+      },
+    });
+  }
+
+  // Recent deploys overlaid on the chart.
+  const deployRows: Array<{
+    serviceId: string; ref: string; title?: string; source?: string;
+    status: "SUCCEEDED" | "FAILED" | "ROLLED_BACK";
+    deployedHoursAgo: number;
+  }> = [];
+  if (idBySlug.has("seed-api")) {
+    deployRows.push({ serviceId: idBySlug.get("seed-api")!, ref: "v1.42.8", title: "API: invoice export hardening",
+      source: "Vercel", status: "SUCCEEDED", deployedHoursAgo: 4 });
+    deployRows.push({ serviceId: idBySlug.get("seed-api")!, ref: "v1.42.7", title: "API: webhook signing refactor",
+      source: "Vercel", status: "ROLLED_BACK", deployedHoursAgo: 22 });
+  }
+  if (idBySlug.has("seed-web")) {
+    deployRows.push({ serviceId: idBySlug.get("seed-web")!, ref: "v1.42.8", title: "Web: a11y improvements",
+      source: "Vercel", status: "SUCCEEDED", deployedHoursAgo: 4 });
+  }
+  if (idBySlug.has("seed-queue")) {
+    deployRows.push({ serviceId: idBySlug.get("seed-queue")!, ref: "v1.42.8", title: "Queue: backoff tweaks",
+      source: "GitHub Actions", status: "SUCCEEDED", deployedHoursAgo: 4 });
+  }
+  if (idBySlug.has("seed-search")) {
+    deployRows.push({ serviceId: idBySlug.get("seed-search")!, ref: "es-7.18 → 8.13", title: "Search: ES upgrade",
+      source: "Manual", status: "IN_PROGRESS" as never, deployedHoursAgo: 1 });
+  }
+  if (idBySlug.has("seed-ai")) {
+    deployRows.push({ serviceId: idBySlug.get("seed-ai")!, ref: "model-2026-04", title: "AI: model update",
+      source: "Anthropic", status: "SUCCEEDED", deployedHoursAgo: 12 });
+  }
+  for (const d of deployRows) {
+    await db.serviceDeployMarker.create({
+      data: {
+        serviceId: d.serviceId, ref: d.ref, title: d.title ?? null, source: d.source ?? null,
+        status: d.status as "IN_PROGRESS" | "SUCCEEDED" | "FAILED" | "ROLLED_BACK",
+        deployedAt: new Date(Date.now() - d.deployedHoursAgo * 3_600_000),
+      },
+    });
+  }
+
+  console.log(
+    `  ✓ ${services.length} services, ${depEdges.length} dependencies, ${sampleRows.length} metric samples, 3 alerts, ${deployRows.length} deploys`,
   );
 }
 
