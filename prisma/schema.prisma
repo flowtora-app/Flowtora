@@ -421,6 +421,8 @@ model Tenant {
   ssoConfigs             SsoTenantConfig[]
   // Page 51 — Compliance — per-tenant DPA tracker (one row per tenant).
   dpa                    TenantDpa?
+  // Page 52 — Privacy requests scoped to this tenant.
+  privacyRequests        PrivacyRequest[]
 }
 
 // ────────────────────────────────────────────────────────────
@@ -1357,6 +1359,9 @@ model User {
   securityFindingsResolved SecurityFinding[]    @relation("SecurityFindingResolver")
   suspiciousActivities     SuspiciousActivity[]
   passwordPolicyAudit      PasswordPolicyAudit?
+
+  // Page 52 — privacy requests assigned to this admin.
+  privacyRequestsAssigned  PrivacyRequest[]     @relation("PrivacyRequestAssignee")
 }
 
 // Platform-side roles. The first three (SUPER_ADMIN, SITE_MANAGER,
@@ -12144,4 +12149,269 @@ model ComplianceReport {
 
   @@index([kind, createdAt])
   @@index([status, createdAt])
+}
+
+// ────────────────────────────────────────────────────────────
+// Page 52 — Data Privacy Requests (GDPR / CCPA / CPRA / LGPD / PIPEDA).
+// ────────────────────────────────────────────────────────────
+
+enum PrivacyRequestType {
+  ACCESS_EXPORT
+  DELETION
+  RECTIFICATION
+  RESTRICTION
+  OBJECTION
+  PORTABILITY
+  OPT_OUT_OF_SALE
+}
+
+enum PrivacyJurisdiction {
+  GDPR
+  UK_GDPR
+  CCPA
+  CPRA
+  LGPD
+  PIPEDA
+  OTHER
+}
+
+enum PrivacyRequestSource {
+  TENANT_PORTAL
+  EMAIL
+  WEB_FORM
+  PHONE
+  API
+}
+
+enum PrivacyRequestStatus {
+  RECEIVED
+  AWAITING_VERIFICATION
+  VERIFIED
+  IN_PROGRESS
+  AWAITING_LEGAL_HOLD_REVIEW
+  AWAITING_SUBJECT_INFO
+  COMPLETED
+  REJECTED
+  WITHDRAWN
+}
+
+enum PrivacyVerificationStatus {
+  PENDING
+  VERIFIED
+  FAILED
+  WAIVED
+}
+
+enum PrivacyVerificationMethod {
+  ID_UPLOAD
+  EMAIL_LINK
+  MFA_CHALLENGE
+  SECURITY_QUESTIONS
+  VIDEO_CALL
+  KNOWN_AUTH_SESSION
+}
+
+enum PrivacyScopeSystem {
+  POSTGRES
+  S3
+  STRIPE
+  RESEND
+  SENTRY
+  AUDIT_LOG
+  TENANT_CACHE
+  SUPPORT_INBOX
+  ANALYTICS
+  WEBHOOKS
+  OTHER
+}
+
+enum PrivacyScopeStatus {
+  PENDING
+  RUNNING
+  COMPLETE
+  FAILED
+  SKIPPED
+}
+
+enum PrivacyMessageDirection {
+  INBOUND
+  OUTBOUND
+}
+
+enum PrivacyMessageChannel {
+  EMAIL
+  PORTAL
+  PHONE
+  IN_APP
+}
+
+/** Top-level Subject Access / Deletion / Rectification request. */
+model PrivacyRequest {
+  id String @id @default(cuid())
+
+  /** Stable human id like DSR-2026-0042. */
+  externalId String @unique
+
+  type        PrivacyRequestType
+  jurisdiction PrivacyJurisdiction
+  source      PrivacyRequestSource
+  status      PrivacyRequestStatus      @default(RECEIVED)
+
+  /** Subject info — denormalized so the request survives if a tenant
+   *  / user is later deleted. */
+  subjectName  String
+  subjectEmail String
+  /** Optional alternate identifier (account number, tenant slug). */
+  subjectIdentifier String?
+
+  tenantId String?
+  tenant   Tenant? @relation(fields: [tenantId], references: [id], onDelete: SetNull)
+
+  /** Verification rolled-up state. */
+  verificationStatus PrivacyVerificationStatus @default(PENDING)
+
+  /** SLA window in days (30 GDPR, 45 CCPA). */
+  slaDays Int      @default(30)
+  /** Computed deadline = createdAt + slaDays. */
+  slaDeadline DateTime
+
+  /** Legal hold blocks deletion. */
+  legalHold Boolean @default(false)
+  legalHoldReason String?
+
+  /** Free-form receipt body — original tenant submission text. */
+  intakeNotes String?
+
+  /** Internal triage notes. */
+  internalNotes String?
+
+  /** Final report (PDF) URL for the completed request. */
+  finalReportUrl String?
+  /** Encrypted export bundle URL (for ACCESS_EXPORT type). */
+  exportBundleUrl String?
+  exportBundleExpiresAt DateTime?
+  /** Whether the export bundle was generated (for KPI rollup). */
+  exportGenerated Boolean @default(false)
+
+  /** Reason if rejected. */
+  rejectedReason String?
+
+  assignedToId String?
+  assignedTo   User?   @relation("PrivacyRequestAssignee", fields: [assignedToId], references: [id], onDelete: SetNull)
+
+  /** Triage stamp + completion timestamps. */
+  receivedAt   DateTime @default(now())
+  verifiedAt   DateTime?
+  completedAt  DateTime?
+  rejectedAt   DateTime?
+
+  createdAt DateTime @default(now())
+  updatedAt DateTime @updatedAt
+
+  verifications  PrivacyVerificationDoc[]
+  scopeResults   PrivacyScopeDiscovery[]
+  messages       PrivacyRequestMessage[]
+  auditEntries   PrivacyRequestAuditEntry[]
+
+  @@index([status, slaDeadline])
+  @@index([type, status])
+  @@index([tenantId, status])
+  @@index([assignedToId, status])
+}
+
+/** One row per uploaded verification document or completed challenge. */
+model PrivacyVerificationDoc {
+  id String @id @default(cuid())
+
+  requestId String
+  request   PrivacyRequest @relation(fields: [requestId], references: [id], onDelete: Cascade)
+
+  method  PrivacyVerificationMethod
+  status  PrivacyVerificationStatus @default(PENDING)
+  /** Stored file URL (e.g. uploaded ID). */
+  fileUrl String?
+  /** Free-form notes from the verifier. */
+  notes   String?
+
+  /** Who recorded the verification result. */
+  verifiedById String?
+  verifiedAt   DateTime?
+
+  createdAt DateTime @default(now())
+
+  @@index([requestId, createdAt])
+}
+
+/** Per-system scope discovery row — one for every system queried for the request. */
+model PrivacyScopeDiscovery {
+  id String @id @default(cuid())
+
+  requestId String
+  request   PrivacyRequest @relation(fields: [requestId], references: [id], onDelete: Cascade)
+
+  system    PrivacyScopeSystem
+  status    PrivacyScopeStatus @default(PENDING)
+  /** Number of records found in this system. */
+  resultCount Int   @default(0)
+  /** Bytes of data discovered (for the export ZIP estimate). */
+  resultBytes Int?
+
+  /** Where the discovery output is staged (S3 key / temp bucket). */
+  exportKey String?
+  /** Free-form notes about the discovery (e.g. "tenant has no Stripe customer"). */
+  notes    String?
+  /** When the system was last queried. */
+  lastRunAt DateTime?
+
+  createdAt DateTime @default(now())
+  updatedAt DateTime @updatedAt
+
+  @@unique([requestId, system])
+  @@index([status])
+}
+
+/** Communication thread with the data subject. */
+model PrivacyRequestMessage {
+  id String @id @default(cuid())
+
+  requestId String
+  request   PrivacyRequest @relation(fields: [requestId], references: [id], onDelete: Cascade)
+
+  direction PrivacyMessageDirection
+  channel   PrivacyMessageChannel
+  /** Display name shown in the thread. */
+  senderName  String?
+  senderEmail String?
+
+  subject String?
+  body    String
+
+  /** Optional template id used (for outbound messages). */
+  templateKey String?
+
+  authorUserId String?
+
+  occurredAt DateTime @default(now())
+
+  @@index([requestId, occurredAt])
+}
+
+/** Immutable per-request audit entry — every action stamped here. */
+model PrivacyRequestAuditEntry {
+  id String @id @default(cuid())
+
+  requestId String
+  request   PrivacyRequest @relation(fields: [requestId], references: [id], onDelete: Cascade)
+
+  /** Action key like "request.received", "verification.verified", "scope.completed", "export.generated", "subject.deleted". */
+  action     String
+  actorEmail String?
+  actorName  String?
+  details    String?
+  /** Before/after JSON for the rectification flow. */
+  payload    Json?
+
+  occurredAt DateTime @default(now())
+
+  @@index([requestId, occurredAt])
 }

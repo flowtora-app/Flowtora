@@ -247,6 +247,11 @@ export type PlatformPermission =
   | "compliance.evidence.upload"
   | "compliance.vendor.review"
   | "compliance.report.generate"
+  // Compliance & Security — Page 52 Data Privacy Requests
+  | "privacy.read"
+  | "privacy.triage"
+  | "privacy.process"
+  | "privacy.delete"
 
   // Analytics / BI
   | "analytics.read"
@@ -291,6 +296,7 @@ const PLATFORM_ALL: PlatformPermission[] = [
   "sso.read", "sso.manage", "sso.test_login",
   "security.read", "security.manage", "security.findings.resolve",
   "compliance.policy.write", "compliance.evidence.upload", "compliance.vendor.review", "compliance.report.generate",
+  "privacy.read", "privacy.triage", "privacy.process", "privacy.delete",
   "analytics.read", "analytics.export", "revenue.read", "usage.read",
   "reports.read", "reports.create", "reports.edit", "reports.delete",
   "reports.schedule", "reports.export",
@@ -305,7 +311,7 @@ const PLATFORM_ALL: PlatformPermission[] = [
 const PLATFORM_BASELINE_READ: PlatformPermission[] = [
   "tenant.read", "billing.read", "staff.read", "users.read",
   "support.read", "health.read", "audit.read", "compliance.read",
-  "feature_flag.read", "announcement.read", "leads.read", "referrals.read", "affiliates.read", "seo.read", "integrations.read", "webhooks.read", "docs.read", "marketplace.read", "sso.read", "security.read",
+  "feature_flag.read", "announcement.read", "leads.read", "referrals.read", "affiliates.read", "seo.read", "integrations.read", "webhooks.read", "docs.read", "marketplace.read", "sso.read", "security.read", "privacy.read",
   "analytics.read", "revenue.read", "usage.read",
   "reports.read", "reports.export", // every staff role reads + can export
   "system.read_settings", "notifications.read",
@@ -363,6 +369,7 @@ export const PLATFORM_ROLE_PERMISSIONS: Record<PlatformRole, PlatformPermission[
     "security.manage", "security.findings.resolve",
     "compliance.manage", "compliance.policy.write", "compliance.evidence.upload",
     "compliance.vendor.review", "compliance.report.generate",
+    "privacy.triage", "privacy.process", "privacy.delete",
     "analytics.export",
     "reports.create", "reports.edit", "reports.schedule",
     "notifications.manage",
@@ -374,6 +381,7 @@ export const PLATFORM_ROLE_PERMISSIONS: Record<PlatformRole, PlatformPermission[
     "support.read", "support.respond", "support.macro_manage", "support.feedback_triage",
     "audit.read", "announcement.read", "announcement.write",
     "notifications.read",
+    "privacy.read", "privacy.triage",
   ]),
   // Billing team. Can issue refunds, mint coupons, change plans —
   // everything money. No tenant suspension, no staff edits.

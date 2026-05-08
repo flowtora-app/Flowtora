@@ -74,6 +74,7 @@ async function main() {
   await seedSso(platformUsers, tenants);              // Page 49
   await seedSecurityCenter(platformUsers);            // Page 50
   await seedCompliance(tenants);                      // Page 51
+  await seedPrivacyRequests(platformUsers, tenants);  // Page 52
 
   console.log("\n✓ Seed complete.\n");
   await db.$disconnect();
@@ -292,6 +293,8 @@ async function wipeOldSeed() {
   await db.riskRegisterItem.deleteMany({ where: { externalId: { startsWith: "SEED-RISK-" } } });
   await db.vendorReview.deleteMany({ where: { vendorName: { startsWith: "[seed] " } } });
   await db.complianceReport.deleteMany({ where: { title: { startsWith: "[seed] " } } });
+  // Page 52 — Privacy Requests wipe (cascades verifications/scope/messages/audit).
+  await db.privacyRequest.deleteMany({ where: { externalId: { startsWith: "DSR-SEED-" } } });
   // Customers tagged seed (after orders are gone).
   await db.customer.deleteMany({ where: { tags: { has: "seed" } } });
   // Products tagged seed (use description marker since Product has no tags array).
@@ -8475,6 +8478,471 @@ async function seedCompliance(tenants: { id: string; name: string; slug: string 
 
   console.log(
     `  ✓ ${frameworks.length} frameworks, ${controls.length} controls, ${ev.length} evidence rows, ${policies.length} policies, ${subProcessors.length} sub-processors, ${tenants.length} tenant DPAs, ${risks.length} risks, ${vendors.length} vendor reviews, 4 reports`,
+  );
+}
+
+/* ── Page 52 — Data Privacy Requests seed ─────────────── */
+
+async function seedPrivacyRequests(
+  staff: { id: string; email: string; name: string | null }[],
+  tenants: { id: string; name: string; slug: string }[],
+) {
+  console.log("── Seeding Privacy Requests (Page 52)…");
+
+  type ReqBp = {
+    extId: string;
+    type: "ACCESS_EXPORT" | "DELETION" | "RECTIFICATION" | "RESTRICTION" | "OBJECTION" | "PORTABILITY" | "OPT_OUT_OF_SALE";
+    jurisdiction: "GDPR" | "UK_GDPR" | "CCPA" | "CPRA" | "LGPD" | "PIPEDA" | "OTHER";
+    source: "TENANT_PORTAL" | "EMAIL" | "WEB_FORM" | "PHONE" | "API";
+    status: "RECEIVED" | "AWAITING_VERIFICATION" | "VERIFIED" | "IN_PROGRESS" | "AWAITING_LEGAL_HOLD_REVIEW" | "AWAITING_SUBJECT_INFO" | "COMPLETED" | "REJECTED" | "WITHDRAWN";
+    verification: "PENDING" | "VERIFIED" | "FAILED" | "WAIVED";
+    subjectName: string;
+    subjectEmail: string;
+    subjectIdentifier?: string;
+    tenantIdx?: number;
+    receivedDaysAgo: number;
+    verifiedDaysAgo?: number;
+    completedDaysAgo?: number;
+    rejectedDaysAgo?: number;
+    rejectedReason?: string;
+    legalHold?: boolean;
+    legalHoldReason?: string;
+    intakeNotes?: string;
+    internalNotes?: string;
+    exportGenerated?: boolean;
+    finalReportGenerated?: boolean;
+    assignedToIdx?: number;
+    scopes?: Array<{
+      system: "POSTGRES" | "S3" | "STRIPE" | "RESEND" | "SENTRY" | "AUDIT_LOG" | "TENANT_CACHE" | "SUPPORT_INBOX" | "ANALYTICS" | "WEBHOOKS" | "OTHER";
+      status: "PENDING" | "RUNNING" | "COMPLETE" | "FAILED" | "SKIPPED";
+      records: number;
+      bytes: number;
+      daysAgoLastRun?: number;
+    }>;
+    messages?: Array<{
+      direction: "INBOUND" | "OUTBOUND";
+      channel: "EMAIL" | "PORTAL" | "PHONE" | "IN_APP";
+      subject?: string;
+      body: string;
+      daysAgo: number;
+    }>;
+    verifications?: Array<{
+      method: "ID_UPLOAD" | "EMAIL_LINK" | "MFA_CHALLENGE" | "SECURITY_QUESTIONS" | "VIDEO_CALL" | "KNOWN_AUTH_SESSION";
+      status: "PENDING" | "VERIFIED" | "FAILED" | "WAIVED";
+      notes?: string;
+      daysAgo: number;
+    }>;
+    audit?: Array<{
+      action: string;
+      details: string;
+      daysAgo: number;
+    }>;
+  };
+
+  const now = new Date();
+  const reviewer = staff[0]!;
+  const dpoEmail = "dpo@flowtora.com";
+
+  const reqs: ReqBp[] = [
+    {
+      extId: "DSR-SEED-2026-0001",
+      type: "ACCESS_EXPORT", jurisdiction: "GDPR", source: "EMAIL",
+      status: "COMPLETED", verification: "VERIFIED",
+      subjectName: "Anja Berger", subjectEmail: "anja.berger@example.de",
+      subjectIdentifier: "tenant-customer:abc-1234",
+      tenantIdx: 0,
+      receivedDaysAgo: 22, verifiedDaysAgo: 21, completedDaysAgo: 14,
+      assignedToIdx: 0,
+      intakeNotes: "Hello, I would like a copy of all personal data you hold about me. — Anja",
+      internalNotes: "Tenant confirmed Anja is an active end-customer. Standard export.",
+      exportGenerated: true, finalReportGenerated: true,
+      scopes: [
+        { system: "POSTGRES",     status: "COMPLETE", records: 187, bytes: 412_000, daysAgoLastRun: 18 },
+        { system: "S3",           status: "COMPLETE", records: 14,  bytes: 6_400_000, daysAgoLastRun: 18 },
+        { system: "STRIPE",       status: "COMPLETE", records: 9,   bytes: 38_000, daysAgoLastRun: 18 },
+        { system: "RESEND",       status: "COMPLETE", records: 23,  bytes: 14_000, daysAgoLastRun: 18 },
+        { system: "AUDIT_LOG",    status: "COMPLETE", records: 412, bytes: 220_000, daysAgoLastRun: 18 },
+      ],
+      messages: [
+        { direction: "INBOUND",  channel: "EMAIL", subject: "Subject Access Request",
+          body: "Hello, I am writing to request a copy of all my personal data under Article 15 GDPR. Please respond within the legal timeframe.",
+          daysAgo: 22 },
+        { direction: "OUTBOUND", channel: "EMAIL", subject: "DSR-SEED-2026-0001 — verification needed",
+          body: "Thank you for your request. To verify your identity we have sent a one-time link to anja.berger@example.de. Please click it within 7 days.",
+          daysAgo: 22 },
+        { direction: "OUTBOUND", channel: "EMAIL", subject: "DSR-SEED-2026-0001 — your data export is ready",
+          body: "Your export is ready. The download link is valid for 7 days and is encrypted with a password we will send separately.",
+          daysAgo: 14 },
+      ],
+      verifications: [
+        { method: "EMAIL_LINK", status: "VERIFIED", notes: "Subject clicked one-time link from corporate email.", daysAgo: 21 },
+      ],
+      audit: [
+        { action: "request.received",            details: "Intake from email",                                daysAgo: 22 },
+        { action: "verification.email_sent",     details: "Verification email link sent",                     daysAgo: 22 },
+        { action: "verification.verified",       details: "Subject clicked verification link from same email", daysAgo: 21 },
+        { action: "scope.completed",             details: "5 systems queried · 645 records · 7.1 MB",          daysAgo: 18 },
+        { action: "export.generated",            details: "Encrypted ZIP bundle generated; 7-day delivery link issued", daysAgo: 14 },
+        { action: "report.generated",            details: "Final report PDF generated; request marked completed",        daysAgo: 14 },
+      ],
+    },
+    {
+      extId: "DSR-SEED-2026-0002",
+      type: "DELETION", jurisdiction: "CCPA", source: "WEB_FORM",
+      status: "AWAITING_LEGAL_HOLD_REVIEW", verification: "VERIFIED",
+      subjectName: "Marcus Chen", subjectEmail: "mchen@example.com",
+      tenantIdx: 1,
+      receivedDaysAgo: 9, verifiedDaysAgo: 8,
+      legalHold: true, legalHoldReason: "Subject has an active dispute (Case 2026-DSP-014). Hold deletion until resolved.",
+      assignedToIdx: 0,
+      intakeNotes: "Please delete all my account data immediately.",
+      internalNotes: "Active billing dispute — held by Compliance counsel.",
+      scopes: [
+        { system: "POSTGRES",     status: "COMPLETE", records: 312, bytes: 540_000, daysAgoLastRun: 7 },
+        { system: "STRIPE",       status: "COMPLETE", records: 18,  bytes: 70_000,  daysAgoLastRun: 7 },
+        { system: "AUDIT_LOG",    status: "SKIPPED",  records: 0,   bytes: 0 },
+      ],
+      messages: [
+        { direction: "INBOUND",  channel: "PORTAL",
+          body: "Hi - please delete my account and all related data per CCPA §1798.105. Thanks.",
+          daysAgo: 9 },
+        { direction: "OUTBOUND", channel: "EMAIL", subject: "DSR-SEED-2026-0002 — verification + legal hold notice",
+          body: "Thank you for your request. We have verified your identity. Please note an active billing dispute is on file; deletion is paused until that is resolved per CCPA §1798.105(d)(1).",
+          daysAgo: 7 },
+      ],
+      verifications: [
+        { method: "MFA_CHALLENGE", status: "VERIFIED", notes: "MFA challenge passed via active session.", daysAgo: 8 },
+      ],
+      audit: [
+        { action: "request.received",  details: "Intake from web form",                            daysAgo: 9 },
+        { action: "verification.verified", details: "MFA challenge succeeded",                      daysAgo: 8 },
+        { action: "scope.completed",   details: "Postgres + Stripe queried",                       daysAgo: 7 },
+        { action: "legalHold.set",     details: "Hold applied — Case 2026-DSP-014",                daysAgo: 6 },
+      ],
+    },
+    {
+      extId: "DSR-SEED-2026-0003",
+      type: "RECTIFICATION", jurisdiction: "GDPR", source: "TENANT_PORTAL",
+      status: "IN_PROGRESS", verification: "VERIFIED",
+      subjectName: "Sara Karimi", subjectEmail: "sara.karimi@example.fr",
+      tenantIdx: 0,
+      receivedDaysAgo: 4, verifiedDaysAgo: 3,
+      assignedToIdx: 0,
+      intakeNotes: "My phone number is wrong (+33 0612345678 should be +33 0698765432). Also surname spelling fixed.",
+      scopes: [
+        { system: "POSTGRES",     status: "COMPLETE", records: 4, bytes: 1_200, daysAgoLastRun: 2 },
+        { system: "TENANT_CACHE", status: "COMPLETE", records: 1, bytes: 200,   daysAgoLastRun: 2 },
+      ],
+      verifications: [
+        { method: "EMAIL_LINK", status: "VERIFIED", daysAgo: 3 },
+      ],
+      messages: [
+        { direction: "INBOUND",  channel: "PORTAL",
+          body: "Please correct my phone number and surname.",
+          daysAgo: 4 },
+        { direction: "OUTBOUND", channel: "EMAIL", subject: "DSR-SEED-2026-0003 — corrections in flight",
+          body: "Thank you. We have logged your corrections and will confirm once propagated.",
+          daysAgo: 2 },
+      ],
+      audit: [
+        { action: "request.received", details: "Tenant portal submission",   daysAgo: 4 },
+        { action: "verification.verified", details: "Email-link verified",   daysAgo: 3 },
+        { action: "scope.completed",  details: "Found 4 records to update", daysAgo: 2 },
+      ],
+    },
+    {
+      extId: "DSR-SEED-2026-0004",
+      type: "OPT_OUT_OF_SALE", jurisdiction: "CPRA", source: "WEB_FORM",
+      status: "COMPLETED", verification: "WAIVED",
+      subjectName: "Olivia Perez", subjectEmail: "olivia.p@example.com",
+      tenantIdx: 1,
+      receivedDaysAgo: 30, completedDaysAgo: 30,
+      assignedToIdx: 0,
+      intakeNotes: "Opt me out of sale of personal info per CPRA.",
+      internalNotes: "We do not sell personal info — confirmed already opted out.",
+      scopes: [
+        { system: "POSTGRES", status: "COMPLETE", records: 1, bytes: 400, daysAgoLastRun: 30 },
+      ],
+      verifications: [
+        { method: "KNOWN_AUTH_SESSION", status: "WAIVED", notes: "No verification needed — opt-out is a one-step request.", daysAgo: 30 },
+      ],
+      audit: [
+        { action: "request.received", details: "Web form intake",          daysAgo: 30 },
+        { action: "verification.waived", details: "Verification waived",   daysAgo: 30 },
+        { action: "report.generated",    details: "Confirmation issued",   daysAgo: 30 },
+      ],
+    },
+    {
+      extId: "DSR-SEED-2026-0005",
+      type: "ACCESS_EXPORT", jurisdiction: "UK_GDPR", source: "EMAIL",
+      status: "AWAITING_VERIFICATION", verification: "PENDING",
+      subjectName: "James Whitfield", subjectEmail: "j.whitfield@example.co.uk",
+      tenantIdx: 0,
+      receivedDaysAgo: 2,
+      assignedToIdx: 0,
+      intakeNotes: "Please send me everything you have.",
+      verifications: [
+        { method: "EMAIL_LINK", status: "PENDING", notes: "Verification link sent; awaiting click.", daysAgo: 2 },
+      ],
+      audit: [
+        { action: "request.received",       details: "Intake from email",                       daysAgo: 2 },
+        { action: "verification.email_sent", details: "Verification email link dispatched",     daysAgo: 2 },
+      ],
+    },
+    {
+      extId: "DSR-SEED-2026-0006",
+      type: "OBJECTION", jurisdiction: "GDPR", source: "EMAIL",
+      status: "RECEIVED", verification: "PENDING",
+      subjectName: "Henrik Larsson", subjectEmail: "henrik.l@example.se",
+      tenantIdx: 2,
+      receivedDaysAgo: 0,
+      intakeNotes: "I object to your further processing of my personal data based on legitimate interest. Cite Article 21 GDPR.",
+      audit: [
+        { action: "request.received", details: "Intake from email", daysAgo: 0 },
+      ],
+    },
+    {
+      extId: "DSR-SEED-2026-0007",
+      type: "PORTABILITY", jurisdiction: "GDPR", source: "TENANT_PORTAL",
+      status: "VERIFIED", verification: "VERIFIED",
+      subjectName: "Mikaela Niemi", subjectEmail: "mikaela.n@example.fi",
+      tenantIdx: 0,
+      receivedDaysAgo: 5, verifiedDaysAgo: 4,
+      assignedToIdx: 0,
+      intakeNotes: "Please send me my data in a machine-readable format (Article 20).",
+      verifications: [
+        { method: "MFA_CHALLENGE", status: "VERIFIED", daysAgo: 4 },
+      ],
+      audit: [
+        { action: "request.received",  details: "Tenant portal submission",     daysAgo: 5 },
+        { action: "verification.verified", details: "MFA challenge succeeded",  daysAgo: 4 },
+      ],
+    },
+    {
+      extId: "DSR-SEED-2026-0008",
+      type: "DELETION", jurisdiction: "GDPR", source: "EMAIL",
+      status: "REJECTED", verification: "FAILED",
+      subjectName: "Unknown Person", subjectEmail: "anon@protonmail.example",
+      tenantIdx: 1,
+      receivedDaysAgo: 12, rejectedDaysAgo: 10,
+      rejectedReason: "Unable to verify identity after 3 failed challenges. Subject not located in any tenant.",
+      assignedToIdx: 0,
+      intakeNotes: "delete all my data now or I will report you",
+      internalNotes: "No account match found — likely test request or impersonation. Multiple verification failures.",
+      verifications: [
+        { method: "EMAIL_LINK", status: "FAILED", notes: "Verification email bounced.", daysAgo: 11 },
+        { method: "ID_UPLOAD",  status: "FAILED", notes: "Subject did not respond.",   daysAgo: 10 },
+      ],
+      messages: [
+        { direction: "INBOUND",  channel: "EMAIL", body: "delete all my data now or I will report you", daysAgo: 12 },
+        { direction: "OUTBOUND", channel: "EMAIL", subject: "DSR-SEED-2026-0008 — verification needed",
+          body: "Thank you for contacting Flowtora. We need to verify your identity before processing this request. Please reply with the email associated with your account, or upload a valid ID.",
+          daysAgo: 12 },
+        { direction: "OUTBOUND", channel: "EMAIL", subject: "DSR-SEED-2026-0008 — request closed",
+          body: "We were unable to verify your identity. The request has been closed. You may submit a new request at any time with verifying information.",
+          daysAgo: 10 },
+      ],
+      audit: [
+        { action: "request.received",       details: "Intake from email",        daysAgo: 12 },
+        { action: "verification.failed",    details: "Email link bounced",       daysAgo: 11 },
+        { action: "verification.failed",    details: "ID upload not received",   daysAgo: 10 },
+        { action: "request.status_set.rejected", details: "Closed: verification failed", daysAgo: 10 },
+      ],
+    },
+    {
+      extId: "DSR-SEED-2026-0009",
+      type: "RESTRICTION", jurisdiction: "LGPD", source: "EMAIL",
+      status: "AWAITING_SUBJECT_INFO", verification: "VERIFIED",
+      subjectName: "Beatriz Almeida", subjectEmail: "b.almeida@example.br",
+      tenantIdx: 1,
+      receivedDaysAgo: 6, verifiedDaysAgo: 5,
+      assignedToIdx: 0,
+      intakeNotes: "I want to restrict processing of my data while my objection is reviewed.",
+      internalNotes: "Need clarification on which categories of processing the subject wants restricted.",
+      verifications: [
+        { method: "EMAIL_LINK", status: "VERIFIED", daysAgo: 5 },
+      ],
+      messages: [
+        { direction: "OUTBOUND", channel: "EMAIL", subject: "DSR-SEED-2026-0009 — clarification needed",
+          body: "Hi Beatriz — to apply restriction correctly, could you tell us which categories of processing you'd like restricted (marketing, analytics, all)?",
+          daysAgo: 4 },
+      ],
+      audit: [
+        { action: "request.received",  details: "Intake from email",                  daysAgo: 6 },
+        { action: "verification.verified", details: "Email-link verified",            daysAgo: 5 },
+        { action: "message.sent",      details: "EMAIL: clarification needed",        daysAgo: 4 },
+      ],
+    },
+    {
+      extId: "DSR-SEED-2026-0010",
+      type: "ACCESS_EXPORT", jurisdiction: "GDPR", source: "TENANT_PORTAL",
+      status: "RECEIVED", verification: "PENDING",
+      subjectName: "Ravi Patel", subjectEmail: "ravi.patel@example.in",
+      tenantIdx: 2,
+      receivedDaysAgo: 1,
+      intakeNotes: "Article 15 access — copy in PDF preferred.",
+      audit: [
+        { action: "request.received", details: "Tenant portal submission", daysAgo: 1 },
+      ],
+    },
+    {
+      extId: "DSR-SEED-2026-0011",
+      type: "DELETION", jurisdiction: "PIPEDA", source: "PHONE",
+      status: "WITHDRAWN", verification: "VERIFIED",
+      subjectName: "Émile Tremblay", subjectEmail: "emile.t@example.ca",
+      tenantIdx: 0,
+      receivedDaysAgo: 35, completedDaysAgo: 33,
+      assignedToIdx: 0,
+      intakeNotes: "Phone request to delete account — recorded with consent.",
+      internalNotes: "Subject called back 2 days later to withdraw the request — wants to keep account.",
+      verifications: [
+        { method: "SECURITY_QUESTIONS", status: "VERIFIED", notes: "3 of 3 security questions answered correctly over phone.", daysAgo: 35 },
+      ],
+      messages: [
+        { direction: "INBOUND", channel: "PHONE", body: "Phone log: subject requested deletion", daysAgo: 35 },
+        { direction: "INBOUND", channel: "PHONE", body: "Phone log: subject withdrew request", daysAgo: 33 },
+      ],
+      audit: [
+        { action: "request.received",      details: "Phone intake",                     daysAgo: 35 },
+        { action: "verification.verified", details: "Security questions answered",      daysAgo: 35 },
+        { action: "request.status_set.withdrawn", details: "Subject withdrew request",  daysAgo: 33 },
+      ],
+    },
+    {
+      extId: "DSR-SEED-2026-0012",
+      type: "ACCESS_EXPORT", jurisdiction: "GDPR", source: "EMAIL",
+      status: "IN_PROGRESS", verification: "VERIFIED",
+      subjectName: "Lina Hofmann", subjectEmail: "lina.hofmann@example.de",
+      tenantIdx: 0,
+      receivedDaysAgo: 32, verifiedDaysAgo: 31,        // Past SLA — overdue
+      assignedToIdx: 0,
+      intakeNotes: "Article 15 access request — please send before deadline.",
+      internalNotes: "OVERDUE — escalating. Scope discovery for S3 has been hung up on a stale credential. Fixing.",
+      scopes: [
+        { system: "POSTGRES", status: "COMPLETE", records: 142, bytes: 320_000, daysAgoLastRun: 30 },
+        { system: "S3",       status: "FAILED",   records: 0,   bytes: 0,       daysAgoLastRun: 28 },
+        { system: "STRIPE",   status: "COMPLETE", records: 6,   bytes: 18_000,  daysAgoLastRun: 30 },
+        { system: "RESEND",   status: "COMPLETE", records: 41,  bytes: 22_000,  daysAgoLastRun: 30 },
+      ],
+      verifications: [
+        { method: "EMAIL_LINK", status: "VERIFIED", daysAgo: 31 },
+      ],
+      messages: [
+        { direction: "OUTBOUND", channel: "EMAIL", subject: "DSR-SEED-2026-0012 — extension request",
+          body: "We are working on your request and would like to invoke a 60-day extension under Article 12(3) due to complexity. Please confirm you accept.",
+          daysAgo: 3 },
+      ],
+      audit: [
+        { action: "request.received",    details: "Email intake",        daysAgo: 32 },
+        { action: "verification.verified", details: "Email-link verified", daysAgo: 31 },
+        { action: "scope.completed",    details: "Postgres + Stripe + Resend done", daysAgo: 30 },
+        { action: "scope.failed",       details: "S3 returned 403 — token expired", daysAgo: 28 },
+        { action: "extension.requested", details: "60-day extension requested",      daysAgo: 3 },
+      ],
+    },
+  ];
+
+  // Adjust SLA & set extId externalId values + the actual writes.
+  for (const b of reqs) {
+    const tenant = b.tenantIdx != null ? tenants[b.tenantIdx] : null;
+    const assignee = b.assignedToIdx != null ? staff[b.assignedToIdx % staff.length] : null;
+    const slaDays = b.jurisdiction === "CCPA" || b.jurisdiction === "CPRA" ? 45 : 30;
+    const receivedAt = daysAgo(b.receivedDaysAgo);
+    const slaDeadline = new Date(receivedAt.getTime() + slaDays * 86_400_000);
+    const created = await db.privacyRequest.upsert({
+      where: { externalId: b.extId },
+      create: {
+        externalId: b.extId,
+        type: b.type,
+        jurisdiction: b.jurisdiction,
+        source: b.source,
+        status: b.status,
+        subjectName: b.subjectName,
+        subjectEmail: b.subjectEmail,
+        subjectIdentifier: b.subjectIdentifier ?? null,
+        tenantId: tenant?.id ?? null,
+        verificationStatus: b.verification,
+        slaDays,
+        slaDeadline,
+        legalHold: b.legalHold ?? false,
+        legalHoldReason: b.legalHoldReason ?? null,
+        intakeNotes: b.intakeNotes ?? null,
+        internalNotes: b.internalNotes ?? null,
+        finalReportUrl: b.finalReportGenerated ? `https://docs.flowtora.com/dsr/${b.extId}/final-report.pdf` : null,
+        exportBundleUrl: b.exportGenerated ? `https://docs.flowtora.com/dsr/${b.extId}/export.zip` : null,
+        exportBundleExpiresAt: b.exportGenerated ? daysAgo(-7) : null,
+        exportGenerated: b.exportGenerated ?? false,
+        rejectedReason: b.rejectedReason ?? null,
+        assignedToId: assignee?.id ?? null,
+        receivedAt,
+        verifiedAt:  b.verifiedDaysAgo  != null ? daysAgo(b.verifiedDaysAgo)  : null,
+        completedAt: b.completedDaysAgo != null ? daysAgo(b.completedDaysAgo) : null,
+        rejectedAt:  b.rejectedDaysAgo  != null ? daysAgo(b.rejectedDaysAgo)  : null,
+      },
+      update: {
+        status: b.status, verificationStatus: b.verification,
+        legalHold: b.legalHold ?? false, legalHoldReason: b.legalHoldReason ?? null,
+      },
+      select: { id: true },
+    });
+    // Verifications.
+    for (const v of b.verifications ?? []) {
+      await db.privacyVerificationDoc.create({
+        data: {
+          requestId: created.id,
+          method: v.method,
+          status: v.status,
+          notes: v.notes ?? null,
+          verifiedById: v.status === "VERIFIED" || v.status === "FAILED" || v.status === "WAIVED" ? reviewer.id : null,
+          verifiedAt:   v.status === "PENDING" ? null : daysAgo(v.daysAgo),
+          createdAt:    daysAgo(v.daysAgo),
+        },
+      });
+    }
+    // Scope discovery.
+    for (const s of b.scopes ?? []) {
+      await db.privacyScopeDiscovery.upsert({
+        where: { requestId_system: { requestId: created.id, system: s.system } },
+        create: {
+          requestId: created.id,
+          system: s.system, status: s.status,
+          resultCount: s.records, resultBytes: s.bytes,
+          lastRunAt: s.daysAgoLastRun != null ? daysAgo(s.daysAgoLastRun) : null,
+        },
+        update: {},
+      });
+    }
+    // Messages.
+    if (b.messages && b.messages.length > 0) {
+      await db.privacyRequestMessage.createMany({
+        data: b.messages.map((m) => ({
+          requestId: created.id,
+          direction: m.direction,
+          channel: m.channel,
+          senderName: m.direction === "OUTBOUND" ? "Flowtora DPO" : b.subjectName,
+          senderEmail: m.direction === "OUTBOUND" ? dpoEmail : b.subjectEmail,
+          subject: m.subject ?? null,
+          body: m.body,
+          occurredAt: daysAgo(m.daysAgo),
+        })),
+      });
+    }
+    // Audit entries.
+    if (b.audit && b.audit.length > 0) {
+      await db.privacyRequestAuditEntry.createMany({
+        data: b.audit.map((a) => ({
+          requestId: created.id,
+          action: a.action,
+          actorEmail: dpoEmail,
+          details: a.details,
+          occurredAt: daysAgo(a.daysAgo),
+        })),
+      });
+    }
+  }
+
+  console.log(
+    `  ✓ ${reqs.length} privacy requests with verifications + scope discovery + messages + audit trails`,
   );
 }
 

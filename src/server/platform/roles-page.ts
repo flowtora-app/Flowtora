@@ -103,6 +103,10 @@ export const PERMISSION_DESCRIPTIONS: Record<PlatformPermission, string> = {
   "compliance.evidence.upload": "Upload control evidence files and re-collect from integrations.",
   "compliance.vendor.review":   "Run vendor security reviews — score CAIQ, approve/reject vendors.",
   "compliance.report.generate": "Generate audit-package PDFs and ZIP bundles.",
+  "privacy.read":     "View Data Privacy Requests (DSARs) and their workflow.",
+  "privacy.triage":   "Triage incoming privacy requests, run verification, send messages.",
+  "privacy.process":  "Run scope discovery, generate exports, mark requests complete or rejected.",
+  "privacy.delete":   "Execute final deletion / rectification with typed confirmation.",
   // Analytics
   "analytics.read":        "Read analytics dashboards.",
   "analytics.export":      "Export analytics datasets.",
