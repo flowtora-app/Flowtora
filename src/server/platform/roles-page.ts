@@ -119,6 +119,8 @@ export const PERMISSION_DESCRIPTIONS: Record<PlatformPermission, string> = {
   "network.waf.write": "Author + edit WAF rules (managed + custom).",
   "system.status.read":   "View System Status — service grid, dependency graph, latency + error charts.",
   "system.status.manage": "Edit service catalog, dependencies, override status, ack alerts, log deploys.",
+  "queues.read":   "View queues, workers, failed jobs, dead-letter queue, cron schedules, slowest jobs.",
+  "queues.manage": "Pause / resume / drain queues, retry / skip / DLQ jobs, toggle cron schedules.",
   // Analytics
   "analytics.read":        "Read analytics dashboards.",
   "analytics.export":      "Export analytics datasets.",

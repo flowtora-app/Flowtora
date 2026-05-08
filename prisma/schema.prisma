@@ -13544,3 +13544,202 @@ model ServiceDependency {
 
   @@unique([fromId, toId])
 }
+
+// ────────────────────────────────────────────────────────────
+// Page 57 — Background Jobs / Queues.
+// ────────────────────────────────────────────────────────────
+
+enum QueueBackend {
+  BULLMQ
+  SQS
+  CLOUD_TASKS
+  REDIS_QUEUE
+  KAFKA
+  OTHER
+}
+
+enum QueueStatus {
+  ACTIVE
+  PAUSED
+  DRAINING
+  STOPPED
+}
+
+enum QueueWorkerStatus {
+  RUNNING
+  IDLE
+  STARTING
+  STOPPED
+  CRASHED
+  UPGRADING
+}
+
+enum QueueJobStatus {
+  WAITING
+  ACTIVE
+  COMPLETED
+  FAILED
+  DELAYED
+  DEAD_LETTER
+  SKIPPED
+  RETRYING
+}
+
+enum CronScheduleStatus {
+  ACTIVE
+  DISABLED
+  ERRORED
+  RUNNING_NOW
+}
+
+/** A logical job queue. We do not own the actual queue infrastructure
+ *  in this row — the queue lives in BullMQ/SQS/etc. — we just keep a
+ *  metadata mirror so the admin UI can render counts + actions. */
+model JobQueue {
+  id String @id @default(cuid())
+
+  /** URL-safe slug for filtering. */
+  slug         String @unique
+  name         String
+  description  String?
+  backend      QueueBackend  @default(BULLMQ)
+  status       QueueStatus   @default(ACTIVE)
+  /** Configured concurrency (workers × per-worker concurrency). */
+  concurrency  Int           @default(10)
+
+  /** Live counts — refreshed on poll. */
+  active       Int           @default(0)
+  waiting      Int           @default(0)
+  delayed      Int           @default(0)
+  completed24h Int           @default(0)
+  failed24h    Int           @default(0)
+  /** Throughput in jobs per minute (last sample). */
+  throughputJpm Int          @default(0)
+  /** Average duration in ms across completed jobs in the last hour. */
+  avgDurationMs Int          @default(0)
+  /** p95 duration ms. */
+  p95Ms         Int          @default(0)
+  /** Total dead-letter count. */
+  deadLetters   Int          @default(0)
+
+  notes        String?
+
+  createdAt DateTime @default(now())
+  updatedAt DateTime @updatedAt
+
+  jobs    QueueJob[]
+  workers QueueWorker[]
+  schedules CronSchedule[]
+
+  @@index([status, name])
+}
+
+/** Live worker inventory — one row per running process. */
+model QueueWorker {
+  id String @id @default(cuid())
+
+  /** Worker ID assigned by the queue runtime. */
+  workerId    String   @unique
+  /** Pool name (e.g. "general", "high-cpu"). */
+  pool        String
+  /** Queue slugs this worker consumes from (denormalized). */
+  queues      String[]
+  /** Optional preferred queue link for the table. */
+  primaryQueueId String?
+  primaryQueue   JobQueue? @relation(fields: [primaryQueueId], references: [id], onDelete: SetNull)
+
+  status      QueueWorkerStatus @default(RUNNING)
+  lastHeartbeatAt DateTime?
+  activeJobs  Int      @default(0)
+  memMb       Int      @default(0)
+  cpuPct      Float    @default(0)
+  /** Worker code version. */
+  version     String?
+  /** Process info — host, pid. */
+  hostname    String?
+  pid         Int?
+
+  createdAt DateTime @default(now())
+  updatedAt DateTime @updatedAt
+
+  @@index([status, lastHeartbeatAt])
+}
+
+/** Per-job row — used for the Failed / Dead-letter / Slowest tabs. */
+model QueueJob {
+  id String @id @default(cuid())
+
+  queueId  String
+  queue    JobQueue @relation(fields: [queueId], references: [id], onDelete: Cascade)
+
+  /** External id from the queue runtime. */
+  externalId String
+  /** Job name (e.g. "email.send", "billing.invoice.dunning"). */
+  jobName    String
+  /** Tenant scope when relevant. */
+  tenantId   String?
+
+  status     QueueJobStatus
+  attempts   Int    @default(0)
+  /** Job duration in ms (set on completion). */
+  durationMs Int?
+
+  /** Failure metadata. */
+  errorClass   String?
+  errorMessage String?
+  errorStack   String?
+
+  /** Sample payload — PII-redacted (we never store raw secrets here). */
+  payloadSummary String?
+
+  /** Timestamps. */
+  enqueuedAt   DateTime @default(now())
+  startedAt    DateTime?
+  completedAt  DateTime?
+  failedAt     DateTime?
+  /** When the job was promoted to dead-letter. */
+  deadLetteredAt DateTime?
+
+  createdAt DateTime @default(now())
+  updatedAt DateTime @updatedAt
+
+  @@index([queueId, status, failedAt])
+  @@index([status, durationMs])
+  @@index([tenantId, failedAt])
+  @@unique([queueId, externalId])
+}
+
+/** Cron schedule registry. */
+model CronSchedule {
+  id String @id @default(cuid())
+
+  /** URL-safe slug. */
+  slug        String  @unique
+  name        String
+  description String?
+  /** Cron expression (display + dispatch). */
+  expression  String
+  /** Owner email. */
+  ownerEmail  String?
+  /** IANA timezone (defaults to UTC). */
+  timezone    String  @default("UTC")
+  status      CronScheduleStatus @default(ACTIVE)
+  enabled     Boolean             @default(true)
+
+  /** Last + next run timestamps. */
+  lastRunAt   DateTime?
+  nextRunAt   DateTime?
+  /** Last job duration ms. */
+  lastDurationMs Int?
+  /** Last job result summary. */
+  lastResult  String?
+
+  /** Optional link to the queue this cron publishes into. */
+  queueId String?
+  queue   JobQueue? @relation(fields: [queueId], references: [id], onDelete: SetNull)
+
+  createdAt DateTime @default(now())
+  updatedAt DateTime @updatedAt
+
+  @@index([enabled, nextRunAt])
+}

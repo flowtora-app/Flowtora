@@ -98,6 +98,7 @@ const NAV_ITEMS: NavItem[] = [
   { href: "/platform/security/network",             label: "Network Restrictions", icon: "Globe" },
   // Pages 56+ — system & infrastructure
   { href: "/platform/system/status",                label: "System Status",        icon: "Heartbeat" },
+  { href: "/platform/system/queues",                label: "Queues & Jobs",        icon: "Pipeline" },
 ];
 
 const COLLAPSE_KEY = "flowtora.platform-nav.collapsed";

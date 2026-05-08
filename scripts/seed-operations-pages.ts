@@ -79,6 +79,7 @@ async function main() {
   await seedIncidents(platformUsers, tenants);        // Page 54
   await seedNetwork(platformUsers, tenants);          // Page 55
   await seedSystemStatus();                            // Page 56
+  await seedQueues(tenants);                           // Page 57
 
   console.log("\n✓ Seed complete.\n");
   await db.$disconnect();
@@ -318,6 +319,10 @@ async function wipeOldSeed() {
   await db.wafRule.deleteMany({ where: { name: { startsWith: "[seed] " } } });
   // Page 56 — System status wipe (cascades samples / alerts / deploys / dependencies).
   await db.systemService.deleteMany({ where: { slug: { startsWith: "seed-" } } });
+  // Page 57 — Queues wipe.
+  await db.cronSchedule.deleteMany({ where: { slug: { startsWith: "seed-" } } });
+  await db.queueWorker.deleteMany({ where: { workerId: { startsWith: "seed-" } } });
+  await db.jobQueue.deleteMany({ where: { slug: { startsWith: "seed-" } } });
   // Customers tagged seed (after orders are gone).
   await db.customer.deleteMany({ where: { tags: { has: "seed" } } });
   // Products tagged seed (use description marker since Product has no tags array).
@@ -10515,6 +10520,363 @@ async function seedSystemStatus() {
 
   console.log(
     `  ✓ ${services.length} services, ${depEdges.length} dependencies, ${sampleRows.length} metric samples, 3 alerts, ${deployRows.length} deploys`,
+  );
+}
+
+/* ── Page 57 — Queues seed ─────────────────────────────── */
+
+async function seedQueues(tenants: { id: string; name: string; slug: string }[]) {
+  console.log("── Seeding Queues & Jobs (Page 57)…");
+
+  type QBp = {
+    slug: string;
+    name: string;
+    description: string;
+    backend: "BULLMQ" | "SQS" | "CLOUD_TASKS" | "REDIS_QUEUE" | "KAFKA" | "OTHER";
+    status: "ACTIVE" | "PAUSED" | "DRAINING" | "STOPPED";
+    concurrency: number;
+    active: number;
+    waiting: number;
+    delayed: number;
+    completed24h: number;
+    failed24h: number;
+    throughputJpm: number;
+    avgDurationMs: number;
+    p95Ms: number;
+    deadLetters: number;
+  };
+  const queueBps: QBp[] = [
+    { slug: "seed-email-send", name: "Email send", description: "Transactional + marketing email outbound",
+      backend: "BULLMQ", status: "ACTIVE", concurrency: 50,
+      active: 6, waiting: 184, delayed: 12, completed24h: 12_842, failed24h: 38, throughputJpm: 220,
+      avgDurationMs: 280, p95Ms: 820, deadLetters: 4 },
+    { slug: "seed-webhooks-deliver", name: "Webhook delivery", description: "Outbound webhook fanout per tenant",
+      backend: "BULLMQ", status: "ACTIVE", concurrency: 80,
+      active: 18, waiting: 412, delayed: 220, completed24h: 38_412, failed24h: 612, throughputJpm: 880,
+      avgDurationMs: 380, p95Ms: 1_200, deadLetters: 14 },
+    { slug: "seed-billing-dunning", name: "Billing dunning", description: "Late-payment reminder emails + retries",
+      backend: "BULLMQ", status: "ACTIVE", concurrency: 10,
+      active: 2, waiting: 38, delayed: 0, completed24h: 412, failed24h: 4, throughputJpm: 12,
+      avgDurationMs: 540, p95Ms: 1_400, deadLetters: 0 },
+    { slug: "seed-ai-summarize", name: "AI summarize", description: "Anthropic summarize calls",
+      backend: "CLOUD_TASKS", status: "ACTIVE", concurrency: 20,
+      active: 8, waiting: 220, delayed: 12, completed24h: 6_412, failed24h: 18, throughputJpm: 142,
+      avgDurationMs: 2_200, p95Ms: 4_800, deadLetters: 2 },
+    { slug: "seed-search-index", name: "Search reindex", description: "Elasticsearch indexer",
+      backend: "BULLMQ", status: "DRAINING", concurrency: 5,
+      active: 4, waiting: 1_812, delayed: 0, completed24h: 24_412, failed24h: 12, throughputJpm: 380,
+      avgDurationMs: 120, p95Ms: 380, deadLetters: 0 },
+    { slug: "seed-image-thumb", name: "Image thumbnails", description: "Thumbnail generation for proofs",
+      backend: "BULLMQ", status: "ACTIVE", concurrency: 30,
+      active: 12, waiting: 38, delayed: 0, completed24h: 18_412, failed24h: 142, throughputJpm: 412,
+      avgDurationMs: 880, p95Ms: 2_400, deadLetters: 8 },
+    { slug: "seed-tenant-export", name: "Tenant export", description: "Per-tenant data export ZIPs",
+      backend: "SQS", status: "ACTIVE", concurrency: 4,
+      active: 1, waiting: 6, delayed: 0, completed24h: 24, failed24h: 1, throughputJpm: 1,
+      avgDurationMs: 18_400, p95Ms: 42_000, deadLetters: 0 },
+    { slug: "seed-stripe-webhook", name: "Stripe webhook handler", description: "Inbound Stripe events fan-out",
+      backend: "BULLMQ", status: "ACTIVE", concurrency: 12,
+      active: 2, waiting: 412, delayed: 0, completed24h: 4_412, failed24h: 24, throughputJpm: 78,
+      avgDurationMs: 320, p95Ms: 980, deadLetters: 1 },
+    { slug: "seed-audit-archive", name: "Audit log archive", description: "Daily rollup → S3",
+      backend: "REDIS_QUEUE", status: "PAUSED", concurrency: 1,
+      active: 0, waiting: 0, delayed: 0, completed24h: 24, failed24h: 0, throughputJpm: 0,
+      avgDurationMs: 12_000, p95Ms: 28_400, deadLetters: 0 },
+    { slug: "seed-pdf-render", name: "PDF render", description: "Invoice + report PDF generation",
+      backend: "BULLMQ", status: "ACTIVE", concurrency: 8,
+      active: 3, waiting: 12, delayed: 0, completed24h: 1_412, failed24h: 18, throughputJpm: 22,
+      avgDurationMs: 1_400, p95Ms: 3_800, deadLetters: 2 },
+  ];
+  const idBySlug = new Map<string, string>();
+  for (const q of queueBps) {
+    const saved = await db.jobQueue.upsert({
+      where: { slug: q.slug },
+      create: {
+        slug: q.slug, name: q.name, description: q.description,
+        backend: q.backend, status: q.status, concurrency: q.concurrency,
+        active: q.active, waiting: q.waiting, delayed: q.delayed,
+        completed24h: q.completed24h, failed24h: q.failed24h,
+        throughputJpm: q.throughputJpm,
+        avgDurationMs: q.avgDurationMs, p95Ms: q.p95Ms,
+        deadLetters: q.deadLetters,
+      },
+      update: {
+        name: q.name, status: q.status, concurrency: q.concurrency,
+        active: q.active, waiting: q.waiting, delayed: q.delayed,
+        completed24h: q.completed24h, failed24h: q.failed24h,
+        throughputJpm: q.throughputJpm,
+        avgDurationMs: q.avgDurationMs, p95Ms: q.p95Ms,
+        deadLetters: q.deadLetters,
+      },
+      select: { id: true },
+    });
+    idBySlug.set(q.slug, saved.id);
+  }
+
+  // Workers — 12 processes across pools.
+  type WBp = {
+    workerId: string;
+    pool: string;
+    queues: string[];
+    status: "RUNNING" | "IDLE" | "STARTING" | "STOPPED" | "CRASHED" | "UPGRADING";
+    activeJobs: number;
+    memMb: number;
+    cpuPct: number;
+    version: string;
+    hostname: string;
+    pid: number;
+    heartbeatMinAgo: number;
+  };
+  const workerBps: WBp[] = [
+    { workerId: "seed-w-general-1",  pool: "general",  queues: ["seed-email-send", "seed-webhooks-deliver", "seed-pdf-render"], status: "RUNNING",  activeJobs: 18, memMb: 312, cpuPct: 42.5, version: "1.42.8", hostname: "worker-01.flowtora.internal", pid: 18412, heartbeatMinAgo: 0 },
+    { workerId: "seed-w-general-2",  pool: "general",  queues: ["seed-email-send", "seed-webhooks-deliver", "seed-pdf-render"], status: "RUNNING",  activeJobs: 22, memMb: 380, cpuPct: 58.0, version: "1.42.8", hostname: "worker-02.flowtora.internal", pid: 18413, heartbeatMinAgo: 0 },
+    { workerId: "seed-w-general-3",  pool: "general",  queues: ["seed-email-send", "seed-webhooks-deliver", "seed-pdf-render"], status: "RUNNING",  activeJobs: 14, memMb: 295, cpuPct: 38.2, version: "1.42.8", hostname: "worker-03.flowtora.internal", pid: 18414, heartbeatMinAgo: 0 },
+    { workerId: "seed-w-cpu-1",      pool: "high-cpu", queues: ["seed-image-thumb", "seed-pdf-render"],                          status: "RUNNING",  activeJobs: 8,  memMb: 1_840, cpuPct: 78.4, version: "1.42.8", hostname: "worker-cpu-01.flowtora.internal", pid: 4812, heartbeatMinAgo: 0 },
+    { workerId: "seed-w-cpu-2",      pool: "high-cpu", queues: ["seed-image-thumb", "seed-pdf-render"],                          status: "RUNNING",  activeJobs: 6,  memMb: 1_720, cpuPct: 71.2, version: "1.42.8", hostname: "worker-cpu-02.flowtora.internal", pid: 4813, heartbeatMinAgo: 0 },
+    { workerId: "seed-w-ai-1",       pool: "ai",       queues: ["seed-ai-summarize"],                                            status: "RUNNING",  activeJobs: 4,  memMb: 220, cpuPct: 12.4, version: "1.42.8", hostname: "worker-ai-01.flowtora.internal", pid: 9412, heartbeatMinAgo: 0 },
+    { workerId: "seed-w-ai-2",       pool: "ai",       queues: ["seed-ai-summarize"],                                            status: "RUNNING",  activeJobs: 4,  memMb: 220, cpuPct: 14.8, version: "1.42.8", hostname: "worker-ai-02.flowtora.internal", pid: 9413, heartbeatMinAgo: 0 },
+    { workerId: "seed-w-search-1",   pool: "search",   queues: ["seed-search-index"],                                            status: "RUNNING",  activeJobs: 4,  memMb: 540, cpuPct: 32.1, version: "1.42.8", hostname: "worker-search-01.flowtora.internal", pid: 6612, heartbeatMinAgo: 0 },
+    { workerId: "seed-w-billing-1",  pool: "billing",  queues: ["seed-billing-dunning", "seed-stripe-webhook"],                  status: "RUNNING",  activeJobs: 2,  memMb: 180, cpuPct: 18.4, version: "1.42.8", hostname: "worker-bill-01.flowtora.internal", pid: 7712, heartbeatMinAgo: 0 },
+    { workerId: "seed-w-export-1",   pool: "export",   queues: ["seed-tenant-export"],                                           status: "RUNNING",  activeJobs: 1,  memMb: 1_200, cpuPct: 24.8, version: "1.42.8", hostname: "worker-export-01.flowtora.internal", pid: 8812, heartbeatMinAgo: 0 },
+    { workerId: "seed-w-archive-1",  pool: "archive",  queues: ["seed-audit-archive"],                                           status: "IDLE",     activeJobs: 0,  memMb: 80,  cpuPct: 0.4, version: "1.42.8", hostname: "worker-arc-01.flowtora.internal", pid: 9912, heartbeatMinAgo: 1 },
+    { workerId: "seed-w-canary-1",   pool: "canary",   queues: ["seed-email-send", "seed-webhooks-deliver"],                     status: "UPGRADING", activeJobs: 0,  memMb: 0,   cpuPct: 0.0, version: "1.42.9-rc.1", hostname: "worker-canary-01.flowtora.internal", pid: 4242, heartbeatMinAgo: 2 },
+    { workerId: "seed-w-crashed-1",  pool: "general",  queues: ["seed-email-send"],                                              status: "CRASHED",  activeJobs: 0,  memMb: 0,   cpuPct: 0.0, version: "1.42.7",   hostname: "worker-04.flowtora.internal", pid: 5512, heartbeatMinAgo: 12 },
+  ];
+  for (const w of workerBps) {
+    const primaryQueueId = w.queues.length > 0 ? idBySlug.get(w.queues[0]!) ?? null : null;
+    await db.queueWorker.upsert({
+      where: { workerId: w.workerId },
+      create: {
+        workerId: w.workerId, pool: w.pool, queues: w.queues,
+        primaryQueueId,
+        status: w.status, activeJobs: w.activeJobs,
+        memMb: w.memMb, cpuPct: w.cpuPct, version: w.version,
+        hostname: w.hostname, pid: w.pid,
+        lastHeartbeatAt: new Date(Date.now() - w.heartbeatMinAgo * 60_000),
+      },
+      update: {
+        status: w.status, activeJobs: w.activeJobs,
+        memMb: w.memMb, cpuPct: w.cpuPct, version: w.version,
+        lastHeartbeatAt: new Date(Date.now() - w.heartbeatMinAgo * 60_000),
+      },
+    });
+  }
+
+  // Cron schedules.
+  type CBp = {
+    slug: string; name: string; expression: string; description?: string;
+    timezone?: string; ownerEmail?: string;
+    queueSlug?: string;
+    enabled: boolean;
+    status: "ACTIVE" | "DISABLED" | "ERRORED" | "RUNNING_NOW";
+    lastRunHoursAgo?: number;
+    nextRunHoursAhead?: number;
+    lastDurationMs?: number;
+    lastResult?: string;
+  };
+  const cronBps: CBp[] = [
+    { slug: "seed-cron-billing-dunning", name: "Billing dunning sweep", expression: "0 */6 * * *",
+      description: "Run every 6h to send dunning emails for overdue invoices.",
+      ownerEmail: "billing@flowtora.com", queueSlug: "seed-billing-dunning", enabled: true, status: "ACTIVE",
+      lastRunHoursAgo: 1.5, nextRunHoursAhead: 4.5, lastDurationMs: 14_200, lastResult: "412 invoices processed; 38 reminders sent." },
+    { slug: "seed-cron-search-index", name: "Search reindex (incremental)", expression: "*/15 * * * *",
+      description: "Incremental search reindex every 15 min.",
+      ownerEmail: "engineering@flowtora.com", queueSlug: "seed-search-index", enabled: true, status: "ACTIVE",
+      lastRunHoursAgo: 0.2, nextRunHoursAhead: 0.05, lastDurationMs: 1_840, lastResult: "Indexed 412 rows." },
+    { slug: "seed-cron-audit-archive", name: "Audit log nightly archive", expression: "0 3 * * *",
+      description: "Daily roll-up of audit log → S3 Glacier.",
+      ownerEmail: "compliance@flowtora.com", queueSlug: "seed-audit-archive", enabled: true, status: "ACTIVE",
+      lastRunHoursAgo: 8, nextRunHoursAhead: 16, lastDurationMs: 12_400, lastResult: "Archived 184,212 rows." },
+    { slug: "seed-cron-tenant-snapshots", name: "Tenant snapshots", expression: "0 4 * * *",
+      description: "Per-tenant DB snapshots for restore drills.",
+      ownerEmail: "sre@flowtora.com", queueSlug: "seed-tenant-export", enabled: true, status: "ACTIVE",
+      lastRunHoursAgo: 7, nextRunHoursAhead: 17, lastDurationMs: 245_000, lastResult: "All snapshots verified." },
+    { slug: "seed-cron-feature-flag-cleanup", name: "Feature flag cleanup", expression: "0 5 * * 1",
+      description: "Weekly cleanup of stale feature flags.",
+      ownerEmail: "engineering@flowtora.com", enabled: true, status: "ACTIVE",
+      lastRunHoursAgo: 96, nextRunHoursAhead: 72, lastDurationMs: 4_800, lastResult: "Archived 4 flags older than 6 months." },
+    { slug: "seed-cron-newsletter-digest", name: "Newsletter weekly digest", expression: "0 13 * * 4",
+      description: "Thursday-noon digest send.",
+      ownerEmail: "marketing@flowtora.com", queueSlug: "seed-email-send", enabled: true, status: "ACTIVE",
+      lastRunHoursAgo: 168, nextRunHoursAhead: 0, lastDurationMs: 142_000, lastResult: "Sent to 38,412 subscribers." },
+    { slug: "seed-cron-trial-expiry", name: "Trial expiry reminder", expression: "0 9 * * *",
+      description: "Send trial-expiry reminders 3/1 days before end.",
+      ownerEmail: "growth@flowtora.com", queueSlug: "seed-email-send", enabled: true, status: "ACTIVE",
+      lastRunHoursAgo: 16, nextRunHoursAhead: 8, lastDurationMs: 8_400, lastResult: "84 reminders sent." },
+    { slug: "seed-cron-stripe-reconcile", name: "Stripe reconcile", expression: "*/30 * * * *",
+      description: "Reconcile Stripe events with internal ledger.",
+      ownerEmail: "billing@flowtora.com", queueSlug: "seed-stripe-webhook", enabled: true, status: "RUNNING_NOW",
+      lastRunHoursAgo: 0.01, nextRunHoursAhead: 0.49, lastDurationMs: 1_200, lastResult: "Currently running." },
+    { slug: "seed-cron-old-export-cleanup", name: "Old export cleanup", expression: "0 2 * * *",
+      description: "Delete tenant exports older than 7 days.",
+      ownerEmail: "compliance@flowtora.com", enabled: true, status: "ACTIVE",
+      lastRunHoursAgo: 9, nextRunHoursAhead: 15, lastDurationMs: 3_400, lastResult: "Deleted 24 files." },
+    { slug: "seed-cron-broken-feature", name: "(disabled) AI training feedback", expression: "0 0 * * *",
+      description: "Disabled — last run errored on 2026-04-18.",
+      ownerEmail: "ai@flowtora.com", enabled: false, status: "DISABLED",
+      lastRunHoursAgo: 240, nextRunHoursAhead: 0, lastDurationMs: 4, lastResult: "Errored: missing model checkpoint." },
+  ];
+  for (const c of cronBps) {
+    await db.cronSchedule.upsert({
+      where: { slug: c.slug },
+      create: {
+        slug: c.slug, name: c.name, description: c.description ?? null,
+        expression: c.expression, ownerEmail: c.ownerEmail ?? null,
+        timezone: c.timezone ?? "UTC",
+        enabled: c.enabled, status: c.status,
+        lastRunAt: c.lastRunHoursAgo != null ? new Date(Date.now() - c.lastRunHoursAgo * 3_600_000) : null,
+        nextRunAt: c.nextRunHoursAhead != null ? new Date(Date.now() + c.nextRunHoursAhead * 3_600_000) : null,
+        lastDurationMs: c.lastDurationMs ?? null,
+        lastResult: c.lastResult ?? null,
+        queueId: c.queueSlug ? idBySlug.get(c.queueSlug) ?? null : null,
+      },
+      update: {
+        name: c.name, expression: c.expression,
+        enabled: c.enabled, status: c.status,
+        lastRunAt: c.lastRunHoursAgo != null ? new Date(Date.now() - c.lastRunHoursAgo * 3_600_000) : null,
+        nextRunAt: c.nextRunHoursAhead != null ? new Date(Date.now() + c.nextRunHoursAhead * 3_600_000) : null,
+        lastDurationMs: c.lastDurationMs ?? null,
+        lastResult: c.lastResult ?? null,
+      },
+    });
+  }
+
+  // Jobs — failed + DLQ + completed (slowest).
+  type JBp = {
+    queueSlug: string;
+    externalId: string;
+    jobName: string;
+    status: "FAILED" | "DEAD_LETTER" | "COMPLETED";
+    attempts: number;
+    durationMs?: number;
+    errorClass?: string;
+    errorMessage?: string;
+    payload: string;
+    tenantIdx?: number;
+    relativeMin: number;
+  };
+  const jobsToCreate: JBp[] = [
+    // Failed jobs (mix across queues)
+    { queueSlug: "seed-email-send", externalId: "EM-2026-04-23-0001", jobName: "email.send.invoice",
+      status: "FAILED", attempts: 3,
+      errorClass: "ResendError", errorMessage: "5xx from Resend — retry queue exhausted",
+      payload: '{"to":"redacted","template":"invoice.send","tenantId":"redacted","invoiceId":"INV-***"}',
+      tenantIdx: 0, relativeMin: 4 },
+    { queueSlug: "seed-email-send", externalId: "EM-2026-04-23-0002", jobName: "email.send.dunning",
+      status: "FAILED", attempts: 2,
+      errorClass: "BounceError", errorMessage: "Hard bounce: invalid recipient",
+      payload: '{"to":"redacted","template":"dunning.day3","tenantId":"redacted"}',
+      tenantIdx: 1, relativeMin: 9 },
+    { queueSlug: "seed-webhooks-deliver", externalId: "WH-2026-04-23-1042", jobName: "webhook.deliver",
+      status: "FAILED", attempts: 5,
+      errorClass: "TimeoutError", errorMessage: "Tenant endpoint timed out after 5000ms",
+      payload: '{"event":"order.created","subscriberId":"redacted","attempts":5}',
+      tenantIdx: 2, relativeMin: 14 },
+    { queueSlug: "seed-webhooks-deliver", externalId: "WH-2026-04-23-1043", jobName: "webhook.deliver",
+      status: "FAILED", attempts: 5,
+      errorClass: "SignatureMismatch", errorMessage: "HMAC verification failed on receiver side",
+      payload: '{"event":"invoice.sent","subscriberId":"redacted"}',
+      tenantIdx: 0, relativeMin: 22 },
+    { queueSlug: "seed-image-thumb", externalId: "IM-2026-04-23-3041", jobName: "image.thumbnail",
+      status: "FAILED", attempts: 2,
+      errorClass: "ImageMagickError", errorMessage: "Failed to read source image (corrupt PNG header)",
+      payload: '{"sourceKey":"redacted/proofs/abc.png","sizes":[200,400,800]}',
+      tenantIdx: 1, relativeMin: 28 },
+    { queueSlug: "seed-stripe-webhook", externalId: "ST-2026-04-23-1822", jobName: "stripe.webhook.invoice_paid",
+      status: "FAILED", attempts: 1,
+      errorClass: "DBError", errorMessage: "Replica lag exceeded — write rejected",
+      payload: '{"event":"invoice.paid","invoiceId":"in_***"}',
+      relativeMin: 35 },
+    { queueSlug: "seed-pdf-render", externalId: "PD-2026-04-23-0412", jobName: "pdf.render.invoice",
+      status: "FAILED", attempts: 3,
+      errorClass: "ChromiumCrash", errorMessage: "Headless Chromium crashed with code -11",
+      payload: '{"templateId":"invoice","invoiceId":"INV-***"}',
+      tenantIdx: 0, relativeMin: 42 },
+    { queueSlug: "seed-ai-summarize", externalId: "AI-2026-04-23-2042", jobName: "ai.summarize.proof",
+      status: "FAILED", attempts: 2,
+      errorClass: "AnthropicError", errorMessage: "Rate-limited (429); will retry with backoff",
+      payload: '{"proofId":"redacted","model":"claude-sonnet-4.7"}',
+      tenantIdx: 2, relativeMin: 48 },
+    // Dead-letter
+    { queueSlug: "seed-email-send", externalId: "EM-2026-04-22-0044", jobName: "email.send.welcome",
+      status: "DEAD_LETTER", attempts: 5,
+      errorClass: "BounceError", errorMessage: "Permanent bounce after 5 attempts",
+      payload: '{"to":"redacted","template":"welcome"}',
+      tenantIdx: 1, relativeMin: 1_400 },
+    { queueSlug: "seed-webhooks-deliver", externalId: "WH-2026-04-21-9912", jobName: "webhook.deliver",
+      status: "DEAD_LETTER", attempts: 7,
+      errorClass: "EndpointGone", errorMessage: "Subscriber endpoint returned 410 Gone",
+      payload: '{"event":"order.shipped","subscriberId":"redacted"}',
+      tenantIdx: 0, relativeMin: 2_840 },
+    { queueSlug: "seed-image-thumb", externalId: "IM-2026-04-22-1124", jobName: "image.thumbnail",
+      status: "DEAD_LETTER", attempts: 3,
+      errorClass: "ImageMagickError", errorMessage: "Repeated decode failure",
+      payload: '{"sourceKey":"redacted/proofs/xyz.heic"}',
+      tenantIdx: 2, relativeMin: 1_840 },
+    { queueSlug: "seed-pdf-render", externalId: "PD-2026-04-22-0844", jobName: "pdf.render.report",
+      status: "DEAD_LETTER", attempts: 4,
+      errorClass: "TimeoutError", errorMessage: "Render >120s",
+      payload: '{"templateId":"report-monthly","reportId":"redacted"}',
+      tenantIdx: 0, relativeMin: 1_220 },
+    // Completed — slowest examples
+    { queueSlug: "seed-tenant-export", externalId: "TX-2026-04-23-0014", jobName: "tenant.export.bundle",
+      status: "COMPLETED", attempts: 1, durationMs: 84_200,
+      payload: '{"tenantId":"redacted","scope":"full","format":"zip"}',
+      tenantIdx: 0, relativeMin: 220 },
+    { queueSlug: "seed-tenant-export", externalId: "TX-2026-04-23-0015", jobName: "tenant.export.bundle",
+      status: "COMPLETED", attempts: 1, durationMs: 62_400,
+      payload: '{"tenantId":"redacted","scope":"customers,orders,invoices"}',
+      tenantIdx: 1, relativeMin: 320 },
+    { queueSlug: "seed-pdf-render", externalId: "PD-2026-04-23-0014", jobName: "pdf.render.report",
+      status: "COMPLETED", attempts: 1, durationMs: 18_400,
+      payload: '{"templateId":"report-monthly","reportId":"redacted"}',
+      tenantIdx: 0, relativeMin: 96 },
+    { queueSlug: "seed-ai-summarize", externalId: "AI-2026-04-23-1841", jobName: "ai.summarize.proof",
+      status: "COMPLETED", attempts: 1, durationMs: 6_400,
+      payload: '{"proofId":"redacted","model":"claude-sonnet-4.7"}',
+      tenantIdx: 2, relativeMin: 72 },
+    { queueSlug: "seed-ai-summarize", externalId: "AI-2026-04-23-1842", jobName: "ai.summarize.audit",
+      status: "COMPLETED", attempts: 1, durationMs: 4_800,
+      payload: '{"auditId":"redacted","model":"claude-sonnet-4.7"}',
+      relativeMin: 81 },
+    { queueSlug: "seed-image-thumb", externalId: "IM-2026-04-23-2412", jobName: "image.thumbnail",
+      status: "COMPLETED", attempts: 1, durationMs: 3_200,
+      payload: '{"sourceKey":"redacted/proofs/big.heic","sizes":[200,400,800]}',
+      tenantIdx: 1, relativeMin: 12 },
+    { queueSlug: "seed-search-index", externalId: "SR-2026-04-23-2014", jobName: "search.reindex.batch",
+      status: "COMPLETED", attempts: 1, durationMs: 1_842,
+      payload: '{"batchId":"redacted","size":412}',
+      relativeMin: 6 },
+  ];
+  for (const j of jobsToCreate) {
+    const queueId = idBySlug.get(j.queueSlug);
+    if (!queueId) continue;
+    const enq = new Date(Date.now() - j.relativeMin * 60_000);
+    await db.queueJob.upsert({
+      where: { queueId_externalId: { queueId, externalId: j.externalId } },
+      create: {
+        queueId, externalId: j.externalId, jobName: j.jobName,
+        status: j.status, attempts: j.attempts,
+        durationMs: j.durationMs ?? null,
+        errorClass: j.errorClass ?? null,
+        errorMessage: j.errorMessage ?? null,
+        payloadSummary: j.payload,
+        tenantId: j.tenantIdx != null ? tenants[j.tenantIdx]?.id ?? null : null,
+        enqueuedAt: enq,
+        startedAt: enq,
+        completedAt: j.status === "COMPLETED" ? new Date(enq.getTime() + (j.durationMs ?? 0)) : null,
+        failedAt: j.status === "FAILED" ? new Date(enq.getTime() + 60_000) : null,
+        deadLetteredAt: j.status === "DEAD_LETTER" ? new Date(enq.getTime() + 5 * 60_000) : null,
+      },
+      update: {
+        status: j.status, attempts: j.attempts,
+        durationMs: j.durationMs ?? null,
+      },
+    });
+  }
+
+  console.log(
+    `  ✓ ${queueBps.length} queues, ${workerBps.length} workers, ${cronBps.length} cron schedules, ${jobsToCreate.length} jobs (failed + DLQ + completed)`,
   );
 }
 

@@ -268,6 +268,9 @@ export type PlatformPermission =
   // System & Infrastructure — Page 56 System Status
   | "system.status.read"
   | "system.status.manage"
+  // System & Infrastructure — Page 57 Background Jobs / Queues
+  | "queues.read"
+  | "queues.manage"
 
   // Analytics / BI
   | "analytics.read"
@@ -317,6 +320,7 @@ const PLATFORM_ALL: PlatformPermission[] = [
   "incidents.read", "incidents.manage", "incidents.postmortem.write", "incidents.statuspage.write",
   "network.read", "network.manage", "network.waf.write",
   "system.status.read", "system.status.manage",
+  "queues.read", "queues.manage",
   "analytics.read", "analytics.export", "revenue.read", "usage.read",
   "reports.read", "reports.create", "reports.edit", "reports.delete",
   "reports.schedule", "reports.export",
@@ -331,7 +335,7 @@ const PLATFORM_ALL: PlatformPermission[] = [
 const PLATFORM_BASELINE_READ: PlatformPermission[] = [
   "tenant.read", "billing.read", "staff.read", "users.read",
   "support.read", "health.read", "audit.read", "compliance.read",
-  "feature_flag.read", "announcement.read", "leads.read", "referrals.read", "affiliates.read", "seo.read", "integrations.read", "webhooks.read", "docs.read", "marketplace.read", "sso.read", "security.read", "privacy.read", "backups.read", "incidents.read", "network.read", "system.status.read",
+  "feature_flag.read", "announcement.read", "leads.read", "referrals.read", "affiliates.read", "seo.read", "integrations.read", "webhooks.read", "docs.read", "marketplace.read", "sso.read", "security.read", "privacy.read", "backups.read", "incidents.read", "network.read", "system.status.read", "queues.read",
   "analytics.read", "revenue.read", "usage.read",
   "reports.read", "reports.export", // every staff role reads + can export
   "system.read_settings", "notifications.read",
@@ -394,6 +398,7 @@ export const PLATFORM_ROLE_PERMISSIONS: Record<PlatformRole, PlatformPermission[
     "incidents.manage", "incidents.postmortem.write", "incidents.statuspage.write",
     "network.manage", "network.waf.write",
     "system.status.manage",
+    "queues.manage",
     "analytics.export",
     "reports.create", "reports.edit", "reports.schedule",
     "notifications.manage",
@@ -439,6 +444,7 @@ export const PLATFORM_ROLE_PERMISSIONS: Record<PlatformRole, PlatformPermission[
     "incidents.manage", "incidents.postmortem.write", "incidents.statuspage.write", // SRE runs incidents
     "network.manage", "network.waf.write", // SRE owns network rules + WAF
     "system.status.manage", // SRE owns the service catalog
+    "queues.manage", // SRE owns queues + cron
   ]),
   // Marketing — leads, announcements, public plan/feature copy.
   MARKETING_MANAGER: dedup([
