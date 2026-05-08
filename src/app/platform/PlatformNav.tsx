@@ -95,6 +95,7 @@ const NAV_ITEMS: NavItem[] = [
   { href: "/platform/security/privacy-requests",    label: "Privacy Requests",     icon: "User" },
   { href: "/platform/security/backups",             label: "Backups & Restore",    icon: "Package" },
   { href: "/platform/security/incidents",           label: "Incident Log",         icon: "Attention" },
+  { href: "/platform/security/network",             label: "Network Restrictions", icon: "Globe" },
 ];
 
 const COLLAPSE_KEY = "flowtora.platform-nav.collapsed";

@@ -427,6 +427,9 @@ model Tenant {
   tenantRestores         TenantRestore[]
   // Page 54 — incidents this tenant was affected by.
   affectedIncidents      IncidentAffectedTenant[]
+  // Page 55 — per-tenant network rules + config.
+  networkRules           NetworkRule[]
+  networkConfig          TenantNetworkConfig?
 }
 
 // ────────────────────────────────────────────────────────────
@@ -13060,4 +13063,288 @@ model Runbook {
   incidents Incident[]
 
   @@index([service, status])
+}
+
+// ────────────────────────────────────────────────────────────
+// Page 55 — IP Allowlist / Geo Restrictions.
+// ────────────────────────────────────────────────────────────
+
+enum NetworkRuleScope {
+  GLOBAL_ALLOW
+  GLOBAL_BLOCK
+  TENANT_ALLOW
+  TENANT_BLOCK
+}
+
+enum NetworkRuleAction {
+  ALLOW
+  BLOCK
+  CHALLENGE
+  LOG
+}
+
+enum TenantNetworkMode {
+  ALLOWLIST_ONLY
+  BLOCKLIST
+  DISABLED
+}
+
+enum GeoRestrictionMode {
+  ALLOW
+  BLOCK
+  CHALLENGE
+}
+
+enum GeoRestrictionSource {
+  MANUAL
+  OFAC
+  EU_SANCTIONS
+  UN_SANCTIONS
+  CUSTOM_FEED
+}
+
+enum NetworkFeedKind {
+  TOR
+  VPN_COMMERCIAL
+  OPEN_PROXY
+  DATACENTER
+  KNOWN_SCANNER
+  CRYPTO_MINER
+}
+
+enum DdosVector {
+  HTTP_FLOOD
+  SYN_FLOOD
+  UDP_AMPLIFICATION
+  DNS_AMPLIFICATION
+  SLOWLORIS
+  APPLICATION_LAYER
+  GENERIC
+}
+
+enum DdosStatus {
+  ACTIVE
+  MITIGATED
+  ESCALATED
+  ARCHIVED
+}
+
+enum WafRuleType {
+  OWASP_CRS
+  MANAGED_BOT
+  RATE_LIMIT
+  CUSTOM_REGEX
+  IP_REPUTATION
+  GEOFENCE
+}
+
+enum WafRuleAction {
+  ALLOW
+  CHALLENGE
+  BLOCK
+  LOG
+}
+
+/** CIDR-scoped network rule — global or per-tenant, allow or block. */
+model NetworkRule {
+  id String @id @default(cuid())
+
+  scope        NetworkRuleScope
+  /** CIDR notation IPv4 / IPv6 (e.g. 203.0.113.0/24, 2001:db8::/32). */
+  cidr         String
+  /** Display description. */
+  description  String?
+  /** Free-form tag for grouping (e.g. "office", "vendor", "abuse"). */
+  tag          String?
+
+  /** Optional tenant scope. Required when scope is TENANT_*. */
+  tenantId     String?
+  tenant       Tenant? @relation(fields: [tenantId], references: [id], onDelete: Cascade)
+
+  /** Whether this rule is currently enforced. */
+  active       Boolean @default(true)
+  /** Auto-expire timestamp; null = permanent. */
+  expiresAt    DateTime?
+
+  /** Hit counters (rolling — refreshed by edge sync job). */
+  hits24h      Int       @default(0)
+  hitsTotal    Int       @default(0)
+  lastHitAt    DateTime?
+
+  /** Source attribution: who created the row. */
+  createdById  String?
+  createdByEmail String?
+
+  createdAt DateTime @default(now())
+  updatedAt DateTime @updatedAt
+
+  @@unique([scope, cidr, tenantId])
+  @@index([scope, active])
+  @@index([tenantId, scope])
+  @@index([expiresAt])
+}
+
+/** Per-tenant network config — choose mode plus the catalog of
+ *  scoped rules surfaces in the rules table. */
+model TenantNetworkConfig {
+  id String @id @default(cuid())
+
+  tenantId String @unique
+  tenant   Tenant @relation(fields: [tenantId], references: [id], onDelete: Cascade)
+
+  mode TenantNetworkMode @default(DISABLED)
+  /** Optional notes. */
+  notes String?
+  /** Whether the tenant should still allow Flowtora support IPs through the gate. */
+  supportBypass Boolean @default(true)
+
+  updatedById String?
+  updatedAt DateTime @updatedAt
+  createdAt DateTime @default(now())
+
+  @@index([mode])
+}
+
+/** Per-country geo restriction. ISO-2 country code is the primary key
+ *  for the public list; we keep the row even when status is ALLOW so
+ *  the world map can render every country. */
+model GeoRestriction {
+  id String @id @default(cuid())
+
+  /** ISO 3166-1 alpha-2. */
+  countryCode  String @unique
+  countryName  String
+  /** Optional ISO 3166-1 alpha-3 for compatibility. */
+  iso3         String?
+
+  mode         GeoRestrictionMode   @default(ALLOW)
+  source       GeoRestrictionSource @default(MANUAL)
+  /** When the row was last refreshed by the source feed. */
+  lastSyncedAt DateTime?
+
+  hits24h      Int       @default(0)
+  hitsTotal    Int       @default(0)
+  lastHitAt    DateTime?
+
+  notes        String?
+
+  createdAt DateTime @default(now())
+  updatedAt DateTime @updatedAt
+
+  @@index([mode])
+  @@index([source])
+}
+
+/** Toggle + status row for each third-party network feed. */
+model NetworkFeedToggle {
+  id String @id @default(cuid())
+
+  kind        NetworkFeedKind @unique
+  enabled     Boolean         @default(false)
+  /** Source name: "Tor Project", "Spur.us", "IPHub", etc. */
+  sourceName  String
+  feedUrl     String?
+  /** When the feed was last refreshed. */
+  lastSyncedAt DateTime?
+  /** How many entries are currently on the feed. */
+  entryCount  Int             @default(0)
+  /** Cumulative hits in the last 24h. */
+  hits24h     Int             @default(0)
+
+  /** Optional override CIDRs that bypass this feed (e.g. corp VPN). */
+  overrideCidrs String[]
+
+  notes String?
+
+  createdAt DateTime @default(now())
+  updatedAt DateTime @updatedAt
+}
+
+/** Singleton — bot mitigation settings (Cloudflare/WAF). */
+model BotMitigationSettings {
+  id String @id @default("default")
+
+  /** Whether the bot detector is on. */
+  enabled       Boolean @default(true)
+  /** Bot score 0-100; >= threshold triggers `actionAboveThreshold`. */
+  botScoreThreshold     Int           @default(60)
+  actionAboveThreshold  WafRuleAction @default(CHALLENGE)
+  /** Captcha provider: TURNSTILE / RECAPTCHA / HCAPTCHA. */
+  challengeProvider     String        @default("TURNSTILE")
+  /** Default rate-limit (requests per minute per IP). */
+  defaultRpmPerIp       Int           @default(120)
+  /** Whether managed-bot allowlist (Googlebot / Bingbot) bypasses. */
+  managedBotAllowlist   Boolean       @default(true)
+
+  /** Free-form notes for the runbook. */
+  notes String?
+
+  updatedById String?
+  updatedAt   DateTime @updatedAt
+  createdAt   DateTime @default(now())
+}
+
+/** Mitigated DDoS event for the timeline. */
+model DdosEvent {
+  id String @id @default(cuid())
+
+  startedAt    DateTime
+  endedAt      DateTime?
+  durationSec  Int?
+  status       DdosStatus @default(MITIGATED)
+  vector       DdosVector @default(GENERIC)
+
+  /** Peak attack rates. */
+  peakMbps     Int?
+  peakMpps     Int?
+  /** Number of source IPs (unique) at peak. */
+  sourceIpCount Int?
+
+  /** Best-effort attribution string ("botnet:Mirai-variant", "ASN: 12345"). */
+  attribution  String?
+  /** Free-form summary written by SRE. */
+  summary      String?
+  /** Mitigation action: "Cloudflare auto", "AWS Shield", "Manual ratelimit". */
+  mitigationLayer String?
+
+  /** Linked incident if escalated. */
+  incidentId   String?
+
+  createdAt DateTime @default(now())
+  updatedAt DateTime @updatedAt
+
+  @@index([status, startedAt])
+}
+
+/** Custom or managed WAF rule. */
+model WafRule {
+  id String @id @default(cuid())
+
+  name        String
+  description String?
+  type        WafRuleType   @default(CUSTOM_REGEX)
+  /** Free-form match expression (regex / glob / IP list reference). */
+  matchExpr   String
+  /** Action when matched. */
+  action      WafRuleAction @default(BLOCK)
+  /** Whether this rule is currently active. */
+  enabled     Boolean @default(true)
+  /** Priority — lower fires first. */
+  priority    Int     @default(100)
+
+  /** Hit counters. */
+  hits24h     Int       @default(0)
+  hitsTotal   Int       @default(0)
+  lastHitAt   DateTime?
+
+  /** OWASP CRS rule id when type=OWASP_CRS, e.g. "942100". */
+  externalId  String?
+  /** Tag for grouping (e.g. "sql-injection", "xss", "scanners"). */
+  tag         String?
+
+  createdAt DateTime @default(now())
+  updatedAt DateTime @updatedAt
+
+  @@index([type, enabled])
+  @@index([priority])
 }

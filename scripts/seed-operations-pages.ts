@@ -77,6 +77,7 @@ async function main() {
   await seedPrivacyRequests(platformUsers, tenants);  // Page 52
   await seedBackups(platformUsers, tenants);          // Page 53
   await seedIncidents(platformUsers, tenants);        // Page 54
+  await seedNetwork(platformUsers, tenants);          // Page 55
 
   console.log("\n✓ Seed complete.\n");
   await db.$disconnect();
@@ -308,6 +309,12 @@ async function wipeOldSeed() {
   await db.statusPageComponent.deleteMany({ where: { slug: { startsWith: "seed-" } } });
   await db.statusPageMaintenance.deleteMany({ where: { title: { startsWith: "[seed] " } } });
   await db.runbook.deleteMany({ where: { slug: { startsWith: "seed-" } } });
+  // Page 55 — Network wipe.
+  await db.networkRule.deleteMany({ where: { description: { startsWith: "[seed] " } } });
+  await db.geoRestriction.deleteMany({ where: { source: "MANUAL", notes: { startsWith: "[seed]" } } });
+  await db.networkFeedToggle.deleteMany({ where: { sourceName: { startsWith: "[seed] " } } });
+  await db.ddosEvent.deleteMany({ where: { summary: { startsWith: "[seed] " } } });
+  await db.wafRule.deleteMany({ where: { name: { startsWith: "[seed] " } } });
   // Customers tagged seed (after orders are gone).
   await db.customer.deleteMany({ where: { tags: { has: "seed" } } });
   // Products tagged seed (use description marker since Product has no tags array).
@@ -9807,6 +9814,369 @@ On April 13 a deploy briefly broke webhook signatures for some tenants. Resolved
 
   console.log(
     `  ✓ ${components.length} status components, 3 maintenance windows, 6 runbooks, ${incs.length} incidents with timeline + comms + mitigations + action items`,
+  );
+}
+
+/* ── Page 55 — Network restrictions seed ───────────────── */
+
+async function seedNetwork(
+  staff: { id: string; email: string; name: string | null }[],
+  tenants: { id: string; name: string; slug: string }[],
+) {
+  console.log("── Seeding Network restrictions (Page 55)…");
+  const reviewer = staff[0];
+  if (!reviewer) {
+    console.log("  skipped — no platform staff");
+    return;
+  }
+
+  // 1. Bot mitigation singleton.
+  await db.botMitigationSettings.upsert({
+    where: { id: "default" },
+    create: {
+      id: "default",
+      enabled: true,
+      botScoreThreshold: 60,
+      actionAboveThreshold: "CHALLENGE",
+      challengeProvider: "TURNSTILE",
+      defaultRpmPerIp: 120,
+      managedBotAllowlist: true,
+      notes: "Cloudflare Turnstile fronts all auth + checkout. Googlebot/Bingbot allowlisted via verified-bot list.",
+      updatedById: reviewer.id,
+    },
+    update: {},
+  });
+
+  // 2. Network feeds.
+  type FeedBp = {
+    kind: "TOR" | "VPN_COMMERCIAL" | "OPEN_PROXY" | "DATACENTER" | "KNOWN_SCANNER" | "CRYPTO_MINER";
+    enabled: boolean;
+    sourceName: string;
+    feedUrl?: string;
+    entryCount: number;
+    hits24h: number;
+    overrideCidrs?: string[];
+    notes?: string;
+    syncedHoursAgo: number;
+  };
+  const feeds: FeedBp[] = [
+    { kind: "TOR", enabled: true, sourceName: "[seed] Tor Project exit list",
+      feedUrl: "https://check.torproject.org/torbulkexitlist",
+      entryCount: 1942, hits24h: 184,
+      overrideCidrs: ["198.51.100.0/24"],
+      notes: "Override allows research staff working from Tor.",
+      syncedHoursAgo: 1 },
+    { kind: "VPN_COMMERCIAL", enabled: true, sourceName: "[seed] Spur.us — commercial VPN feed",
+      entryCount: 38_412, hits24h: 612,
+      notes: "Score >0.85 → challenge; >0.95 → block.",
+      syncedHoursAgo: 6 },
+    { kind: "OPEN_PROXY", enabled: true, sourceName: "[seed] IPHub open-proxy feed",
+      entryCount: 14_220, hits24h: 318,
+      syncedHoursAgo: 4 },
+    { kind: "DATACENTER", enabled: false, sourceName: "[seed] AWS / GCP / Azure published ranges",
+      entryCount: 86_412, hits24h: 0,
+      notes: "Disabled — too aggressive (legitimate webhooks come from datacenters).",
+      syncedHoursAgo: 24 },
+    { kind: "KNOWN_SCANNER", enabled: true, sourceName: "[seed] Talos known-scanner feed",
+      entryCount: 4_120, hits24h: 142,
+      syncedHoursAgo: 2 },
+    { kind: "CRYPTO_MINER", enabled: true, sourceName: "[seed] CryptoJacking pool list",
+      entryCount: 612, hits24h: 38,
+      syncedHoursAgo: 12 },
+  ];
+  for (const f of feeds) {
+    await db.networkFeedToggle.upsert({
+      where: { kind: f.kind },
+      create: {
+        kind: f.kind,
+        enabled: f.enabled,
+        sourceName: f.sourceName,
+        feedUrl: f.feedUrl ?? null,
+        entryCount: f.entryCount,
+        hits24h: f.hits24h,
+        overrideCidrs: f.overrideCidrs ?? [],
+        notes: f.notes ?? null,
+        lastSyncedAt: new Date(Date.now() - f.syncedHoursAgo * 3_600_000),
+      },
+      update: {
+        enabled: f.enabled,
+        sourceName: f.sourceName,
+        entryCount: f.entryCount,
+        hits24h: f.hits24h,
+        overrideCidrs: f.overrideCidrs ?? [],
+        notes: f.notes ?? null,
+        lastSyncedAt: new Date(Date.now() - f.syncedHoursAgo * 3_600_000),
+      },
+    });
+  }
+
+  // 3. Network rules.
+  type RuleBp = {
+    scope: "GLOBAL_ALLOW" | "GLOBAL_BLOCK" | "TENANT_ALLOW" | "TENANT_BLOCK";
+    cidr: string;
+    description: string;
+    tag?: string;
+    tenantIdx?: number;
+    active?: boolean;
+    expiresDaysAhead?: number;
+    hits24h: number;
+    hitsTotal: number;
+    lastHitHoursAgo?: number;
+  };
+  const rules: RuleBp[] = [
+    { scope: "GLOBAL_ALLOW", cidr: "203.0.113.0/24",
+      description: "[seed] Flowtora corporate office — Austin", tag: "office",
+      hits24h: 412, hitsTotal: 142_812, lastHitHoursAgo: 0 },
+    { scope: "GLOBAL_ALLOW", cidr: "198.51.100.0/24",
+      description: "[seed] Flowtora corporate office — Berlin", tag: "office",
+      hits24h: 220, hitsTotal: 89_212, lastHitHoursAgo: 0 },
+    { scope: "GLOBAL_ALLOW", cidr: "192.0.2.50/32",
+      description: "[seed] Vendor jump host — NCC Group", tag: "vendor",
+      hits24h: 14, hitsTotal: 1_120, lastHitHoursAgo: 6,
+      expiresDaysAhead: 90 },
+    { scope: "GLOBAL_ALLOW", cidr: "2001:db8::/32",
+      description: "[seed] Flowtora corporate IPv6 prefix", tag: "office",
+      hits24h: 38, hitsTotal: 4_412, lastHitHoursAgo: 1 },
+    { scope: "GLOBAL_BLOCK", cidr: "45.33.32.0/24",
+      description: "[seed] Confirmed credential-stuffing source — banned 2026-04-22",
+      tag: "abuse", hits24h: 4_812, hitsTotal: 24_120, lastHitHoursAgo: 0 },
+    { scope: "GLOBAL_BLOCK", cidr: "5.188.10.0/22",
+      description: "[seed] Russia-based scanning ASN", tag: "abuse",
+      hits24h: 1_220, hitsTotal: 12_412, lastHitHoursAgo: 0 },
+    { scope: "GLOBAL_BLOCK", cidr: "185.220.101.0/24",
+      description: "[seed] Tor exit cluster — auto-promoted from Tor feed", tag: "tor-promoted",
+      hits24h: 612, hitsTotal: 8_412, lastHitHoursAgo: 0 },
+    { scope: "GLOBAL_BLOCK", cidr: "104.16.0.0/12",
+      description: "[seed] Misclassified Cloudflare range — paused for review",
+      tag: "review", active: false, hits24h: 0, hitsTotal: 0 },
+  ];
+  if (tenants.length >= 1) {
+    rules.push({ scope: "TENANT_ALLOW", cidr: "172.16.0.0/12",
+      description: "[seed] Tenant Acme — internal corporate range",
+      tag: "tenant-office", tenantIdx: 0, hits24h: 220, hitsTotal: 24_412, lastHitHoursAgo: 0 });
+    rules.push({ scope: "TENANT_BLOCK", cidr: "10.0.0.0/8",
+      description: "[seed] Tenant Acme — block private RFC1918 from public flows",
+      tag: "rfc1918", tenantIdx: 0, hits24h: 4, hitsTotal: 142, lastHitHoursAgo: 12 });
+  }
+  if (tenants.length >= 2) {
+    rules.push({ scope: "TENANT_ALLOW", cidr: "192.168.42.0/24",
+      description: "[seed] Tenant Bigshop — warehouse VLAN",
+      tag: "warehouse", tenantIdx: 1, hits24h: 142, hitsTotal: 12_412, lastHitHoursAgo: 1 });
+  }
+  for (const r of rules) {
+    const tenantId = r.tenantIdx != null ? tenants[r.tenantIdx]?.id ?? null : null;
+    try {
+      await db.networkRule.create({
+        data: {
+          scope: r.scope,
+          cidr: r.cidr,
+          description: r.description,
+          tag: r.tag ?? null,
+          tenantId,
+          active: r.active ?? true,
+          expiresAt: r.expiresDaysAhead != null ? new Date(Date.now() + r.expiresDaysAhead * 86_400_000) : null,
+          hits24h: r.hits24h,
+          hitsTotal: r.hitsTotal,
+          lastHitAt: r.lastHitHoursAgo != null ? new Date(Date.now() - r.lastHitHoursAgo * 3_600_000) : null,
+          createdById: reviewer.id,
+          createdByEmail: reviewer.email,
+        },
+      });
+    } catch {
+      // Duplicate — skip.
+    }
+  }
+
+  // 4. Tenant network configs.
+  if (tenants.length >= 1) {
+    await db.tenantNetworkConfig.upsert({
+      where: { tenantId: tenants[0]!.id },
+      create: {
+        tenantId: tenants[0]!.id,
+        mode: "ALLOWLIST_ONLY",
+        supportBypass: true,
+        notes: "Strict: only allow from Acme corporate ranges. Flowtora support gets a bypass via SLA agreement.",
+        updatedById: reviewer.id,
+      },
+      update: {
+        mode: "ALLOWLIST_ONLY",
+        supportBypass: true,
+      },
+    });
+  }
+  if (tenants.length >= 2) {
+    await db.tenantNetworkConfig.upsert({
+      where: { tenantId: tenants[1]!.id },
+      create: {
+        tenantId: tenants[1]!.id,
+        mode: "BLOCKLIST",
+        supportBypass: true,
+        notes: "Default-allow but blocks problematic ranges flagged by Bigshop's IT team.",
+        updatedById: reviewer.id,
+      },
+      update: { mode: "BLOCKLIST" },
+    });
+  }
+  if (tenants.length >= 3) {
+    await db.tenantNetworkConfig.upsert({
+      where: { tenantId: tenants[2]!.id },
+      create: {
+        tenantId: tenants[2]!.id,
+        mode: "DISABLED",
+        supportBypass: true,
+        notes: "Pacific West has no IP restrictions enabled (small team).",
+        updatedById: reviewer.id,
+      },
+      update: { mode: "DISABLED" },
+    });
+  }
+
+  // 5. Geo restrictions — small set covering common sanctions + a manual rule.
+  const geoEntries = [
+    { code: "RU", name: "Russia",      iso3: "RUS", mode: "BLOCK"     as const, source: "OFAC"        as const, hits24h: 412, notes: "[seed] OFAC sanctions" },
+    { code: "BY", name: "Belarus",     iso3: "BLR", mode: "BLOCK"     as const, source: "OFAC"        as const, hits24h: 38,  notes: "[seed] OFAC sanctions" },
+    { code: "IR", name: "Iran",        iso3: "IRN", mode: "BLOCK"     as const, source: "OFAC"        as const, hits24h: 12,  notes: "[seed] OFAC sanctions" },
+    { code: "KP", name: "North Korea", iso3: "PRK", mode: "BLOCK"     as const, source: "OFAC"        as const, hits24h: 0,   notes: "[seed] OFAC sanctions" },
+    { code: "SY", name: "Syria",       iso3: "SYR", mode: "BLOCK"     as const, source: "OFAC"        as const, hits24h: 0,   notes: "[seed] OFAC sanctions" },
+    { code: "CU", name: "Cuba",        iso3: "CUB", mode: "BLOCK"     as const, source: "OFAC"        as const, hits24h: 0,   notes: "[seed] OFAC sanctions" },
+    { code: "VE", name: "Venezuela",   iso3: "VEN", mode: "CHALLENGE" as const, source: "OFAC"        as const, hits24h: 28,  notes: "[seed] Targeted sanctions — challenge unverified" },
+    { code: "CN", name: "China",       iso3: "CHN", mode: "CHALLENGE" as const, source: "MANUAL"      as const, hits24h: 612, notes: "[seed] Manual: high scanner traffic; challenge non-tenant IPs" },
+    { code: "MM", name: "Myanmar",     iso3: "MMR", mode: "BLOCK"     as const, source: "EU_SANCTIONS" as const, hits24h: 0, notes: "[seed] EU sanctions" },
+    { code: "US", name: "United States", iso3: "USA", mode: "ALLOW"   as const, source: "MANUAL"      as const, hits24h: 184_120, notes: "[seed] Allowlist" },
+    { code: "GB", name: "United Kingdom", iso3: "GBR", mode: "ALLOW" as const, source: "MANUAL"      as const, hits24h: 38_412, notes: "[seed] Allowlist" },
+    { code: "DE", name: "Germany",     iso3: "DEU", mode: "ALLOW"     as const, source: "MANUAL"      as const, hits24h: 22_812, notes: "[seed] Allowlist" },
+  ];
+  for (const g of geoEntries) {
+    await db.geoRestriction.upsert({
+      where: { countryCode: g.code },
+      create: {
+        countryCode: g.code, countryName: g.name, iso3: g.iso3,
+        mode: g.mode, source: g.source,
+        hits24h: g.hits24h, hitsTotal: g.hits24h * 30,
+        lastHitAt: g.hits24h > 0 ? new Date(Date.now() - 60_000) : null,
+        notes: g.notes,
+        lastSyncedAt: new Date(Date.now() - 86_400_000),
+      },
+      update: {
+        mode: g.mode, source: g.source,
+        hits24h: g.hits24h, hitsTotal: g.hits24h * 30,
+        notes: g.notes,
+      },
+    });
+  }
+
+  // 6. DDoS events.
+  await db.ddosEvent.createMany({
+    data: [
+      { startedAt: daysAgo(2),   endedAt: daysAgo(2 - 0.05), durationSec: 4_320,
+        status: "MITIGATED", vector: "HTTP_FLOOD",
+        peakMbps: 240, peakMpps: 1, sourceIpCount: 14_812,
+        attribution: "Mirai-variant botnet", summary: "[seed] Mass HTTP/2 RST flood — auto-blocked by Cloudflare.",
+        mitigationLayer: "Cloudflare Magic Transit + WAF" },
+      { startedAt: daysAgo(8),   endedAt: daysAgo(8 - 0.02), durationSec: 1_800,
+        status: "MITIGATED", vector: "SYN_FLOOD",
+        peakMbps: 880, peakMpps: 5, sourceIpCount: 24_412,
+        attribution: "ASN-X spoofed",
+        summary: "[seed] SYN flood at L4 — absorbed by AWS Shield Advanced.",
+        mitigationLayer: "AWS Shield Advanced" },
+      { startedAt: daysAgo(20),  endedAt: daysAgo(20 - 0.04), durationSec: 3_600,
+        status: "MITIGATED", vector: "DNS_AMPLIFICATION",
+        peakMbps: 12_400, peakMpps: 42, sourceIpCount: 142_812,
+        attribution: "Open resolvers — global", summary: "[seed] Large DNS amp — fully mitigated upstream.",
+        mitigationLayer: "Cloudflare Magic Transit" },
+      { startedAt: daysAgo(35),  endedAt: daysAgo(35 - 0.06), durationSec: 5_400,
+        status: "MITIGATED", vector: "APPLICATION_LAYER",
+        peakMbps: 80, peakMpps: 0, sourceIpCount: 4_212,
+        attribution: "Bot operator targeting /api/login",
+        summary: "[seed] Layer 7 — credential stuffing fan-out. Rate-limited + IPs blocked.",
+        mitigationLayer: "Cloudflare WAF + custom rate limit" },
+      { startedAt: daysAgo(60),  endedAt: daysAgo(60 - 0.01), durationSec: 600,
+        status: "ARCHIVED", vector: "SLOWLORIS",
+        peakMbps: 2, peakMpps: 0, sourceIpCount: 412,
+        attribution: "Researcher",
+        summary: "[seed] Trivial Slowloris attempt — no impact.",
+        mitigationLayer: "Built-in keepalive timeout" },
+    ],
+  });
+
+  // 7. WAF rules.
+  await db.wafRule.createMany({
+    data: [
+      { name: "[seed] OWASP CRS 942100 — SQL injection (boolean-based)",
+        description: "OWASP Core Rule Set — boolean-based SQL injection",
+        type: "OWASP_CRS",
+        matchExpr: "(?i)(\\bor\\b|\\band\\b)\\s+\\d+=\\d+",
+        action: "BLOCK", enabled: true, priority: 10,
+        externalId: "942100", tag: "sql-injection",
+        hits24h: 12, hitsTotal: 4_412, lastHitAt: new Date(Date.now() - 12 * 60_000) },
+      { name: "[seed] OWASP CRS 941100 — XSS reflected",
+        description: "Reflected XSS detection",
+        type: "OWASP_CRS",
+        matchExpr: "(?i)<script[^>]*>",
+        action: "BLOCK", enabled: true, priority: 11,
+        externalId: "941100", tag: "xss",
+        hits24h: 38, hitsTotal: 12_412, lastHitAt: new Date(Date.now() - 4 * 60_000) },
+      { name: "[seed] Login rate-limit — 30/min/IP",
+        description: "Limit POST /api/auth/login to 30 attempts per minute per IP",
+        type: "RATE_LIMIT",
+        matchExpr: "POST /api/auth/login",
+        action: "CHALLENGE", enabled: true, priority: 20,
+        tag: "auth",
+        hits24h: 220, hitsTotal: 89_412, lastHitAt: new Date(Date.now() - 60_000) },
+      { name: "[seed] Block scanners by UA",
+        description: "Block common scanner User-Agents (sqlmap, nikto, nuclei, etc.)",
+        type: "CUSTOM_REGEX",
+        matchExpr: "(?i)(sqlmap|nikto|nuclei|wpscan|acunetix|burpcollaborator|nmap)",
+        action: "BLOCK", enabled: true, priority: 30,
+        tag: "scanners",
+        hits24h: 412, hitsTotal: 24_412, lastHitAt: new Date(Date.now() - 30_000) },
+      { name: "[seed] Block requests from low-reputation IPs",
+        description: "Cloudflare IP reputation score >= high",
+        type: "IP_REPUTATION",
+        matchExpr: "ip.threat_score > 50",
+        action: "CHALLENGE", enabled: true, priority: 40,
+        tag: "reputation",
+        hits24h: 612, hitsTotal: 142_812, lastHitAt: new Date(Date.now() - 60_000) },
+      { name: "[seed] Geofence — block sanctioned countries",
+        description: "Block-list countries (RU, BY, IR, KP, SY, CU)",
+        type: "GEOFENCE",
+        matchExpr: "geo.country in {RU BY IR KP SY CU}",
+        action: "BLOCK", enabled: true, priority: 50,
+        tag: "geo",
+        hits24h: 462, hitsTotal: 28_412, lastHitAt: new Date(Date.now() - 90_000) },
+      { name: "[seed] Managed bot mode — challenge non-verified bots",
+        description: "Cloudflare managed bot mode",
+        type: "MANAGED_BOT",
+        matchExpr: "bot_score < 30",
+        action: "CHALLENGE", enabled: true, priority: 60,
+        tag: "bots",
+        hits24h: 1_812, hitsTotal: 412_812, lastHitAt: new Date(Date.now() - 60_000) },
+      { name: "[seed] Custom — block /api/admin from non-allowlisted IPs",
+        description: "Defence-in-depth for /api/admin endpoints",
+        type: "CUSTOM_REGEX",
+        matchExpr: "^/api/admin/.+ AND !ip in {office-allowlist}",
+        action: "BLOCK", enabled: true, priority: 5,
+        tag: "admin",
+        hits24h: 0, hitsTotal: 0 },
+      { name: "[seed] Log only — anomalous JSON depth",
+        description: "Log requests with very deep JSON nesting (potential RDoS)",
+        type: "CUSTOM_REGEX",
+        matchExpr: "json.depth > 50",
+        action: "LOG", enabled: true, priority: 80,
+        tag: "rdos",
+        hits24h: 4, hitsTotal: 142 },
+      { name: "[seed] Disabled — legacy SQLi rule (fp-prone)",
+        description: "Older SQLi rule with high false-positive rate. Kept for archive.",
+        type: "OWASP_CRS",
+        matchExpr: "(?i)\\b(union|select)\\b",
+        action: "LOG", enabled: false, priority: 90,
+        externalId: "942110", tag: "sql-injection",
+        hits24h: 0, hitsTotal: 0 },
+    ],
+  });
+
+  console.log(
+    `  ✓ ${rules.length} network rules, ${geoEntries.length} geo, ${feeds.length} feeds, 5 DDoS events, 10 WAF rules, ${tenants.length} tenant configs`,
   );
 }
 

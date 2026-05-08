@@ -114,6 +114,9 @@ export const PERMISSION_DESCRIPTIONS: Record<PlatformPermission, string> = {
   "incidents.manage":          "Open, update, and resolve incidents; assign roles; toggle action items.",
   "incidents.postmortem.write": "Author and publish postmortems with action items.",
   "incidents.statuspage.write": "Publish public status-page updates and maintenance windows.",
+  "network.read":     "View IP allow/block lists, geo restrictions, feed toggles, DDoS events, WAF rules.",
+  "network.manage":   "Edit allowlists, blocklists, per-tenant network mode, geo restrictions, feed toggles, bot settings.",
+  "network.waf.write": "Author + edit WAF rules (managed + custom).",
   // Analytics
   "analytics.read":        "Read analytics dashboards.",
   "analytics.export":      "Export analytics datasets.",
