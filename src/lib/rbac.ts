@@ -252,6 +252,10 @@ export type PlatformPermission =
   | "privacy.triage"
   | "privacy.process"
   | "privacy.delete"
+  // Compliance & Security — Page 53 Backups & Restore
+  | "backups.read"
+  | "backups.manage"
+  | "backups.restore"
 
   // Analytics / BI
   | "analytics.read"
@@ -297,6 +301,7 @@ const PLATFORM_ALL: PlatformPermission[] = [
   "security.read", "security.manage", "security.findings.resolve",
   "compliance.policy.write", "compliance.evidence.upload", "compliance.vendor.review", "compliance.report.generate",
   "privacy.read", "privacy.triage", "privacy.process", "privacy.delete",
+  "backups.read", "backups.manage", "backups.restore",
   "analytics.read", "analytics.export", "revenue.read", "usage.read",
   "reports.read", "reports.create", "reports.edit", "reports.delete",
   "reports.schedule", "reports.export",
@@ -311,7 +316,7 @@ const PLATFORM_ALL: PlatformPermission[] = [
 const PLATFORM_BASELINE_READ: PlatformPermission[] = [
   "tenant.read", "billing.read", "staff.read", "users.read",
   "support.read", "health.read", "audit.read", "compliance.read",
-  "feature_flag.read", "announcement.read", "leads.read", "referrals.read", "affiliates.read", "seo.read", "integrations.read", "webhooks.read", "docs.read", "marketplace.read", "sso.read", "security.read", "privacy.read",
+  "feature_flag.read", "announcement.read", "leads.read", "referrals.read", "affiliates.read", "seo.read", "integrations.read", "webhooks.read", "docs.read", "marketplace.read", "sso.read", "security.read", "privacy.read", "backups.read",
   "analytics.read", "revenue.read", "usage.read",
   "reports.read", "reports.export", // every staff role reads + can export
   "system.read_settings", "notifications.read",
@@ -370,6 +375,7 @@ export const PLATFORM_ROLE_PERMISSIONS: Record<PlatformRole, PlatformPermission[
     "compliance.manage", "compliance.policy.write", "compliance.evidence.upload",
     "compliance.vendor.review", "compliance.report.generate",
     "privacy.triage", "privacy.process", "privacy.delete",
+    "backups.manage", "backups.restore",
     "analytics.export",
     "reports.create", "reports.edit", "reports.schedule",
     "notifications.manage",
@@ -410,6 +416,7 @@ export const PLATFORM_ROLE_PERMISSIONS: Record<PlatformRole, PlatformPermission[
     "marketplace.manage",         // owns marketplace approvals
     "sso.manage", "sso.test_login", // owns SSO + SCIM
     "security.manage", "security.findings.resolve", // owns the security center
+    "backups.manage", "backups.restore", // SRE owns backups + recovery
   ]),
   // Marketing — leads, announcements, public plan/feature copy.
   MARKETING_MANAGER: dedup([

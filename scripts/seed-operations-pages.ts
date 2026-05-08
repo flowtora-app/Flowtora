@@ -75,6 +75,7 @@ async function main() {
   await seedSecurityCenter(platformUsers);            // Page 50
   await seedCompliance(tenants);                      // Page 51
   await seedPrivacyRequests(platformUsers, tenants);  // Page 52
+  await seedBackups(platformUsers, tenants);          // Page 53
 
   console.log("\n✓ Seed complete.\n");
   await db.$disconnect();
@@ -295,6 +296,12 @@ async function wipeOldSeed() {
   await db.complianceReport.deleteMany({ where: { title: { startsWith: "[seed] " } } });
   // Page 52 — Privacy Requests wipe (cascades verifications/scope/messages/audit).
   await db.privacyRequest.deleteMany({ where: { externalId: { startsWith: "DSR-SEED-" } } });
+  // Page 53 — Backups wipe.
+  await db.backupSchedule.deleteMany({ where: { name: { startsWith: "[seed] " } } });
+  await db.backupJob.deleteMany({ where: { manifestUrl: { contains: "backups.flowtora.example" } } });
+  await db.restoreTest.deleteMany({ where: { name: { startsWith: "[seed] " } } });
+  await db.tenantRestore.deleteMany({ where: { reason: { startsWith: "[seed] " } } });
+  await db.backupStorageBucket.deleteMany({ where: { bucketName: { startsWith: "seed-" } } });
   // Customers tagged seed (after orders are gone).
   await db.customer.deleteMany({ where: { tags: { has: "seed" } } });
   // Products tagged seed (use description marker since Product has no tags array).
@@ -8943,6 +8950,338 @@ async function seedPrivacyRequests(
 
   console.log(
     `  ✓ ${reqs.length} privacy requests with verifications + scope discovery + messages + audit trails`,
+  );
+}
+
+/* ── Page 53 — Backups & Restore seed ──────────────────── */
+
+async function seedBackups(
+  staff: { id: string; email: string; name: string | null }[],
+  tenants: { id: string; name: string; slug: string }[],
+) {
+  console.log("── Seeding Backups & Restore (Page 53)…");
+  const reviewer = staff[0];
+  if (!reviewer) {
+    console.log("  skipped — no platform staff");
+    return;
+  }
+
+  // 1. Settings singleton.
+  await db.backupSettings.upsert({
+    where: { id: "default" },
+    create: {
+      id: "default",
+      kmsProvider: "AWS KMS",
+      kmsKeyId: "alias/flowtora-backups",
+      keyLastRotatedAt: daysAgo(34),
+      keyRotationDueIn: 56,
+      crossAccountReplication: true,
+      vendor: "AWS Backup + Velero (k8s)",
+      rpoMinutes: 60,
+      rtoMinutes: 240,
+      successTarget: 99,
+      notes: "Cross-account replication into security-archive AWS account. Velero snapshots cluster state daily.",
+    },
+    update: {
+      keyLastRotatedAt: daysAgo(34),
+      keyRotationDueIn: 56,
+    },
+  });
+
+  // 2. Schedules.
+  type SchedBp = {
+    name: string;
+    source: "POSTGRES" | "S3_PROOFS" | "S3_EXPORTS" | "REDIS" | "ELASTICSEARCH" | "CONFIG" | "KMS_KEYS";
+    kind:   "CONTINUOUS_WAL" | "SNAPSHOT" | "FULL" | "INCREMENTAL" | "ARCHIVE";
+    cadence: "CONTINUOUS" | "HOURLY" | "DAILY" | "WEEKLY" | "MONTHLY" | "ON_DEMAND";
+    cron?: string;
+    retentionDays: number;
+    encryption: "AES_256_GCM" | "AES_256_CBC" | "RSA_4096";
+    region: "US_EAST_1" | "US_WEST_2" | "EU_WEST_1" | "AP_SOUTHEAST_1" | "GLOBAL";
+    lastRunHoursAgo?: number;
+    nextRunHoursAhead?: number;
+    notes?: string;
+  };
+  const scheds: SchedBp[] = [
+    { name: "[seed] Postgres continuous WAL stream",
+      source: "POSTGRES", kind: "CONTINUOUS_WAL", cadence: "CONTINUOUS",
+      retentionDays: 30,
+      encryption: "AES_256_GCM", region: "US_EAST_1",
+      lastRunHoursAgo: 0, nextRunHoursAhead: 0,
+      notes: "WAL streamed continuously to S3; last-mile lag <60s." },
+    { name: "[seed] Postgres daily snapshot",
+      source: "POSTGRES", kind: "SNAPSHOT", cadence: "DAILY",
+      cron: "0 3 * * *",
+      retentionDays: 30,
+      encryption: "AES_256_GCM", region: "US_EAST_1",
+      lastRunHoursAgo: 9, nextRunHoursAhead: 15,
+      notes: "Encrypted snapshot to S3; verified by hash on completion." },
+    { name: "[seed] Postgres weekly full",
+      source: "POSTGRES", kind: "FULL", cadence: "WEEKLY",
+      cron: "0 4 * * 0",
+      retentionDays: 90,
+      encryption: "AES_256_GCM", region: "EU_WEST_1",
+      lastRunHoursAgo: 36, nextRunHoursAhead: 132,
+      notes: "Cross-region full to EU for compliance." },
+    { name: "[seed] Postgres monthly archive",
+      source: "POSTGRES", kind: "ARCHIVE", cadence: "MONTHLY",
+      cron: "0 5 1 * *",
+      retentionDays: 99999,
+      encryption: "AES_256_GCM", region: "US_WEST_2",
+      lastRunHoursAgo: 480, nextRunHoursAhead: 240,
+      notes: "Glacier Deep Archive — held forever for SOC 2 / GDPR." },
+    { name: "[seed] S3 proofs cross-region replication",
+      source: "S3_PROOFS", kind: "CONTINUOUS_WAL", cadence: "CONTINUOUS",
+      retentionDays: 365,
+      encryption: "AES_256_GCM", region: "EU_WEST_1",
+      lastRunHoursAgo: 0,
+      notes: "S3 versioning + CRR to eu-west-1 + Object Lock 7-year." },
+    { name: "[seed] S3 exports daily snapshot",
+      source: "S3_EXPORTS", kind: "SNAPSHOT", cadence: "DAILY",
+      cron: "0 4 * * *",
+      retentionDays: 90,
+      encryption: "AES_256_GCM", region: "US_EAST_1",
+      lastRunHoursAgo: 8, nextRunHoursAhead: 16 },
+    { name: "[seed] Redis snapshot (cluster RDB)",
+      source: "REDIS", kind: "SNAPSHOT", cadence: "HOURLY",
+      cron: "0 * * * *",
+      retentionDays: 7,
+      encryption: "AES_256_GCM", region: "US_EAST_1",
+      lastRunHoursAgo: 1, nextRunHoursAhead: 0,
+      notes: "RDB snapshot every hour; replicas already synchronous." },
+    { name: "[seed] Elasticsearch hourly snapshot",
+      source: "ELASTICSEARCH", kind: "SNAPSHOT", cadence: "HOURLY",
+      cron: "30 * * * *",
+      retentionDays: 30,
+      encryption: "AES_256_GCM", region: "US_EAST_1",
+      lastRunHoursAgo: 1, nextRunHoursAhead: 0 },
+    { name: "[seed] Config + secrets daily",
+      source: "CONFIG", kind: "FULL", cadence: "DAILY",
+      cron: "0 5 * * *",
+      retentionDays: 365,
+      encryption: "AES_256_GCM", region: "US_EAST_1",
+      lastRunHoursAgo: 7, nextRunHoursAhead: 17,
+      notes: "Includes Vault snapshots + IaC repo state." },
+    { name: "[seed] KMS key rotation snapshot",
+      source: "KMS_KEYS", kind: "ARCHIVE", cadence: "MONTHLY",
+      cron: "0 5 15 * *",
+      retentionDays: 99999,
+      encryption: "RSA_4096", region: "GLOBAL",
+      lastRunHoursAgo: 720, nextRunHoursAhead: 0 },
+  ];
+  type SchedSaved = { id: string; source: SchedBp["source"]; kind: SchedBp["kind"]; region: SchedBp["region"]; encryption: SchedBp["encryption"]; cadence: SchedBp["cadence"] };
+  const schedSaved: SchedSaved[] = [];
+  for (const s of scheds) {
+    const saved = await db.backupSchedule.create({
+      data: {
+        name: s.name,
+        source: s.source, kind: s.kind, cadence: s.cadence,
+        cronExpr: s.cron ?? null,
+        retentionDays: s.retentionDays,
+        encryption: s.encryption, region: s.region,
+        active: true,
+        lastRunAt: s.lastRunHoursAgo != null ? new Date(Date.now() - s.lastRunHoursAgo * 3_600_000) : null,
+        nextRunAt: s.nextRunHoursAhead != null ? new Date(Date.now() + s.nextRunHoursAhead * 3_600_000) : null,
+        notes: s.notes ?? null,
+      },
+      select: { id: true, source: true, kind: true, region: true, encryption: true, cadence: true },
+    });
+    schedSaved.push(saved as SchedSaved);
+  }
+
+  // 3. Backup jobs (recent history per schedule).
+  const STATUSES = ["SUCCESS", "SUCCESS", "SUCCESS", "SUCCESS", "SUCCESS", "SUCCESS", "SUCCESS", "SUCCESS", "FAILED", "PARTIAL"] as const;
+  const jobsToCreate: Array<{
+    scheduleId: string;
+    source: SchedBp["source"];
+    kind: SchedBp["kind"];
+    status: "SUCCESS" | "FAILED" | "PARTIAL";
+    region: SchedBp["region"];
+    encryption: SchedBp["encryption"];
+    startedAt: Date;
+    completedAt: Date;
+    durationSec: number;
+    sizeBytes: bigint;
+    manifestHash: string;
+    manifestUrl: string;
+    logsUrl: string;
+    errorMessage: string | null;
+    verified: boolean;
+    verifiedAt: Date | null;
+  }> = [];
+
+  for (const s of schedSaved) {
+    const targetCount = s.cadence === "CONTINUOUS" || s.cadence === "HOURLY" ? 24
+                      : s.cadence === "DAILY" ? 14
+                      : s.cadence === "WEEKLY" ? 8
+                      : s.cadence === "MONTHLY" ? 4
+                      : 2;
+    for (let i = 0; i < targetCount; i++) {
+      const status = STATUSES[Math.floor(Math.random() * STATUSES.length)]!;
+      const hoursBack = (i + 1) * (s.cadence === "CONTINUOUS" || s.cadence === "HOURLY" ? 1
+                                  : s.cadence === "DAILY" ? 24
+                                  : s.cadence === "WEEKLY" ? 168
+                                  : s.cadence === "MONTHLY" ? 720
+                                  : 24);
+      const durationSec = Math.floor(Math.random() * 600) + 30;
+      const startedAt = new Date(Date.now() - hoursBack * 3_600_000);
+      const completedAt = new Date(startedAt.getTime() + durationSec * 1000);
+      const sizeBytes = BigInt(
+        s.kind === "CONTINUOUS_WAL" ? Math.floor(Math.random() * 200_000_000) + 50_000_000
+        : s.kind === "ARCHIVE"      ? Math.floor(Math.random() * 50_000_000_000) + 20_000_000_000
+        : s.kind === "FULL"         ? Math.floor(Math.random() * 30_000_000_000) + 10_000_000_000
+        :                             Math.floor(Math.random() * 5_000_000_000)  + 500_000_000,
+      );
+      const hash = createHash("sha256").update(randomBytes(32)).digest("hex");
+      jobsToCreate.push({
+        scheduleId: s.id,
+        source: s.source, kind: s.kind, status,
+        region: s.region, encryption: s.encryption,
+        startedAt, completedAt, durationSec,
+        sizeBytes,
+        manifestHash: hash,
+        manifestUrl: `https://backups.flowtora.example/manifests/${hash}.json`,
+        logsUrl:     `https://backups.flowtora.example/logs/${hash}.txt`,
+        errorMessage: status === "FAILED"   ? "Snapshot upload timed out after 600s"
+                    : status === "PARTIAL" ? "WAL gap detected — re-running incremental"
+                    : null,
+        verified: status === "SUCCESS",
+        verifiedAt: status === "SUCCESS" ? completedAt : null,
+      });
+    }
+  }
+  // Bulk insert in chunks.
+  for (let i = 0; i < jobsToCreate.length; i += 200) {
+    await db.backupJob.createMany({ data: jobsToCreate.slice(i, i + 200) });
+  }
+
+  // 4. Restore tests (~6 monthly drills).
+  await db.restoreTest.createMany({
+    data: [
+      { name: "[seed] 2026-04 Postgres monthly drill", source: "POSTGRES", region: "US_EAST_1",
+        startedAt: daysAgo(7), completedAt: daysAgo(6.95), durationSec: 4_320,
+        result: "PASS", sampleQueriesPassed: 12, sampleQueriesTotal: 12,
+        reportUrl: "https://docs.flowtora.com/drills/2026-04-postgres.pdf",
+        summary: "RTO target 4h met (1h 12m). All 12 sample queries passed." },
+      { name: "[seed] 2026-03 Postgres monthly drill", source: "POSTGRES", region: "US_EAST_1",
+        startedAt: daysAgo(38), completedAt: daysAgo(37.94), durationSec: 5_300,
+        result: "PASS", sampleQueriesPassed: 12, sampleQueriesTotal: 12,
+        reportUrl: "https://docs.flowtora.com/drills/2026-03-postgres.pdf",
+        summary: "Clean restore — 1h 28m." },
+      { name: "[seed] 2026-02 Postgres monthly drill", source: "POSTGRES", region: "US_EAST_1",
+        startedAt: daysAgo(68), completedAt: daysAgo(67.93), durationSec: 6_120,
+        result: "PARTIAL", sampleQueriesPassed: 11, sampleQueriesTotal: 12,
+        reportUrl: "https://docs.flowtora.com/drills/2026-02-postgres.pdf",
+        summary: "1 sample query failed — fixture mismatch since-fixed." },
+      { name: "[seed] 2026-04 S3 cross-region restore", source: "S3_PROOFS", region: "EU_WEST_1",
+        startedAt: daysAgo(10), completedAt: daysAgo(9.96), durationSec: 3_540,
+        result: "PASS", sampleQueriesPassed: 8, sampleQueriesTotal: 8,
+        reportUrl: "https://docs.flowtora.com/drills/2026-04-s3-eu.pdf" },
+      { name: "[seed] 2026-04 Redis snapshot drill", source: "REDIS", region: "US_EAST_1",
+        startedAt: daysAgo(3), completedAt: daysAgo(2.99), durationSec: 240,
+        result: "PASS", sampleQueriesPassed: 4, sampleQueriesTotal: 4 },
+      { name: "[seed] 2026-04 Config restore drill", source: "CONFIG", region: "US_EAST_1",
+        startedAt: daysAgo(15), completedAt: daysAgo(14.98), durationSec: 1_440,
+        result: "PASS", sampleQueriesPassed: 6, sampleQueriesTotal: 6 },
+    ],
+  });
+
+  // 5. Tenant restores (~5 across statuses).
+  if (tenants.length > 0) {
+    await db.tenantRestore.create({
+      data: {
+        tenantId: tenants[0]!.id,
+        targetAt: daysAgo(14),
+        status: "APPLIED",
+        rowsAffected: 1842, rowsAdded: 38, rowsChanged: 1742, rowsRemoved: 62,
+        tablesAffected: [
+          { table: "Customer",        added: 12, changed: 220, removed: 4 },
+          { table: "Order",           added: 18, changed: 980, removed: 24 },
+          { table: "Invoice",         added: 4,  changed: 380, removed: 18 },
+          { table: "ProductionStage", added: 4,  changed: 162, removed: 16 },
+        ] as never,
+        initiatedById: reviewer.id,
+        approvedById: reviewer.id,
+        approvedAt: daysAgo(13.9),
+        appliedAt:  daysAgo(13.85),
+        reason: "[seed] Tenant accidentally bulk-deleted 38 customers; rolled back.",
+        reviewNotes: "Reviewed diff with tenant owner; approved over Zoom call.",
+      },
+    });
+  }
+  if (tenants.length > 1) {
+    await db.tenantRestore.create({
+      data: {
+        tenantId: tenants[1]!.id,
+        targetAt: daysAgo(2),
+        status: "REVIEWING",
+        rowsAffected: 312, rowsAdded: 6, rowsChanged: 290, rowsRemoved: 16,
+        tablesAffected: [
+          { table: "Order",   added: 4, changed: 200, removed: 12 },
+          { table: "Invoice", added: 2, changed: 90,  removed: 4  },
+        ] as never,
+        initiatedById: reviewer.id,
+        reason: "[seed] Tenant requested rollback after pricing import error.",
+      },
+    });
+  }
+  if (tenants.length > 0) {
+    await db.tenantRestore.create({
+      data: {
+        tenantId: tenants[0]!.id,
+        targetAt: daysAgo(60),
+        status: "DISCARDED",
+        rowsAffected: 0, rowsAdded: 0, rowsChanged: 0, rowsRemoved: 0,
+        initiatedById: reviewer.id,
+        reason: "[seed] Tenant requested 60-day rollback then changed mind after diff review.",
+        reviewNotes: "Discarded — tenant happy with current state.",
+        discardedAt: daysAgo(59.5),
+      },
+    });
+  }
+  if (tenants.length > 2) {
+    await db.tenantRestore.create({
+      data: {
+        tenantId: tenants[2]!.id,
+        targetAt: daysAgo(7),
+        status: "FAILED",
+        rowsAffected: 0, rowsAdded: 0, rowsChanged: 0, rowsRemoved: 0,
+        initiatedById: reviewer.id,
+        reason: "[seed] Investigation of suspected unauthorized deletion.",
+        reviewNotes: "Shadow restore failed — Postgres WAL gap during requested timestamp. Escalated.",
+        failedAt: daysAgo(6.9),
+      },
+    });
+  }
+
+  // 6. Storage buckets.
+  await db.backupStorageBucket.createMany({
+    data: [
+      { provider: "AWS S3", bucketName: "seed-flowtora-backups-prod", region: "US_EAST_1",
+        hotBytes: BigInt(820_000_000_000), archiveBytes: BigInt(2_400_000_000_000),
+        crrEnabled: true, crrHealth: "HEALTHY", bucketHealth: "HEALTHY",
+        monthlyCostCents: 84_000, lastRefreshedAt: minutesAgo(15),
+        notes: "Primary backup bucket — versioning + CRR + Object Lock." },
+      { provider: "AWS S3", bucketName: "seed-flowtora-backups-eu", region: "EU_WEST_1",
+        hotBytes: BigInt(420_000_000_000), archiveBytes: BigInt(1_100_000_000_000),
+        crrEnabled: true, crrHealth: "HEALTHY", bucketHealth: "HEALTHY",
+        monthlyCostCents: 51_000, lastRefreshedAt: minutesAgo(15),
+        notes: "Cross-region replica for EU compliance." },
+      { provider: "AWS S3", bucketName: "seed-flowtora-archives-glacier", region: "US_WEST_2",
+        hotBytes: BigInt(0), archiveBytes: BigInt(38_000_000_000_000),
+        crrEnabled: false, crrHealth: "HEALTHY", bucketHealth: "HEALTHY",
+        monthlyCostCents: 9_500, lastRefreshedAt: minutesAgo(45),
+        notes: "Glacier Deep Archive — monthly archives kept forever." },
+      { provider: "Cloudflare R2", bucketName: "seed-flowtora-proofs-cold", region: "GLOBAL",
+        hotBytes: BigInt(180_000_000_000), archiveBytes: BigInt(0),
+        crrEnabled: false, crrHealth: "DEGRADED", bucketHealth: "HEALTHY",
+        monthlyCostCents: 27_000, lastRefreshedAt: minutesAgo(120),
+        notes: "Egress-free secondary for proofs; CRR not yet wired." },
+    ],
+  });
+
+  console.log(
+    `  ✓ ${scheds.length} schedules, ${jobsToCreate.length} jobs, 6 restore tests, 4 tenant restores, 4 buckets`,
   );
 }
 

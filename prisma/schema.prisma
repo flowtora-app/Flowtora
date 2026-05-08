@@ -423,6 +423,8 @@ model Tenant {
   dpa                    TenantDpa?
   // Page 52 — Privacy requests scoped to this tenant.
   privacyRequests        PrivacyRequest[]
+  // Page 53 — point-in-time restore runs against this tenant.
+  tenantRestores         TenantRestore[]
 }
 
 // ────────────────────────────────────────────────────────────
@@ -12414,4 +12416,275 @@ model PrivacyRequestAuditEntry {
   occurredAt DateTime @default(now())
 
   @@index([requestId, occurredAt])
+}
+
+// ────────────────────────────────────────────────────────────
+// Page 53 — Backups & Restore.
+// ────────────────────────────────────────────────────────────
+
+enum BackupSource {
+  POSTGRES
+  S3_PROOFS
+  S3_EXPORTS
+  REDIS
+  ELASTICSEARCH
+  CONFIG
+  KMS_KEYS
+}
+
+enum BackupCadence {
+  CONTINUOUS
+  HOURLY
+  DAILY
+  WEEKLY
+  MONTHLY
+  ON_DEMAND
+}
+
+enum BackupKind {
+  CONTINUOUS_WAL
+  SNAPSHOT
+  FULL
+  INCREMENTAL
+  ARCHIVE
+}
+
+enum BackupJobStatus {
+  PENDING
+  RUNNING
+  SUCCESS
+  FAILED
+  PARTIAL
+  EXPIRED
+}
+
+enum StorageRegion {
+  US_EAST_1
+  US_WEST_2
+  EU_WEST_1
+  AP_SOUTHEAST_1
+  GLOBAL
+}
+
+enum BackupEncryptionAlgorithm {
+  AES_256_GCM
+  AES_256_CBC
+  RSA_4096
+}
+
+enum RestoreTestResult {
+  PASS
+  FAIL
+  PARTIAL
+  RUNNING
+}
+
+enum TenantRestoreStatus {
+  DRAFT
+  SHADOW_RUN
+  REVIEWING
+  APPLIED
+  DISCARDED
+  FAILED
+}
+
+enum StorageHealth {
+  HEALTHY
+  DEGRADED
+  AT_RISK
+  OFFLINE
+}
+
+/** Recurring backup schedule entry — one per (source x cadence). */
+model BackupSchedule {
+  id String @id @default(cuid())
+
+  /** Display name e.g. "Postgres daily snapshot". */
+  name        String
+  source      BackupSource
+  kind        BackupKind
+  cadence     BackupCadence
+  /** Cron expression (display only - actual scheduling lives in the
+   *  cron host). Free-form so we can render meaningful cadence text. */
+  cronExpr    String?
+  /** Retention window in days (use a high number like 99999 for "forever"). */
+  retentionDays Int
+  encryption    BackupEncryptionAlgorithm @default(AES_256_GCM)
+  region        StorageRegion             @default(US_EAST_1)
+
+  active        Boolean                   @default(true)
+
+  lastRunAt     DateTime?
+  nextRunAt     DateTime?
+  lastJobId     String?
+
+  notes String?
+
+  createdAt DateTime @default(now())
+  updatedAt DateTime @updatedAt
+
+  jobs BackupJob[]
+
+  @@index([source, active])
+}
+
+/** A single backup execution. */
+model BackupJob {
+  id String @id @default(cuid())
+
+  /** Optional link back to the schedule (null for ad-hoc / restore tests). */
+  scheduleId String?
+  schedule   BackupSchedule? @relation(fields: [scheduleId], references: [id], onDelete: SetNull)
+
+  source       BackupSource
+  kind         BackupKind
+  status       BackupJobStatus  @default(PENDING)
+  region       StorageRegion    @default(US_EAST_1)
+  encryption   BackupEncryptionAlgorithm @default(AES_256_GCM)
+
+  startedAt    DateTime  @default(now())
+  completedAt  DateTime?
+  /** Duration in seconds — denormalized for table rendering. */
+  durationSec  Int?
+
+  sizeBytes    BigInt?
+  /** SHA-256 hash of the manifest, used for verification. */
+  manifestHash String?
+  manifestUrl  String?
+  logsUrl      String?
+
+  errorMessage String?
+
+  /** Whether the job's manifest has been verified by a separate hash check. */
+  verified     Boolean  @default(false)
+  verifiedAt   DateTime?
+
+  createdAt DateTime @default(now())
+
+  @@index([source, status, startedAt])
+  @@index([scheduleId, startedAt])
+}
+
+/** Monthly restore-to-isolated-env drill. */
+model RestoreTest {
+  id String @id @default(cuid())
+
+  /** Friendly name like "2026-04 monthly drill". */
+  name         String
+  source       BackupSource
+  startedAt    DateTime
+  completedAt  DateTime?
+  durationSec  Int?
+  result       RestoreTestResult @default(RUNNING)
+  /** Number of sample queries that passed validation. */
+  sampleQueriesPassed Int @default(0)
+  sampleQueriesTotal  Int @default(0)
+  /** Drill report PDF URL. */
+  reportUrl    String?
+  /** Free-form summary of the result. */
+  summary      String?
+  /** Performed against this region's backup store. */
+  region       StorageRegion @default(US_EAST_1)
+
+  createdAt DateTime @default(now())
+  updatedAt DateTime @updatedAt
+
+  @@index([source, startedAt])
+}
+
+/** Per-tenant point-in-time restore wizard run. */
+model TenantRestore {
+  id String @id @default(cuid())
+
+  tenantId String
+  tenant   Tenant @relation(fields: [tenantId], references: [id], onDelete: Cascade)
+
+  /** Target timestamp for the restore. */
+  targetAt    DateTime
+  status      TenantRestoreStatus @default(DRAFT)
+  /** Shadow diff stats — number of rows added / changed / removed. */
+  rowsAffected Int @default(0)
+  rowsAdded    Int @default(0)
+  rowsChanged  Int @default(0)
+  rowsRemoved  Int @default(0)
+  /** Optional JSON breakdown per table. */
+  tablesAffected Json?
+
+  /** Initiator metadata. */
+  initiatedById String?
+  /** Approval signoff before applying. */
+  approvedById  String?
+  approvedAt    DateTime?
+  appliedAt     DateTime?
+  discardedAt   DateTime?
+  failedAt      DateTime?
+
+  /** Free-form reason for the restore. */
+  reason        String?
+  /** Internal notes about the diff review. */
+  reviewNotes   String?
+
+  createdAt DateTime @default(now())
+  updatedAt DateTime @updatedAt
+
+  @@index([tenantId, status])
+  @@index([status, createdAt])
+}
+
+/** Per-bucket storage health snapshot. */
+model BackupStorageBucket {
+  id String @id @default(cuid())
+
+  /** "AWS S3" / "R2" / etc. */
+  provider     String
+  bucketName   String
+  region       StorageRegion
+  /** Total bytes in hot storage. */
+  hotBytes     BigInt @default(0)
+  /** Total bytes in archive (Glacier / IA / Deep Archive). */
+  archiveBytes BigInt @default(0)
+  /** Whether cross-region replication is healthy. */
+  crrEnabled   Boolean @default(true)
+  crrHealth    StorageHealth @default(HEALTHY)
+  bucketHealth StorageHealth @default(HEALTHY)
+  /** Estimated monthly cost in cents (denormalized for the cost trend chart). */
+  monthlyCostCents Int @default(0)
+  /** Last time this row was refreshed by the polling job. */
+  lastRefreshedAt  DateTime?
+
+  notes String?
+
+  createdAt DateTime @default(now())
+  updatedAt DateTime @updatedAt
+
+  @@unique([provider, bucketName, region])
+}
+
+/** Singleton — backup-program configuration. */
+model BackupSettings {
+  id String @id @default("default")
+
+  kmsProvider  String @default("AWS KMS")
+  kmsKeyId     String @default("alias/flowtora-backups")
+  /** When the backup-encryption key was last rotated. */
+  keyLastRotatedAt DateTime?
+  keyRotationDueIn Int?
+
+  /** Cross-account replication enabled. */
+  crossAccountReplication Boolean @default(true)
+  /** Vendor for orchestration. */
+  vendor       String  @default("AWS Backup")
+
+  /** RPO/RTO targets in minutes — display only. */
+  rpoMinutes   Int @default(60)
+  rtoMinutes   Int @default(240)
+  /** Successful jobs target % over 30d. */
+  successTarget Int @default(99)
+
+  /** Notes for the runbook. */
+  notes        String?
+
+  updatedById String?
+  updatedAt   DateTime @updatedAt
+  createdAt   DateTime @default(now())
 }

@@ -107,6 +107,9 @@ export const PERMISSION_DESCRIPTIONS: Record<PlatformPermission, string> = {
   "privacy.triage":   "Triage incoming privacy requests, run verification, send messages.",
   "privacy.process":  "Run scope discovery, generate exports, mark requests complete or rejected.",
   "privacy.delete":   "Execute final deletion / rectification with typed confirmation.",
+  "backups.read":     "View backup schedules, jobs, restore tests, storage, and settings.",
+  "backups.manage":   "Edit schedules, retry jobs, configure encryption + retention + storage.",
+  "backups.restore":  "Run point-in-time restores against tenants with typed confirmation.",
   // Analytics
   "analytics.read":        "Read analytics dashboards.",
   "analytics.export":      "Export analytics datasets.",
