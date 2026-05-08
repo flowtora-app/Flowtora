@@ -110,6 +110,10 @@ export const PERMISSION_DESCRIPTIONS: Record<PlatformPermission, string> = {
   "backups.read":     "View backup schedules, jobs, restore tests, storage, and settings.",
   "backups.manage":   "Edit schedules, retry jobs, configure encryption + retention + storage.",
   "backups.restore":  "Run point-in-time restores against tenants with typed confirmation.",
+  "incidents.read":            "View the incident log, postmortems, status page, runbooks, and on-call.",
+  "incidents.manage":          "Open, update, and resolve incidents; assign roles; toggle action items.",
+  "incidents.postmortem.write": "Author and publish postmortems with action items.",
+  "incidents.statuspage.write": "Publish public status-page updates and maintenance windows.",
   // Analytics
   "analytics.read":        "Read analytics dashboards.",
   "analytics.export":      "Export analytics datasets.",

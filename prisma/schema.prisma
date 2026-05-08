@@ -425,6 +425,8 @@ model Tenant {
   privacyRequests        PrivacyRequest[]
   // Page 53 — point-in-time restore runs against this tenant.
   tenantRestores         TenantRestore[]
+  // Page 54 — incidents this tenant was affected by.
+  affectedIncidents      IncidentAffectedTenant[]
 }
 
 // ────────────────────────────────────────────────────────────
@@ -12687,4 +12689,375 @@ model BackupSettings {
   updatedById String?
   updatedAt   DateTime @updatedAt
   createdAt   DateTime @default(now())
+}
+
+// ────────────────────────────────────────────────────────────
+// Page 54 — Incident Log.
+// ────────────────────────────────────────────────────────────
+
+enum IncidentSeverity {
+  SEV1
+  SEV2
+  SEV3
+  SEV4
+}
+
+enum IncidentStatus {
+  INVESTIGATING
+  IDENTIFIED
+  MONITORING
+  RESOLVED
+}
+
+enum IncidentDetectedBy {
+  ALERT
+  CUSTOMER_REPORT
+  INTERNAL
+  SYNTHETIC_CHECK
+  MANUAL
+  PARTNER
+  SECURITY_FEED
+}
+
+enum IncidentTimelineKind {
+  STATUS_CHANGE
+  COMMS_SENT
+  MITIGATION
+  ROLE_ASSIGNED
+  NOTE
+  DEPLOY
+  FLAG_TOGGLE
+  PAGE_FIRED
+  ALERT
+  HANDOFF
+  RESOLUTION
+}
+
+enum AffectedNotificationStatus {
+  PENDING
+  NOTIFIED
+  FAILED
+  SUPPRESSED
+}
+
+enum IncidentCommChannel {
+  STATUS_PAGE
+  EMAIL
+  TWITTER_X
+  IN_APP
+  SLACK
+}
+
+enum IncidentCommStatus {
+  DRAFT
+  PUBLISHED
+  RETRACTED
+}
+
+enum ActionItemStatus {
+  TODO
+  IN_PROGRESS
+  DONE
+  CANCELLED
+  BLOCKED
+}
+
+enum StatusPageComponentStatus {
+  OPERATIONAL
+  DEGRADED
+  PARTIAL_OUTAGE
+  MAJOR_OUTAGE
+  MAINTENANCE
+}
+
+enum StatusPageMaintenanceState {
+  SCHEDULED
+  IN_PROGRESS
+  COMPLETED
+  CANCELLED
+}
+
+enum RunbookStatus {
+  DRAFT
+  ACTIVE
+  ARCHIVED
+}
+
+/** Top-level incident row. */
+model Incident {
+  id String @id @default(cuid())
+
+  /** Stable human id like INC-2026-0042. */
+  externalId String @unique
+
+  title       String
+  summary     String?
+  severity    IncidentSeverity
+  status      IncidentStatus      @default(INVESTIGATING)
+  detectedBy  IncidentDetectedBy  @default(ALERT)
+
+  /** Affected services as a denormalized string list. */
+  services    String[]
+  /** Free-form tags. */
+  tags        String[]
+
+  startedAt   DateTime
+  detectedAt  DateTime?
+  identifiedAt DateTime?
+  monitoringAt DateTime?
+  resolvedAt  DateTime?
+
+  /** Cached duration in minutes for table rendering. */
+  durationMin Int?
+
+  /** Active roles. */
+  commanderId  String?
+  scribeId     String?
+  commsLeadId  String?
+
+  /** Whether a postmortem is required (SEV1/SEV2 default true). */
+  postmortemRequired Boolean @default(true)
+  postmortemDueAt    DateTime?
+  postmortemUrl      String?
+
+  /** Postmortem body (Markdown) — stored inline. */
+  postmortemBody       String?
+  postmortemPublishedAt DateTime?
+  /** Customer-facing summary. */
+  customerSummary      String?
+
+  /** Optional cross-link to the parent runbook. */
+  runbookId String?
+  runbook   Runbook? @relation(fields: [runbookId], references: [id], onDelete: SetNull)
+
+  /** Page-fired count (PagerDuty webhook stamps these). */
+  pagesFired Int @default(0)
+
+  createdAt DateTime @default(now())
+  updatedAt DateTime @updatedAt
+
+  timeline     IncidentTimelineEvent[]
+  affectedSvc  IncidentAffectedService[]
+  affectedTen  IncidentAffectedTenant[]
+  comms        IncidentComm[]
+  mitigations  IncidentMitigation[]
+  actionItems  IncidentActionItem[]
+
+  @@index([status, startedAt])
+  @@index([severity, status])
+  @@index([commanderId, status])
+}
+
+model IncidentTimelineEvent {
+  id String @id @default(cuid())
+
+  incidentId String
+  incident   Incident @relation(fields: [incidentId], references: [id], onDelete: Cascade)
+
+  kind   IncidentTimelineKind
+  /** Who reported / posted (denormalized). */
+  actor  String?
+  actorEmail String?
+  /** Free-form body for note kinds. */
+  body   String
+  /** Optional source like "PagerDuty" / "Slack" / "Manual". */
+  source String?
+
+  occurredAt DateTime @default(now())
+
+  @@index([incidentId, occurredAt])
+}
+
+/** Service affected by the incident. */
+model IncidentAffectedService {
+  id String @id @default(cuid())
+
+  incidentId String
+  incident   Incident @relation(fields: [incidentId], references: [id], onDelete: Cascade)
+
+  serviceName String
+  componentStatus StatusPageComponentStatus @default(DEGRADED)
+  region      String?
+
+  @@unique([incidentId, serviceName])
+  @@index([incidentId])
+}
+
+/** Tenant affected by the incident. */
+model IncidentAffectedTenant {
+  id String @id @default(cuid())
+
+  incidentId String
+  incident   Incident @relation(fields: [incidentId], references: [id], onDelete: Cascade)
+
+  tenantId   String?
+  tenant     Tenant? @relation(fields: [tenantId], references: [id], onDelete: SetNull)
+  /** Denormalized name for retention. */
+  tenantName String
+
+  notificationStatus AffectedNotificationStatus @default(PENDING)
+  notifiedAt DateTime?
+  notes      String?
+
+  @@unique([incidentId, tenantId])
+  @@index([incidentId])
+}
+
+/** Communication artifact (status-page post, email, tweet). */
+model IncidentComm {
+  id String @id @default(cuid())
+
+  incidentId String
+  incident   Incident @relation(fields: [incidentId], references: [id], onDelete: Cascade)
+
+  channel  IncidentCommChannel
+  status   IncidentCommStatus  @default(DRAFT)
+  subject  String?
+  body     String
+  /** Number of recipients (for email/in-app). */
+  audienceSize Int?
+  /** Author display name. */
+  authorName String?
+  authorId   String?
+
+  publishedAt DateTime?
+  retractedAt DateTime?
+
+  createdAt DateTime @default(now())
+  updatedAt DateTime @updatedAt
+
+  @@index([incidentId, channel, createdAt])
+}
+
+/** Mitigation action taken (deploy, feature flag, etc.). */
+model IncidentMitigation {
+  id String @id @default(cuid())
+
+  incidentId String
+  incident   Incident @relation(fields: [incidentId], references: [id], onDelete: Cascade)
+
+  /** Short title. */
+  title       String
+  description String?
+  /** Free-form kind: deploy, flag, restart, scale, rollback, infra. */
+  kind        String?
+  /** Optional reference like deploy SHA, flag key. */
+  reference   String?
+  appliedById String?
+  appliedAt   DateTime @default(now())
+
+  /** Whether it actually mitigated the issue. */
+  effective   Boolean  @default(true)
+
+  @@index([incidentId, appliedAt])
+}
+
+/** Postmortem follow-up action item, mirrored to Linear/Jira. */
+model IncidentActionItem {
+  id String @id @default(cuid())
+
+  incidentId String
+  incident   Incident @relation(fields: [incidentId], references: [id], onDelete: Cascade)
+
+  title       String
+  description String?
+  ownerEmail  String?
+  ownerName   String?
+  /** External tracker ref (LIN-1234, FLO-42). */
+  externalRef String?
+  status      ActionItemStatus @default(TODO)
+  dueAt       DateTime?
+  completedAt DateTime?
+
+  createdAt DateTime @default(now())
+  updatedAt DateTime @updatedAt
+
+  @@index([incidentId, status])
+  @@index([status, dueAt])
+}
+
+/** Public status-page component. */
+model StatusPageComponent {
+  id String @id @default(cuid())
+
+  /** URL-safe slug. */
+  slug        String @unique
+  name        String
+  description String?
+  /** Display order. */
+  position    Int   @default(0)
+  /** Current status. */
+  status      StatusPageComponentStatus @default(OPERATIONAL)
+  /** Whether this component is shown publicly. */
+  publiclyListed Boolean @default(true)
+  /** Sub-components for grouping. */
+  parentId    String?
+  parent      StatusPageComponent?  @relation("StatusPageComponentParent", fields: [parentId], references: [id], onDelete: SetNull)
+  children    StatusPageComponent[] @relation("StatusPageComponentParent")
+
+  /** Optional region. */
+  region      String?
+
+  /** Number of subscribers receiving updates for this component. */
+  subscribers Int @default(0)
+
+  /** Whether the component is currently in maintenance window. */
+  inMaintenance Boolean @default(false)
+
+  createdAt DateTime @default(now())
+  updatedAt DateTime @updatedAt
+
+  @@index([publiclyListed, position])
+}
+
+/** Status-page maintenance window. */
+model StatusPageMaintenance {
+  id String @id @default(cuid())
+
+  title    String
+  body     String
+  startsAt DateTime
+  endsAt   DateTime
+  state    StatusPageMaintenanceState @default(SCHEDULED)
+  /** Component slugs affected. */
+  componentSlugs String[]
+  /** Number of subscribers notified. */
+  notifiedCount Int @default(0)
+
+  createdAt DateTime @default(now())
+  updatedAt DateTime @updatedAt
+
+  @@index([state, startsAt])
+}
+
+/** Runbook entry — searchable docs operators consult during a paged
+ *  alert. Linked from incidents that map to a runbook. */
+model Runbook {
+  id String @id @default(cuid())
+
+  /** URL-safe slug. */
+  slug        String @unique
+  title       String
+  description String?
+  /** Markdown body. */
+  body        String
+  status      RunbookStatus @default(DRAFT)
+  /** Tags for search. */
+  tags        String[]
+  /** Service / component this runbook covers. */
+  service     String?
+
+  ownerEmail  String?
+  lastReviewedAt DateTime?
+  nextReviewAt   DateTime?
+
+  /** Number of times this runbook was opened during incidents. */
+  openedCount Int @default(0)
+
+  createdAt DateTime @default(now())
+  updatedAt DateTime @updatedAt
+
+  incidents Incident[]
+
+  @@index([service, status])
 }

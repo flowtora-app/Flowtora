@@ -76,6 +76,7 @@ async function main() {
   await seedCompliance(tenants);                      // Page 51
   await seedPrivacyRequests(platformUsers, tenants);  // Page 52
   await seedBackups(platformUsers, tenants);          // Page 53
+  await seedIncidents(platformUsers, tenants);        // Page 54
 
   console.log("\n✓ Seed complete.\n");
   await db.$disconnect();
@@ -302,6 +303,11 @@ async function wipeOldSeed() {
   await db.restoreTest.deleteMany({ where: { name: { startsWith: "[seed] " } } });
   await db.tenantRestore.deleteMany({ where: { reason: { startsWith: "[seed] " } } });
   await db.backupStorageBucket.deleteMany({ where: { bucketName: { startsWith: "seed-" } } });
+  // Page 54 — Incidents wipe (cascades timeline, comms, mitigations, action items, affected).
+  await db.incident.deleteMany({ where: { externalId: { startsWith: "INC-SEED-" } } });
+  await db.statusPageComponent.deleteMany({ where: { slug: { startsWith: "seed-" } } });
+  await db.statusPageMaintenance.deleteMany({ where: { title: { startsWith: "[seed] " } } });
+  await db.runbook.deleteMany({ where: { slug: { startsWith: "seed-" } } });
   // Customers tagged seed (after orders are gone).
   await db.customer.deleteMany({ where: { tags: { has: "seed" } } });
   // Products tagged seed (use description marker since Product has no tags array).
@@ -9282,6 +9288,525 @@ async function seedBackups(
 
   console.log(
     `  ✓ ${scheds.length} schedules, ${jobsToCreate.length} jobs, 6 restore tests, 4 tenant restores, 4 buckets`,
+  );
+}
+
+/* ── Page 54 — Incident Log seed ───────────────────────── */
+
+async function seedIncidents(
+  staff: { id: string; email: string; name: string | null }[],
+  tenants: { id: string; name: string; slug: string }[],
+) {
+  console.log("── Seeding Incident Log (Page 54)…");
+  if (staff.length === 0) {
+    console.log("  skipped — no platform staff");
+    return;
+  }
+  const ic = staff[0]!;
+  const scribe = staff[1] ?? staff[0]!;
+  const commsLead = staff[2] ?? staff[0]!;
+
+  // 1. Status page components.
+  const components = [
+    { slug: "seed-api",         name: "Public API",            description: "REST API gateway", position: 1, status: "OPERATIONAL"   as const, region: "global" },
+    { slug: "seed-app",         name: "Web app",               description: "app.flowtora.com Next.js + Vercel", position: 2, status: "OPERATIONAL" as const, region: "global" },
+    { slug: "seed-portal",      name: "Tenant portal",         description: "Customer-facing portal", position: 3, status: "DEGRADED" as const, region: "global" },
+    { slug: "seed-billing",     name: "Billing service",       description: "Stripe + invoicing", position: 4, status: "OPERATIONAL" as const, region: "global" },
+    { slug: "seed-files",       name: "File storage",          description: "S3-backed proofs + exports", position: 5, status: "OPERATIONAL" as const, region: "us-east-1" },
+    { slug: "seed-search",      name: "Search",                description: "Elasticsearch", position: 6, status: "OPERATIONAL" as const, region: "us-east-1" },
+    { slug: "seed-email",       name: "Email delivery",        description: "Resend transactional email", position: 7, status: "OPERATIONAL" as const, region: "global" },
+    { slug: "seed-webhooks",    name: "Webhook deliveries",    description: "Outbound webhook fanout", position: 8, status: "OPERATIONAL" as const, region: "global" },
+    { slug: "seed-status-page", name: "Status page",           description: "status.flowtora.com", position: 9, status: "OPERATIONAL" as const, region: "global" },
+  ];
+  for (const c of components) {
+    await db.statusPageComponent.upsert({
+      where: { slug: c.slug },
+      create: {
+        slug: c.slug, name: c.name, description: c.description, position: c.position,
+        status: c.status, publiclyListed: c.slug !== "seed-status-page",
+        region: c.region, subscribers: Math.floor(Math.random() * 1500) + 100,
+      },
+      update: { status: c.status },
+    });
+  }
+
+  // 2. Maintenance windows.
+  await db.statusPageMaintenance.createMany({
+    data: [
+      { title: "[seed] Database failover drill", body: "We will exercise our Postgres primary→replica failover. Brief read-only blip expected.",
+        startsAt: daysAgo(-7), endsAt: daysAgo(-7 - 1/24),
+        state: "SCHEDULED", componentSlugs: ["seed-api", "seed-app"], notifiedCount: 1842 },
+      { title: "[seed] Scheduled cache eviction", body: "Targeted purge of stale tenant cache to reclaim memory. Subject to slight latency uptick for ~5min.",
+        startsAt: daysAgo(2), endsAt: daysAgo(2 - 0.05),
+        state: "COMPLETED", componentSlugs: ["seed-api"], notifiedCount: 412 },
+      { title: "[seed] Search reindex", body: "Full reindex of search corpus. May see incomplete results during the window.",
+        startsAt: daysAgo(0.04), endsAt: daysAgo(-0.04),
+        state: "IN_PROGRESS", componentSlugs: ["seed-search"], notifiedCount: 220 },
+    ],
+  });
+
+  // 3. Runbooks.
+  await db.runbook.createMany({
+    data: [
+      { slug: "seed-postgres-replica-lag", title: "Postgres replica lag",
+        description: "Steps to triage when read replicas fall behind primary by more than 60s.",
+        body: "## Symptoms\n- Replica lag alert >60s.\n\n## Triage\n1. Check primary load.\n2. Check replication slot status.\n3. Identify long-running transactions.\n\n## Mitigations\n- Kill long-running transactions.\n- Promote standby if needed.",
+        status: "ACTIVE", service: "postgres", tags: ["postgres", "replication", "data-store"],
+        ownerEmail: "sre@flowtora.com",
+        lastReviewedAt: daysAgo(45), nextReviewAt: daysAgo(-135), openedCount: 12 },
+      { slug: "seed-stripe-webhook-failures", title: "Stripe webhook failures",
+        description: "What to do when Stripe webhooks start failing or the queue backs up.",
+        body: "## Symptoms\n- Stripe dashboard shows 5xx errors on our webhook endpoint.\n\n## Triage\n1. Check our webhook receiver health.\n2. Check our DB write-availability.\n3. Pause webhook delivery in Stripe if needed.",
+        status: "ACTIVE", service: "billing", tags: ["billing", "stripe", "webhooks"],
+        ownerEmail: "billing@flowtora.com",
+        lastReviewedAt: daysAgo(30), nextReviewAt: daysAgo(-150), openedCount: 7 },
+      { slug: "seed-s3-cross-region-replication", title: "S3 cross-region replication failure",
+        description: "When replication to eu-west-1 stalls.",
+        body: "## Symptoms\n- CRR metrics show replication backlog growing.\n\n## Triage\n1. Verify destination bucket health.\n2. Check IAM policies.\n3. Review object-lock conflicts.",
+        status: "ACTIVE", service: "files", tags: ["aws", "s3", "replication"],
+        ownerEmail: "sre@flowtora.com",
+        lastReviewedAt: daysAgo(60), nextReviewAt: daysAgo(-120), openedCount: 4 },
+      { slug: "seed-saml-callback-failure", title: "SAML SSO callback failure",
+        description: "What to do when tenants report repeated SAML auth failures.",
+        body: "## Symptoms\n- Tenant SCIM bearer accepting but SAML asserts rejecting.\n\n## Triage\n1. Validate tenant metadata XML.\n2. Compare entity IDs.\n3. Test tenant config from /platform/integrations/sso.",
+        status: "ACTIVE", service: "auth", tags: ["sso", "saml"],
+        ownerEmail: "auth@flowtora.com",
+        lastReviewedAt: daysAgo(20), nextReviewAt: daysAgo(-160), openedCount: 9 },
+      { slug: "seed-deploy-rollback", title: "Deploy rollback",
+        description: "Standard procedure for rolling back a bad Vercel deploy.",
+        body: "## When\n- Error rate climbing post-deploy.\n\n## How\n1. Identify last known good deploy in Vercel dashboard.\n2. Promote to production.\n3. Notify Engineering channel.\n4. File a postmortem if customer-impacting.",
+        status: "ACTIVE", service: "platform", tags: ["deploy", "vercel", "rollback"],
+        ownerEmail: "engineering@flowtora.com",
+        lastReviewedAt: daysAgo(10), nextReviewAt: daysAgo(-170), openedCount: 14 },
+      { slug: "seed-redis-failover", title: "Redis cluster failover",
+        description: "When Redis primary fails over to replica.",
+        body: "## Symptoms\n- App seeing increased Redis timeouts.\n\n## Triage\n1. Check ElastiCache health dashboard.\n2. Verify failover completed.\n3. If session loss > tolerance, force re-auth.",
+        status: "DRAFT", service: "redis", tags: ["redis", "cache"],
+        ownerEmail: "sre@flowtora.com",
+        nextReviewAt: daysAgo(-90) },
+    ],
+  });
+  const runbooks = await db.runbook.findMany({
+    where: { slug: { startsWith: "seed-" } },
+    select: { id: true, slug: true },
+  });
+  const runbookBySlug = new Map(runbooks.map((r) => [r.slug, r.id]));
+
+  // 4. Incidents.
+  type IncidentBp = {
+    extId: string;
+    title: string;
+    summary: string;
+    severity: "SEV1" | "SEV2" | "SEV3" | "SEV4";
+    status:   "INVESTIGATING" | "IDENTIFIED" | "MONITORING" | "RESOLVED";
+    detectedBy: "ALERT" | "CUSTOMER_REPORT" | "INTERNAL" | "SYNTHETIC_CHECK" | "MANUAL" | "PARTNER" | "SECURITY_FEED";
+    services: string[];
+    tags: string[];
+    startedHoursAgo: number;
+    detectedHoursAgo?: number;
+    identifiedHoursAgo?: number;
+    monitoringHoursAgo?: number;
+    resolvedHoursAgo?: number;
+    pagesFired?: number;
+    runbookSlug?: string;
+    affectedSvcs?: Array<{ name: string; status: "OPERATIONAL" | "DEGRADED" | "PARTIAL_OUTAGE" | "MAJOR_OUTAGE" | "MAINTENANCE"; region?: string }>;
+    affectedTenIdx?: number[];
+    timeline?: Array<{ kind: "STATUS_CHANGE" | "COMMS_SENT" | "MITIGATION" | "ROLE_ASSIGNED" | "NOTE" | "DEPLOY" | "FLAG_TOGGLE" | "PAGE_FIRED" | "ALERT" | "HANDOFF" | "RESOLUTION"; body: string; source?: string; relativeMin: number }>;
+    comms?: Array<{ channel: "STATUS_PAGE" | "EMAIL" | "TWITTER_X" | "IN_APP" | "SLACK"; status: "DRAFT" | "PUBLISHED" | "RETRACTED"; subject?: string; body: string; audience?: number; ageMin: number }>;
+    mitigations?: Array<{ title: string; desc?: string; kind?: string; reference?: string; effective?: boolean; relMin: number }>;
+    actionItems?: Array<{ title: string; desc?: string; owner: string; ref?: string; status: "TODO" | "IN_PROGRESS" | "DONE" | "CANCELLED" | "BLOCKED"; dueDays?: number }>;
+    postmortemBody?: string;
+    customerSummary?: string;
+    postmortemPublished?: boolean;
+  };
+  const incs: IncidentBp[] = [
+    {
+      extId: "INC-SEED-2026-0042",
+      title: "Tenant portal outage in eu-west-1",
+      summary: "Tenant portal returning 5xx errors for users routed through eu-west-1 due to a stale ElastiCache primary endpoint after AZ failover.",
+      severity: "SEV1", status: "RESOLVED",
+      detectedBy: "SYNTHETIC_CHECK",
+      services: ["seed-portal", "seed-api"],
+      tags: ["redis", "cache", "eu-west-1"],
+      startedHoursAgo: 96, detectedHoursAgo: 96 - 4 / 60, identifiedHoursAgo: 96 - 18 / 60,
+      monitoringHoursAgo: 96 - 32 / 60, resolvedHoursAgo: 96 - 41 / 60,
+      pagesFired: 4, runbookSlug: "seed-redis-failover",
+      affectedSvcs: [
+        { name: "Tenant portal", status: "MAJOR_OUTAGE", region: "eu-west-1" },
+        { name: "Public API",    status: "DEGRADED",     region: "eu-west-1" },
+      ],
+      affectedTenIdx: [0, 1, 2],
+      timeline: [
+        { kind: "ALERT",         body: "Synthetic uptime check failing for portal.eu.flowtora.com", source: "Datadog", relativeMin: 0 },
+        { kind: "PAGE_FIRED",    body: "PagerDuty escalation triggered for SRE primary",            source: "PagerDuty", relativeMin: 1 },
+        { kind: "STATUS_CHANGE", body: "Status set to INVESTIGATING",                              source: "Manual",   relativeMin: 4 },
+        { kind: "ROLE_ASSIGNED", body: "Roles assigned: IC=" + ic.email + ", scribe=" + scribe.email + ", comms=" + commsLead.email, relativeMin: 6 },
+        { kind: "COMMS_SENT",    body: "Initial public update posted to status page",              source: "Manual",   relativeMin: 8 },
+        { kind: "NOTE",          body: "Hypothesis: ElastiCache primary endpoint stale after AZ failover at 04:12.", relativeMin: 14 },
+        { kind: "STATUS_CHANGE", body: "Status set to IDENTIFIED",                                  source: "Manual",   relativeMin: 18 },
+        { kind: "MITIGATION",    body: "Updated AWS_REDIS_PRIMARY env var to current writer endpoint", source: "Manual", relativeMin: 22 },
+        { kind: "DEPLOY",        body: "Restart of API + Portal services to pick up new env",       source: "Vercel",   relativeMin: 26 },
+        { kind: "STATUS_CHANGE", body: "Status set to MONITORING",                                  source: "Manual",   relativeMin: 32 },
+        { kind: "COMMS_SENT",    body: "Followup public update — error rate normalising",           source: "Manual",   relativeMin: 36 },
+        { kind: "RESOLUTION",    body: "Error rate <0.1% for 9 min — closing incident",             source: "Manual",   relativeMin: 41 },
+      ],
+      comms: [
+        { channel: "STATUS_PAGE", status: "PUBLISHED",
+          subject: "Investigating elevated error rates in eu-west-1",
+          body: "We're investigating elevated error rates affecting the tenant portal and API in our eu-west-1 region. We'll post updates here every 15 minutes.",
+          audience: 1840, ageMin: 8 },
+        { channel: "STATUS_PAGE", status: "PUBLISHED",
+          subject: "Identified — applying mitigation",
+          body: "We've identified the cause as a stale Redis endpoint after an AZ failover. Applying the mitigation now.",
+          audience: 1840, ageMin: 18 },
+        { channel: "STATUS_PAGE", status: "PUBLISHED",
+          subject: "Monitoring",
+          body: "Error rate is back to normal. We're monitoring before declaring resolved.",
+          audience: 1840, ageMin: 32 },
+        { channel: "STATUS_PAGE", status: "PUBLISHED",
+          subject: "Resolved",
+          body: "Incident resolved. Total customer-facing impact: ~32 minutes.",
+          audience: 1840, ageMin: 41 },
+        { channel: "EMAIL", status: "PUBLISHED",
+          subject: "[Resolved] eu-west-1 outage — Apr 23",
+          body: "Hi — earlier today we experienced a 32-minute outage in our eu-west-1 region affecting the tenant portal. A full postmortem is being prepared. We're sorry for the disruption.",
+          audience: 412, ageMin: 90 },
+      ],
+      mitigations: [
+        { title: "Update AWS_REDIS_PRIMARY env var", desc: "Pointed app at new ElastiCache writer endpoint.", kind: "config", reference: "PR #1842", effective: true, relMin: 22 },
+        { title: "Restart API + portal services",     desc: "Forced re-resolve of cached endpoint.", kind: "deploy", reference: "deploy 8a4f2e", effective: true, relMin: 26 },
+      ],
+      actionItems: [
+        { title: "Auto-detect ElastiCache writer endpoint changes", owner: "sre@flowtora.com",
+          ref: "INF-441", status: "IN_PROGRESS", dueDays: 14, desc: "Add a poller that updates the cached endpoint without requiring restart." },
+        { title: "Add synthetic check for cache-write availability per AZ", owner: "sre@flowtora.com",
+          ref: "INF-442", status: "TODO", dueDays: 21 },
+        { title: "Document ElastiCache failover runbook", owner: "sre@flowtora.com",
+          ref: "DOCS-1042", status: "DONE" },
+      ],
+      postmortemBody:
+`## What happened
+An AZ-level event caused our Redis primary in eu-west-1 to failover to a replica. Our application held the cached writer endpoint for ~22 minutes after the failover, causing all writes to fail and surfacing as 5xx errors on the tenant portal and parts of the API.
+
+## Impact
+- **Customers affected:** ~412 tenants in eu-west-1
+- **Services affected:** Tenant portal, Public API
+- **Duration:** 32 minutes (04:18 → 04:50 UTC)
+
+## Root cause
+The application caches the writer endpoint URL in an environment variable resolved at boot. When ElastiCache failed over to a different node, the writer endpoint changed, but our application kept using the stale value until restart.
+
+## 5 Whys
+1. Why did the portal return 5xx? Redis writes were failing.
+2. Why? The app was hitting a no-longer-writer endpoint.
+3. Why? The app cached the endpoint at boot.
+4. Why? We didn't have a poller to refresh it.
+5. Why? The endpoint was assumed stable in the original design.
+
+## Action items
+See the Action items tab. Highlights: auto-detect writer-endpoint changes, add per-AZ synthetic check, document runbook.
+
+## Lessons learned
+We treat AZ failover as routine in design but our app has a class of state that doesn't survive it. Audit other "boot-time" config for similar issues.
+
+## Customer-facing summary
+On April 23 from 04:18-04:50 UTC, customers in our European region experienced errors using the tenant portal and parts of the API. The cause was a delayed reconnection to our Redis cache after an AZ failover. Our team resolved it within 32 minutes. We're sorry for the disruption — we have follow-up actions to prevent recurrence.`,
+      customerSummary: "On April 23, 04:18-04:50 UTC, customers in eu-west-1 experienced errors with the tenant portal. Cause: delayed Redis reconnection after AZ failover. Resolved in 32 min. Follow-ups in progress to prevent recurrence.",
+      postmortemPublished: true,
+    },
+    {
+      extId: "INC-SEED-2026-0043",
+      title: "Stripe webhook deliveries backed up",
+      summary: "Stripe webhook deliveries are queueing up due to a slow handler. Investigating root cause.",
+      severity: "SEV2", status: "INVESTIGATING",
+      detectedBy: "ALERT",
+      services: ["seed-billing"],
+      tags: ["billing", "stripe", "webhooks"],
+      startedHoursAgo: 2, detectedHoursAgo: 1.95,
+      pagesFired: 2, runbookSlug: "seed-stripe-webhook-failures",
+      affectedSvcs: [{ name: "Billing service", status: "DEGRADED", region: "global" }],
+      timeline: [
+        { kind: "ALERT",         body: "Stripe webhook latency p95 > 5s for 5 min", source: "Datadog", relativeMin: 0 },
+        { kind: "PAGE_FIRED",    body: "PagerDuty escalation — Billing primary", source: "PagerDuty", relativeMin: 1 },
+        { kind: "STATUS_CHANGE", body: "Status set to INVESTIGATING", source: "Manual", relativeMin: 3 },
+        { kind: "NOTE",          body: "Stripe dashboard shows ~3,200 events queued", source: "Manual", relativeMin: 8 },
+      ],
+      comms: [
+        { channel: "STATUS_PAGE", status: "DRAFT",
+          subject: "Investigating delayed Stripe webhook processing",
+          body: "We're investigating delayed processing of Stripe webhooks. New invoices and payment events may be slow to reflect.",
+          ageMin: 5 },
+      ],
+    },
+    {
+      extId: "INC-SEED-2026-0044",
+      title: "Search returning incomplete results during reindex",
+      summary: "Scheduled search reindex is in progress; users may see incomplete results until ~12:30 UTC.",
+      severity: "SEV3", status: "MONITORING",
+      detectedBy: "INTERNAL",
+      services: ["seed-search"],
+      tags: ["search", "elasticsearch", "scheduled"],
+      startedHoursAgo: 1.2, detectedHoursAgo: 1.2, identifiedHoursAgo: 1.2,
+      monitoringHoursAgo: 0.4,
+      pagesFired: 0,
+      affectedSvcs: [{ name: "Search", status: "DEGRADED", region: "us-east-1" }],
+      timeline: [
+        { kind: "NOTE",          body: "Scheduled reindex started", source: "Manual", relativeMin: 0 },
+        { kind: "COMMS_SENT",    body: "Maintenance window posted", source: "Manual", relativeMin: 2 },
+        { kind: "STATUS_CHANGE", body: "Status set to MONITORING", source: "Manual", relativeMin: 48 },
+      ],
+      comms: [
+        { channel: "STATUS_PAGE", status: "PUBLISHED",
+          subject: "Search reindex in progress",
+          body: "We're reindexing our search corpus. Results may be incomplete until ~12:30 UTC.",
+          audience: 220, ageMin: 70 },
+      ],
+    },
+    {
+      extId: "INC-SEED-2026-0045",
+      title: "Email delivery delays via Resend",
+      summary: "Resend reporting elevated queue depth; transactional emails delayed by ~10-15 min.",
+      severity: "SEV3", status: "RESOLVED",
+      detectedBy: "PARTNER",
+      services: ["seed-email"],
+      tags: ["email", "resend", "third-party"],
+      startedHoursAgo: 60, detectedHoursAgo: 59.9, identifiedHoursAgo: 59.5, monitoringHoursAgo: 59,
+      resolvedHoursAgo: 58,
+      pagesFired: 1,
+      affectedSvcs: [{ name: "Email delivery", status: "DEGRADED", region: "global" }],
+      timeline: [
+        { kind: "ALERT",         body: "Resend status feed reports degraded delivery", source: "RSS", relativeMin: 0 },
+        { kind: "STATUS_CHANGE", body: "Status set to INVESTIGATING", source: "Manual", relativeMin: 6 },
+        { kind: "NOTE",          body: "Confirmed root cause is on Resend side; backlog draining", source: "Manual", relativeMin: 30 },
+        { kind: "RESOLUTION",    body: "Backlog cleared, queue depth normal", source: "Manual", relativeMin: 120 },
+      ],
+      mitigations: [
+        { title: "Subscribed to Resend status feed", desc: "Auto-correlate Resend incidents with our incidents.", kind: "infra", reference: "RES-44", relMin: 60 },
+      ],
+      actionItems: [
+        { title: "Add fallback transactional email provider", owner: "billing@flowtora.com",
+          ref: "INF-450", status: "TODO", dueDays: 30 },
+      ],
+      postmortemBody:
+`## What happened
+Resend's transactional delivery queue spiked, causing our outbound emails (welcome, password reset, invoice notifications) to be delayed 10-15 minutes for ~2 hours.
+
+## Impact
+- **Customers affected:** Most tenants — anyone receiving an automated email during the window.
+- **Services affected:** Email delivery
+- **Duration:** ~2h
+
+## Root cause
+Issue on Resend's side — confirmed in their status post.
+
+## Lessons learned
+We have a single point of failure for transactional email. Plan to add a fallback provider.
+
+## Customer-facing summary
+Some automated emails were delayed by 10-15 minutes due to an issue at our email provider. Email is now flowing normally.`,
+      customerSummary: "Some automated emails were delayed 10-15 min due to an upstream provider issue. Now flowing normally.",
+      postmortemPublished: true,
+    },
+    {
+      extId: "INC-SEED-2026-0046",
+      title: "Failed deploy — webhook signature mismatch",
+      summary: "Deploy 1.42.7 introduced a regression in webhook signature verification. Rolled back.",
+      severity: "SEV2", status: "RESOLVED",
+      detectedBy: "ALERT",
+      services: ["seed-webhooks"],
+      tags: ["deploy", "regression", "webhooks"],
+      startedHoursAgo: 240, detectedHoursAgo: 239.8, identifiedHoursAgo: 239.5,
+      monitoringHoursAgo: 239.4, resolvedHoursAgo: 239.3,
+      pagesFired: 2, runbookSlug: "seed-deploy-rollback",
+      affectedSvcs: [{ name: "Webhook deliveries", status: "PARTIAL_OUTAGE", region: "global" }],
+      timeline: [
+        { kind: "DEPLOY",        body: "Deploy 1.42.7 to production",                source: "Vercel",   relativeMin: 0 },
+        { kind: "ALERT",         body: "Webhook delivery error rate jumped to 18%", source: "Datadog",  relativeMin: 8 },
+        { kind: "PAGE_FIRED",    body: "PagerDuty escalation — Engineering primary", source: "PagerDuty", relativeMin: 9 },
+        { kind: "STATUS_CHANGE", body: "Status set to IDENTIFIED",                   source: "Manual",   relativeMin: 14 },
+        { kind: "MITIGATION",    body: "Rolled back to deploy 1.42.6",                source: "Manual",   relativeMin: 18 },
+        { kind: "RESOLUTION",    body: "Error rate back to baseline",                 source: "Manual",   relativeMin: 22 },
+      ],
+      mitigations: [
+        { title: "Rollback deploy 1.42.7 → 1.42.6", desc: "Promoted last-known-good in Vercel.", kind: "rollback", reference: "deploy 7e1c9", relMin: 18, effective: true },
+      ],
+      actionItems: [
+        { title: "Add canary release to deploy pipeline", owner: "engineering@flowtora.com",
+          ref: "ENG-1100", status: "DONE" },
+        { title: "Add HMAC signature integration test", owner: "engineering@flowtora.com",
+          ref: "ENG-1101", status: "DONE" },
+      ],
+      postmortemBody:
+`## What happened
+A refactor of the webhook signing module mistakenly used the previous secret instead of the active one for non-default tenants. Deploy was reverted within 22 minutes.
+
+## Impact
+- **Customers affected:** ~6% of tenants relying on webhook deliveries.
+- **Services affected:** Webhook deliveries
+- **Duration:** 22 minutes
+
+## Root cause
+Variable shadow in the signature builder — the active secret was resolved correctly but a re-assignment downstream overwrote it with a stale reference.
+
+## 5 Whys
+1. Why did sigs not match? Wrong secret used.
+2. Why? Variable shadowed.
+3. Why didn't tests catch it? No HMAC test for non-default tenants.
+4. Why? Tests focused on the default path.
+5. Why? Multi-tenant signing was an afterthought in the original test plan.
+
+## Action items
+See Action items tab.
+
+## Customer-facing summary
+On April 13 a deploy briefly broke webhook signatures for some tenants. Resolved in 22 min via rollback. Sorry for the disruption.`,
+      postmortemPublished: true,
+    },
+    {
+      extId: "INC-SEED-2026-0047",
+      title: "Minor latency increase on file uploads",
+      summary: "Slightly elevated p95 upload latency due to a hot S3 partition.",
+      severity: "SEV4", status: "RESOLVED",
+      detectedBy: "INTERNAL",
+      services: ["seed-files"],
+      tags: ["s3", "files", "latency"],
+      startedHoursAgo: 360, detectedHoursAgo: 360, identifiedHoursAgo: 359.5, resolvedHoursAgo: 358,
+      pagesFired: 0,
+      affectedSvcs: [{ name: "File storage", status: "OPERATIONAL", region: "us-east-1" }],
+      timeline: [
+        { kind: "NOTE",          body: "Internal dashboard noticed +200ms p95 increase", relativeMin: 0 },
+        { kind: "MITIGATION",    body: "Spread upload prefix across more partitions",    relativeMin: 60 },
+        { kind: "RESOLUTION",    body: "Latency back to normal",                          relativeMin: 120 },
+      ],
+      mitigations: [
+        { title: "Spread upload prefix across more partitions", desc: "Tweaked key-prefix scheme to avoid hot partition.", kind: "infra", reference: "PR #1822", relMin: 60 },
+      ],
+    },
+  ];
+
+  for (const b of incs) {
+    const startedAt = new Date(Date.now() - b.startedHoursAgo * 3_600_000);
+    const detectedAt   = b.detectedHoursAgo   != null ? new Date(Date.now() - b.detectedHoursAgo   * 3_600_000) : null;
+    const identifiedAt = b.identifiedHoursAgo != null ? new Date(Date.now() - b.identifiedHoursAgo * 3_600_000) : null;
+    const monitoringAt = b.monitoringHoursAgo != null ? new Date(Date.now() - b.monitoringHoursAgo * 3_600_000) : null;
+    const resolvedAt   = b.resolvedHoursAgo   != null ? new Date(Date.now() - b.resolvedHoursAgo   * 3_600_000) : null;
+    const durationMin = resolvedAt
+      ? Math.max(0, Math.round((resolvedAt.getTime() - startedAt.getTime()) / 60_000))
+      : null;
+    const created = await db.incident.create({
+      data: {
+        externalId: b.extId,
+        title: b.title, summary: b.summary,
+        severity: b.severity, status: b.status, detectedBy: b.detectedBy,
+        services: b.services, tags: b.tags,
+        startedAt, detectedAt, identifiedAt, monitoringAt, resolvedAt,
+        durationMin,
+        commanderId: ic.id, scribeId: scribe.id, commsLeadId: commsLead.id,
+        postmortemRequired: b.severity === "SEV1" || b.severity === "SEV2",
+        postmortemDueAt: b.severity === "SEV1" ? new Date(startedAt.getTime() + 7 * 86_400_000) : null,
+        postmortemBody: b.postmortemBody ?? null,
+        customerSummary: b.customerSummary ?? null,
+        postmortemPublishedAt: b.postmortemPublished ? new Date(startedAt.getTime() + 3 * 86_400_000) : null,
+        postmortemUrl: b.postmortemPublished ? `https://docs.flowtora.com/incidents/${b.extId}/postmortem.pdf` : null,
+        runbookId: b.runbookSlug ? runbookBySlug.get(b.runbookSlug) ?? null : null,
+        pagesFired: b.pagesFired ?? 0,
+      },
+      select: { id: true },
+    });
+    if (b.timeline) {
+      await db.incidentTimelineEvent.createMany({
+        data: b.timeline.map((ev) => ({
+          incidentId: created.id,
+          kind: ev.kind,
+          body: ev.body,
+          source: ev.source ?? null,
+          actor: ic.email.split("@")[0]!,
+          actorEmail: ic.email,
+          occurredAt: new Date(startedAt.getTime() + ev.relativeMin * 60_000),
+        })),
+      });
+    }
+    if (b.affectedSvcs) {
+      for (const s of b.affectedSvcs) {
+        await db.incidentAffectedService.create({
+          data: {
+            incidentId: created.id,
+            serviceName: s.name,
+            componentStatus: s.status,
+            region: s.region ?? null,
+          },
+        });
+      }
+    }
+    if (b.affectedTenIdx) {
+      for (const idx of b.affectedTenIdx) {
+        const t = tenants[idx];
+        if (!t) continue;
+        await db.incidentAffectedTenant.create({
+          data: {
+            incidentId: created.id,
+            tenantId: t.id,
+            tenantName: t.name,
+            notificationStatus: idx === 0 ? "NOTIFIED" : idx === 1 ? "NOTIFIED" : "PENDING",
+            notifiedAt: idx <= 1 ? new Date(startedAt.getTime() + 25 * 60_000) : null,
+          },
+        });
+      }
+    }
+    if (b.comms) {
+      for (const c of b.comms) {
+        await db.incidentComm.create({
+          data: {
+            incidentId: created.id,
+            channel: c.channel,
+            status: c.status,
+            subject: c.subject ?? null,
+            body: c.body,
+            audienceSize: c.audience ?? null,
+            authorName: commsLead.email.split("@")[0]!,
+            authorId: commsLead.id,
+            publishedAt: c.status === "PUBLISHED" ? new Date(Date.now() - c.ageMin * 60_000) : null,
+            createdAt:   new Date(Date.now() - c.ageMin * 60_000 - 60_000),
+          },
+        });
+      }
+    }
+    if (b.mitigations) {
+      for (const m of b.mitigations) {
+        await db.incidentMitigation.create({
+          data: {
+            incidentId: created.id,
+            title: m.title,
+            description: m.desc ?? null,
+            kind: m.kind ?? null,
+            reference: m.reference ?? null,
+            effective: m.effective ?? true,
+            appliedById: ic.id,
+            appliedAt: new Date(startedAt.getTime() + m.relMin * 60_000),
+          },
+        });
+      }
+    }
+    if (b.actionItems) {
+      for (const a of b.actionItems) {
+        await db.incidentActionItem.create({
+          data: {
+            incidentId: created.id,
+            title: a.title,
+            description: a.desc ?? null,
+            ownerEmail: a.owner,
+            externalRef: a.ref ?? null,
+            status: a.status,
+            dueAt: a.dueDays != null ? new Date(Date.now() + a.dueDays * 86_400_000) : null,
+            completedAt: a.status === "DONE" ? new Date(Date.now() - 86_400_000) : null,
+          },
+        });
+      }
+    }
+  }
+
+  console.log(
+    `  ✓ ${components.length} status components, 3 maintenance windows, 6 runbooks, ${incs.length} incidents with timeline + comms + mitigations + action items`,
   );
 }
 

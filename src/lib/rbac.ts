@@ -256,6 +256,11 @@ export type PlatformPermission =
   | "backups.read"
   | "backups.manage"
   | "backups.restore"
+  // Compliance & Security — Page 54 Incident Log
+  | "incidents.read"
+  | "incidents.manage"
+  | "incidents.postmortem.write"
+  | "incidents.statuspage.write"
 
   // Analytics / BI
   | "analytics.read"
@@ -302,6 +307,7 @@ const PLATFORM_ALL: PlatformPermission[] = [
   "compliance.policy.write", "compliance.evidence.upload", "compliance.vendor.review", "compliance.report.generate",
   "privacy.read", "privacy.triage", "privacy.process", "privacy.delete",
   "backups.read", "backups.manage", "backups.restore",
+  "incidents.read", "incidents.manage", "incidents.postmortem.write", "incidents.statuspage.write",
   "analytics.read", "analytics.export", "revenue.read", "usage.read",
   "reports.read", "reports.create", "reports.edit", "reports.delete",
   "reports.schedule", "reports.export",
@@ -316,7 +322,7 @@ const PLATFORM_ALL: PlatformPermission[] = [
 const PLATFORM_BASELINE_READ: PlatformPermission[] = [
   "tenant.read", "billing.read", "staff.read", "users.read",
   "support.read", "health.read", "audit.read", "compliance.read",
-  "feature_flag.read", "announcement.read", "leads.read", "referrals.read", "affiliates.read", "seo.read", "integrations.read", "webhooks.read", "docs.read", "marketplace.read", "sso.read", "security.read", "privacy.read", "backups.read",
+  "feature_flag.read", "announcement.read", "leads.read", "referrals.read", "affiliates.read", "seo.read", "integrations.read", "webhooks.read", "docs.read", "marketplace.read", "sso.read", "security.read", "privacy.read", "backups.read", "incidents.read",
   "analytics.read", "revenue.read", "usage.read",
   "reports.read", "reports.export", // every staff role reads + can export
   "system.read_settings", "notifications.read",
@@ -376,6 +382,7 @@ export const PLATFORM_ROLE_PERMISSIONS: Record<PlatformRole, PlatformPermission[
     "compliance.vendor.review", "compliance.report.generate",
     "privacy.triage", "privacy.process", "privacy.delete",
     "backups.manage", "backups.restore",
+    "incidents.manage", "incidents.postmortem.write", "incidents.statuspage.write",
     "analytics.export",
     "reports.create", "reports.edit", "reports.schedule",
     "notifications.manage",
@@ -388,6 +395,7 @@ export const PLATFORM_ROLE_PERMISSIONS: Record<PlatformRole, PlatformPermission[
     "audit.read", "announcement.read", "announcement.write",
     "notifications.read",
     "privacy.read", "privacy.triage",
+    "incidents.read",
   ]),
   // Billing team. Can issue refunds, mint coupons, change plans —
   // everything money. No tenant suspension, no staff edits.
@@ -417,6 +425,7 @@ export const PLATFORM_ROLE_PERMISSIONS: Record<PlatformRole, PlatformPermission[
     "sso.manage", "sso.test_login", // owns SSO + SCIM
     "security.manage", "security.findings.resolve", // owns the security center
     "backups.manage", "backups.restore", // SRE owns backups + recovery
+    "incidents.manage", "incidents.postmortem.write", "incidents.statuspage.write", // SRE runs incidents
   ]),
   // Marketing — leads, announcements, public plan/feature copy.
   MARKETING_MANAGER: dedup([
