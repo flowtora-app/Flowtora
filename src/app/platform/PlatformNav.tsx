@@ -103,6 +103,7 @@ const NAV_ITEMS: NavItem[] = [
   { href: "/platform/system/storage",               label: "Storage & CDN",        icon: "Package" },
   { href: "/platform/system/database",              label: "Database Health",      icon: "Pipeline" },
   { href: "/platform/system/rate-limits",           label: "Rate Limits & Quotas", icon: "Scale" },
+  { href: "/platform/system/feature-flags",         label: "Feature Flags",        icon: "Sparkles" },
 ];
 
 const COLLAPSE_KEY = "flowtora.platform-nav.collapsed";

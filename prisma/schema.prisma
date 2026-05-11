@@ -14941,3 +14941,221 @@ model RateLimitSettings {
   updatedAt   DateTime @updatedAt
   createdAt   DateTime @default(now())
 }
+
+// ────────────────────────────────────────────────────────────
+// Page 62 — Feature Flags (platform catalog).
+//
+// The existing `FeatureFlag` model (above) stores per-tenant
+// entitlement overrides. THIS catalog is the platform-side flag
+// registry used by /platform/feature-flags — keys, types, rollout
+// schedule, variants, segments, change history, code refs, etc.
+// ────────────────────────────────────────────────────────────
+
+enum PlatformFlagType {
+  BOOLEAN
+  MULTIVARIATE
+  STRING
+  NUMBER
+  JSON_VALUE
+}
+
+enum PlatformFlagEnv {
+  PRODUCTION
+  STAGING
+  SANDBOX
+  PREVIEW
+}
+
+enum PlatformFlagChangeKind {
+  CREATED
+  UPDATED
+  ROLLOUT_CHANGED
+  KILL_SWITCH
+  ENABLED
+  DISABLED
+  VARIANT_CHANGED
+  RULE_ADDED
+  RULE_REMOVED
+  SEGMENT_CHANGED
+  SCHEDULED
+  DEPENDENCY_ADDED
+  ROLLED_BACK
+  ARCHIVED
+}
+
+model PlatformFlag {
+  id          String           @id @default(cuid())
+  key         String           @unique
+  name        String
+  description String?
+  type        PlatformFlagType @default(BOOLEAN)
+  ownerEmail  String?
+  tags        String[]         @default([])
+
+  /** Default value if no rules match (serialized as string). */
+  defaultValue       String  @default("false")
+
+  /** Rollout % per environment (0..100). */
+  prodRolloutPct     Int     @default(0)
+  stagingRolloutPct  Int     @default(100)
+  sandboxRolloutPct  Int     @default(100)
+
+  /** Master on/off per environment. */
+  prodEnabled        Boolean @default(false)
+  stagingEnabled     Boolean @default(true)
+  sandboxEnabled     Boolean @default(true)
+
+  /** Kill switch — immediate OFF in production, overrides all rules. */
+  killSwitchActive   Boolean @default(false)
+  /** Archived flags hide from default views but keep history. */
+  archived           Boolean @default(false)
+
+  notes String?
+
+  createdAt DateTime @default(now())
+  updatedAt DateTime @updatedAt
+
+  variants        PlatformFlagVariant[]
+  rules           PlatformFlagRule[]
+  changeHistory   PlatformFlagChange[]
+  codeRefs        PlatformFlagCodeRef[]
+  evaluationStats PlatformFlagEvalStat[]
+  scheduleSteps   PlatformFlagScheduleStep[]
+  dependsOn       PlatformFlagDependency[] @relation("PlatformFlagDepends")
+  dependents      PlatformFlagDependency[] @relation("PlatformFlagDependents")
+
+  @@index([archived, key])
+  @@index([ownerEmail])
+}
+
+model PlatformFlagVariant {
+  id      String       @id @default(cuid())
+  flagId  String
+  flag    PlatformFlag @relation(fields: [flagId], references: [id], onDelete: Cascade)
+  key     String
+  value   String
+  /** Weights 0..100, all variants should sum to ~100. */
+  weightPct   Int     @default(50)
+  description String?
+
+  @@unique([flagId, key])
+}
+
+model PlatformFlagRule {
+  id          String          @id @default(cuid())
+  flagId      String
+  flag        PlatformFlag    @relation(fields: [flagId], references: [id], onDelete: Cascade)
+  env         PlatformFlagEnv
+  /** Lower order evaluates first. */
+  order       Int             @default(0)
+  description String?
+  /** Return value when this rule matches (boolean as "true"/"false", variant key, etc.). */
+  returnValue String
+  /** Conditions stored as JSON array of { attr, op, value }. */
+  conditionsJson Json
+  active      Boolean         @default(true)
+
+  createdAt DateTime @default(now())
+  updatedAt DateTime @updatedAt
+
+  @@index([flagId, env])
+}
+
+model PlatformFlagSegment {
+  id String @id @default(cuid())
+
+  key         String  @unique
+  name        String
+  description String?
+
+  /** Membership references (denormalized for fast eval). */
+  tenantIds   String[] @default([])
+  userEmails  String[] @default([])
+
+  createdAt DateTime @default(now())
+  updatedAt DateTime @updatedAt
+}
+
+model PlatformFlagScheduleStep {
+  id          String          @id @default(cuid())
+  flagId      String
+  flag        PlatformFlag    @relation(fields: [flagId], references: [id], onDelete: Cascade)
+  env         PlatformFlagEnv
+  rolloutPct  Int
+  scheduledAt DateTime
+  appliedAt   DateTime?
+  notes       String?
+
+  @@index([flagId, scheduledAt])
+}
+
+model PlatformFlagDependency {
+  id          String       @id @default(cuid())
+  flagId      String
+  dependsOnId String
+  flag        PlatformFlag @relation("PlatformFlagDepends",    fields: [flagId],      references: [id], onDelete: Cascade)
+  dependsOn   PlatformFlag @relation("PlatformFlagDependents", fields: [dependsOnId], references: [id], onDelete: Cascade)
+  reason      String?
+  createdAt   DateTime @default(now())
+
+  @@unique([flagId, dependsOnId])
+  @@index([dependsOnId])
+}
+
+model PlatformFlagChange {
+  id          String                 @id @default(cuid())
+  flagId      String
+  flag        PlatformFlag           @relation(fields: [flagId], references: [id], onDelete: Cascade)
+  kind        PlatformFlagChangeKind
+  actorEmail  String
+  summary     String
+  diffJson    Json?
+  env         PlatformFlagEnv?
+  createdAt   DateTime @default(now())
+
+  @@index([flagId, createdAt(sort: Desc)])
+}
+
+model PlatformFlagCodeRef {
+  id         String       @id @default(cuid())
+  flagId     String
+  flag       PlatformFlag @relation(fields: [flagId], references: [id], onDelete: Cascade)
+  filePath   String
+  lineNumber Int
+  commitSha  String
+  branchName String   @default("main")
+  context    String?
+  lastSeenAt DateTime @default(now())
+
+  @@index([flagId, lastSeenAt(sort: Desc)])
+}
+
+model PlatformFlagEvalStat {
+  id              String          @id @default(cuid())
+  flagId          String
+  flag            PlatformFlag    @relation(fields: [flagId], references: [id], onDelete: Cascade)
+  env             PlatformFlagEnv
+  day             DateTime
+  evaluations     Int             @default(0)
+  /** Per-variant breakdown e.g. { "control": 5042, "treatment": 5012 }. */
+  variantBreakdown Json?
+
+  @@unique([flagId, env, day])
+  @@index([day])
+}
+
+model PlatformFlagSettings {
+  id String @id @default("default")
+
+  defaultEnv                  PlatformFlagEnv @default(PRODUCTION)
+  propagationTargetSec        Int             @default(5)
+  /** Require approval flow before flipping the kill switch. */
+  approvalRequiredForKill     Boolean         @default(true)
+  /** Auto-archive flags untouched for N days (0 = disabled). */
+  autoArchiveStaleDays        Int             @default(0)
+  notes                       String?
+
+  updatedById String?
+  updatedAt   DateTime @updatedAt
+  createdAt   DateTime @default(now())
+}

@@ -84,6 +84,7 @@ async function main() {
   await seedStorageCdn(tenants);                       // Page 59
   await seedDatabaseHealth();                          // Page 60
   await seedRateLimits(tenants);                       // Page 61
+  await seedFeatureFlags(tenants, platformUsers);      // Page 62
 
   console.log("\n✓ Seed complete.\n");
   await db.$disconnect();
@@ -348,6 +349,9 @@ async function wipeOldSeed() {
   await db.rateLimitConsumer.deleteMany({ where: { endpoint: { startsWith: "/seed-" } } });
   await db.throttledSample.deleteMany({ where: { endpoint: { startsWith: "/seed-" } } });
   await db.abuseAlert.deleteMany({ where: { pattern: { startsWith: SEED_TAG } } });
+  // Page 62 — Platform Feature Flags wipe (cascades variants/rules/etc).
+  await db.platformFlag.deleteMany({ where: { key: { startsWith: "seed-" } } });
+  await db.platformFlagSegment.deleteMany({ where: { key: { startsWith: "seed-" } } });
   // Customers tagged seed (after orders are gone).
   await db.customer.deleteMany({ where: { tags: { has: "seed" } } });
   // Products tagged seed (use description marker since Product has no tags array).
@@ -12369,6 +12373,495 @@ async function seedRateLimits(tenants: { id: string; name: string; slug: string 
 
   console.log(
     `  ✓ ${rules.length} rules, ${quotas.length} plan quotas, ${consumers.length} consumers, ${throttledRows} throttled samples, ${alerts.length} abuse alerts`,
+  );
+}
+
+/* ── Page 62 — Feature Flags seed ─────────────────────── */
+
+async function seedFeatureFlags(
+  tenants: { id: string; name: string; slug: string }[],
+  _platformUsers: { id: string; email: string | null }[],
+) {
+  console.log("── Seeding Feature Flags (Page 62)…");
+
+  // 1. Settings singleton.
+  await db.platformFlagSettings.upsert({
+    where: { id: "default" },
+    create: {
+      id: "default",
+      defaultEnv: "PRODUCTION",
+      propagationTargetSec: 5,
+      approvalRequiredForKill: true,
+      autoArchiveStaleDays: 180,
+      notes: "All flag changes propagate to edge workers within 5 seconds. Kill-switch flips require approval from Engineering on-call.",
+    },
+    update: {},
+  });
+
+  const owners = [
+    "engineering@flowtora.com",
+    "product@flowtora.com",
+    "design@flowtora.com",
+    "sre@flowtora.com",
+    "marketing@flowtora.com",
+  ];
+
+  // 2. Segments.
+  type SegBp = { key: string; name: string; description: string; tenantSlice: number; emails: string[] };
+  const segments: SegBp[] = [
+    { key: "seed-beta-customers", name: "Beta customers",
+      description: "Hand-picked tenants in the closed beta program",
+      tenantSlice: Math.min(3, tenants.length),
+      emails: ["beta-feedback@example.com"] },
+    { key: "seed-internal-staff", name: "Internal staff",
+      description: "Flowtora employees and contractors",
+      tenantSlice: 0,
+      emails: ["engineering@flowtora.com", "design@flowtora.com", "product@flowtora.com", "support@flowtora.com"] },
+    { key: "seed-enterprise-tier", name: "Enterprise tier",
+      description: "Tenants on the Enterprise plan",
+      tenantSlice: 0,
+      emails: [] },
+    { key: "seed-vip-100", name: "VIP top-100",
+      description: "Top 100 tenants by ARR",
+      tenantSlice: Math.min(2, tenants.length),
+      emails: [] },
+    { key: "seed-eu-tenants", name: "EU tenants",
+      description: "Tenants billed in EUR or with HQ in EU regions",
+      tenantSlice: Math.min(1, tenants.length),
+      emails: [] },
+    { key: "seed-canary-cohort", name: "Canary cohort",
+      description: "1% slice used for canary deployments",
+      tenantSlice: Math.min(1, tenants.length),
+      emails: [] },
+  ];
+  for (const s of segments) {
+    const tenantIds = tenants.slice(0, s.tenantSlice).map((t) => t.id);
+    await db.platformFlagSegment.upsert({
+      where: { key: s.key },
+      create: {
+        key: s.key, name: s.name, description: s.description,
+        tenantIds, userEmails: s.emails,
+      },
+      update: { name: s.name, description: s.description, tenantIds, userEmails: s.emails },
+    });
+  }
+
+  // 3. Flags.
+  type FlagBp = {
+    key: string; name: string; description: string;
+    type: "BOOLEAN" | "MULTIVARIATE" | "STRING" | "NUMBER" | "JSON_VALUE";
+    owner: string;
+    tags: string[];
+    defaultValue: string;
+    prodEnabled: boolean; prodRolloutPct: number;
+    stagingEnabled: boolean; stagingRolloutPct: number;
+    sandboxEnabled: boolean; sandboxRolloutPct: number;
+    killSwitchActive?: boolean;
+    archived?: boolean;
+    variants?: Array<{ key: string; value: string; weightPct: number; description?: string }>;
+    rules?: Array<{ env: "PRODUCTION" | "STAGING" | "SANDBOX"; order: number; description: string; returnValue: string; conditions: Array<{ attr: string; op: string; value: unknown }> }>;
+    notes?: string;
+  };
+
+  const flags: FlagBp[] = [
+    {
+      key: "seed-new-checkout-flow",
+      name: "New checkout flow",
+      description: "Redesigned cart → payment funnel with single-page checkout. Replaces the legacy 3-step wizard.",
+      type: "BOOLEAN",
+      owner: owners[0]!,
+      tags: ["checkout", "growth", "release-2026.05"],
+      defaultValue: "false",
+      prodEnabled: true,  prodRolloutPct: 25,
+      stagingEnabled: true, stagingRolloutPct: 100,
+      sandboxEnabled: true, sandboxRolloutPct: 100,
+      rules: [
+        { env: "PRODUCTION", order: 0, description: "Force-on for beta customers", returnValue: "true",
+          conditions: [{ attr: "segment", op: "IN", value: ["seed-beta-customers"] }] },
+        { env: "PRODUCTION", order: 1, description: "Random 25% canary", returnValue: "true",
+          conditions: [{ attr: "tenant.id", op: "RANDOM_LT", value: 25 }] },
+      ],
+      notes: "Ramp to 50% by 2026-05-15 if no spike in cart-abandon rate.",
+    },
+    {
+      key: "seed-ai-quote-helper",
+      name: "AI quote suggestions",
+      description: "Inline AI assistant for quote line-item suggestions. Generates price + qty based on artwork analysis.",
+      type: "BOOLEAN",
+      owner: owners[1]!,
+      tags: ["ai", "quotes", "premium"],
+      defaultValue: "false",
+      prodEnabled: true,  prodRolloutPct: 100,
+      stagingEnabled: true, stagingRolloutPct: 100,
+      sandboxEnabled: true, sandboxRolloutPct: 100,
+      rules: [
+        { env: "PRODUCTION", order: 0, description: "Pro + Enterprise only", returnValue: "true",
+          conditions: [{ attr: "plan", op: "IN", value: ["PRO", "ENTERPRISE"] }] },
+      ],
+    },
+    {
+      key: "seed-checkout-button-copy",
+      name: "Checkout button copy A/B test",
+      description: "A/B test of three button copy variants on the primary checkout CTA.",
+      type: "MULTIVARIATE",
+      owner: owners[4]!,
+      tags: ["growth", "copy", "experiment"],
+      defaultValue: "control",
+      prodEnabled: true,  prodRolloutPct: 100,
+      stagingEnabled: true, stagingRolloutPct: 100,
+      sandboxEnabled: true, sandboxRolloutPct: 100,
+      variants: [
+        { key: "control", value: "Place order", weightPct: 33, description: "Original copy" },
+        { key: "review", value: "Review & order", weightPct: 33, description: "Two-word emphasis on confirmation" },
+        { key: "confirm", value: "Confirm purchase", weightPct: 34, description: "More formal — tested better with B2B" },
+      ],
+    },
+    {
+      key: "seed-bulk-invoice-export",
+      name: "Bulk invoice export",
+      description: "Allow tenants to export 1000+ invoices as a single CSV. Disabled while we tune the streaming endpoint.",
+      type: "BOOLEAN",
+      owner: owners[3]!,
+      tags: ["billing", "exports", "perf"],
+      defaultValue: "false",
+      prodEnabled: false,  prodRolloutPct: 0,
+      stagingEnabled: true, stagingRolloutPct: 100,
+      sandboxEnabled: true, sandboxRolloutPct: 100,
+      notes: "Holding at 0% in prod — opens 16 connections per export, currently OOMs at >5k rows.",
+    },
+    {
+      key: "seed-realtime-collaboration",
+      name: "Real-time collaboration on quotes",
+      description: "Multi-cursor editing on quotes via WebSocket + CRDT.",
+      type: "BOOLEAN",
+      owner: owners[0]!,
+      tags: ["realtime", "quotes", "websocket"],
+      defaultValue: "false",
+      prodEnabled: true,  prodRolloutPct: 5,
+      stagingEnabled: true, stagingRolloutPct: 100,
+      sandboxEnabled: true, sandboxRolloutPct: 100,
+      rules: [
+        { env: "PRODUCTION", order: 0, description: "Canary cohort only", returnValue: "true",
+          conditions: [{ attr: "segment", op: "IN", value: ["seed-canary-cohort"] }] },
+      ],
+      notes: "Canary cohort feedback positive — schedule 25% expansion for 2026-05-18.",
+    },
+    {
+      key: "seed-payment-provider-default",
+      name: "Default payment provider",
+      description: "Selects which payment provider to use as the default for new tenant signups.",
+      type: "STRING",
+      owner: owners[3]!,
+      tags: ["billing", "payments", "infra"],
+      defaultValue: "stripe",
+      prodEnabled: true,  prodRolloutPct: 100,
+      stagingEnabled: true, stagingRolloutPct: 100,
+      sandboxEnabled: true, sandboxRolloutPct: 100,
+      rules: [
+        { env: "PRODUCTION", order: 0, description: "EU tenants → Mollie", returnValue: "mollie",
+          conditions: [{ attr: "segment", op: "IN", value: ["seed-eu-tenants"] }] },
+      ],
+    },
+    {
+      key: "seed-max-upload-size-mb",
+      name: "Max upload size (MB)",
+      description: "Per-tenant ceiling on individual asset upload size. Soft-enforced — server caps at 500MB regardless.",
+      type: "NUMBER",
+      owner: owners[3]!,
+      tags: ["uploads", "storage", "quota"],
+      defaultValue: "50",
+      prodEnabled: true,  prodRolloutPct: 100,
+      stagingEnabled: true, stagingRolloutPct: 100,
+      sandboxEnabled: true, sandboxRolloutPct: 100,
+      rules: [
+        { env: "PRODUCTION", order: 0, description: "Enterprise tier gets 500MB", returnValue: "500",
+          conditions: [{ attr: "plan", op: "EQUALS", value: "ENTERPRISE" }] },
+        { env: "PRODUCTION", order: 1, description: "Pro tier gets 200MB", returnValue: "200",
+          conditions: [{ attr: "plan", op: "EQUALS", value: "PRO" }] },
+      ],
+    },
+    {
+      key: "seed-dashboard-layout-config",
+      name: "Dashboard layout config",
+      description: "JSON object describing default dashboard panel layout for new tenants.",
+      type: "JSON_VALUE",
+      owner: owners[2]!,
+      tags: ["dashboard", "onboarding", "design"],
+      defaultValue: '{"panels":["revenue","orders","tickets"],"defaultDateRange":"30d"}',
+      prodEnabled: true,  prodRolloutPct: 100,
+      stagingEnabled: true, stagingRolloutPct: 100,
+      sandboxEnabled: true, sandboxRolloutPct: 100,
+    },
+    {
+      key: "seed-emergency-readonly",
+      name: "Global read-only mode",
+      description: "EMERGENCY USE — when ON, all write endpoints return 503. Used during database failovers.",
+      type: "BOOLEAN",
+      owner: owners[3]!,
+      tags: ["emergency", "sre", "kill-switch"],
+      defaultValue: "false",
+      prodEnabled: false,  prodRolloutPct: 0,
+      stagingEnabled: false, stagingRolloutPct: 0,
+      sandboxEnabled: false, sandboxRolloutPct: 0,
+      notes: "DO NOT FLIP without explicit Incident Commander approval. Affects ALL tenants instantly.",
+    },
+    {
+      key: "seed-3ds-strict-mode",
+      name: "Strict 3DS authentication",
+      description: "Force 3DS challenge on every payment >$500 regardless of risk score.",
+      type: "BOOLEAN",
+      owner: owners[3]!,
+      tags: ["payments", "fraud", "compliance"],
+      defaultValue: "false",
+      prodEnabled: true,  prodRolloutPct: 100,
+      stagingEnabled: true, stagingRolloutPct: 100,
+      sandboxEnabled: true, sandboxRolloutPct: 100,
+      killSwitchActive: true,
+      notes: "Kill-switched 2026-05-09 — accidentally blocked legitimate $600 wires. Investigating threshold tuning.",
+    },
+    {
+      key: "seed-new-onboarding-wizard",
+      name: "New onboarding wizard",
+      description: "4-step guided setup replacing the old 12-step wizard.",
+      type: "BOOLEAN",
+      owner: owners[2]!,
+      tags: ["onboarding", "growth"],
+      defaultValue: "true",
+      prodEnabled: true,  prodRolloutPct: 100,
+      stagingEnabled: true, stagingRolloutPct: 100,
+      sandboxEnabled: true, sandboxRolloutPct: 100,
+      archived: true,
+      notes: "Archived 2026-04-15 after full rollout. Old wizard removed from codebase.",
+    },
+    {
+      key: "seed-vendor-portal-v2",
+      name: "Vendor portal v2",
+      description: "Self-service vendor portal where suppliers can update lead times and stock levels.",
+      type: "BOOLEAN",
+      owner: owners[1]!,
+      tags: ["vendors", "self-service", "release-2026.06"],
+      defaultValue: "false",
+      prodEnabled: false,  prodRolloutPct: 0,
+      stagingEnabled: true, stagingRolloutPct: 100,
+      sandboxEnabled: true, sandboxRolloutPct: 100,
+      notes: "Targeting GA for 2026-06-01 — needs final security review.",
+    },
+  ];
+
+  const flagByKey = new Map<string, string>();
+  for (const f of flags) {
+    const row = await db.platformFlag.upsert({
+      where: { key: f.key },
+      create: {
+        key: f.key, name: f.name, description: f.description,
+        type: f.type, ownerEmail: f.owner, tags: f.tags,
+        defaultValue: f.defaultValue,
+        prodEnabled: f.prodEnabled, prodRolloutPct: f.prodRolloutPct,
+        stagingEnabled: f.stagingEnabled, stagingRolloutPct: f.stagingRolloutPct,
+        sandboxEnabled: f.sandboxEnabled, sandboxRolloutPct: f.sandboxRolloutPct,
+        killSwitchActive: f.killSwitchActive ?? false,
+        archived: f.archived ?? false,
+        notes: f.notes ?? null,
+      },
+      update: {
+        name: f.name, description: f.description,
+        type: f.type, ownerEmail: f.owner, tags: f.tags,
+        defaultValue: f.defaultValue,
+        prodEnabled: f.prodEnabled, prodRolloutPct: f.prodRolloutPct,
+        stagingEnabled: f.stagingEnabled, stagingRolloutPct: f.stagingRolloutPct,
+        sandboxEnabled: f.sandboxEnabled, sandboxRolloutPct: f.sandboxRolloutPct,
+        killSwitchActive: f.killSwitchActive ?? false,
+        archived: f.archived ?? false,
+        notes: f.notes ?? null,
+      },
+    });
+    flagByKey.set(f.key, row.id);
+
+    // Variants
+    if (f.variants) {
+      for (const v of f.variants) {
+        await db.platformFlagVariant.upsert({
+          where: { flagId_key: { flagId: row.id, key: v.key } },
+          create: { flagId: row.id, key: v.key, value: v.value, weightPct: v.weightPct, description: v.description ?? null },
+          update: { value: v.value, weightPct: v.weightPct, description: v.description ?? null },
+        });
+      }
+    }
+
+    // Rules
+    if (f.rules) {
+      for (const r of f.rules) {
+        await db.platformFlagRule.create({
+          data: {
+            flagId: row.id, env: r.env, order: r.order,
+            description: r.description, returnValue: r.returnValue,
+            conditionsJson: r.conditions as never,
+            active: true,
+          },
+        });
+      }
+    }
+  }
+
+  // 4. Dependencies — e.g. realtime collab needs new-checkout-flow.
+  type DepBp = { fromKey: string; dependsOnKey: string; reason: string };
+  const deps: DepBp[] = [
+    { fromKey: "seed-realtime-collaboration", dependsOnKey: "seed-new-checkout-flow",
+      reason: "Shares the new WebSocket gateway — must be live first." },
+    { fromKey: "seed-ai-quote-helper", dependsOnKey: "seed-vendor-portal-v2",
+      reason: "Reads vendor lead-time data exposed by portal v2." },
+  ];
+  for (const d of deps) {
+    const flagId = flagByKey.get(d.fromKey);
+    const dependsOnId = flagByKey.get(d.dependsOnKey);
+    if (!flagId || !dependsOnId) continue;
+    try {
+      await db.platformFlagDependency.create({
+        data: { flagId, dependsOnId, reason: d.reason },
+      });
+    } catch {
+      // ignore unique conflict on rerun
+    }
+  }
+
+  // 5. Schedule steps for ramping flags.
+  type SchedBp = { flagKey: string; env: "PRODUCTION" | "STAGING" | "SANDBOX"; rolloutPct: number; daysFromNow: number; notes?: string };
+  const schedules: SchedBp[] = [
+    { flagKey: "seed-new-checkout-flow",     env: "PRODUCTION", rolloutPct:  50, daysFromNow:  4, notes: "Ramp #2 — pending checkpoint approval" },
+    { flagKey: "seed-new-checkout-flow",     env: "PRODUCTION", rolloutPct: 100, daysFromNow: 14, notes: "Full rollout" },
+    { flagKey: "seed-realtime-collaboration", env: "PRODUCTION", rolloutPct:  25, daysFromNow:  7, notes: "Expand canary → 25%" },
+    { flagKey: "seed-vendor-portal-v2",      env: "PRODUCTION", rolloutPct:  10, daysFromNow: 18, notes: "Initial 10% rollout after security sign-off" },
+  ];
+  let scheduleCount = 0;
+  for (const s of schedules) {
+    const flagId = flagByKey.get(s.flagKey);
+    if (!flagId) continue;
+    await db.platformFlagScheduleStep.create({
+      data: {
+        flagId, env: s.env, rolloutPct: s.rolloutPct,
+        scheduledAt: new Date(Date.now() + s.daysFromNow * DAY),
+        notes: s.notes ?? null,
+      },
+    });
+    scheduleCount++;
+  }
+
+  // 6. Code refs — realistic file paths into the codebase.
+  type CodeRefBp = { flagKey: string; filePath: string; lineNumber: number; commitSha: string; daysAgo: number };
+  const codeRefs: CodeRefBp[] = [
+    { flagKey: "seed-new-checkout-flow", filePath: "src/app/checkout/page.tsx", lineNumber: 42, commitSha: "a82f4d1c", daysAgo: 1 },
+    { flagKey: "seed-new-checkout-flow", filePath: "src/app/checkout/payment/page.tsx", lineNumber: 18, commitSha: "a82f4d1c", daysAgo: 1 },
+    { flagKey: "seed-new-checkout-flow", filePath: "src/server/checkout/orchestrator.ts", lineNumber: 204, commitSha: "9c4be12a", daysAgo: 3 },
+    { flagKey: "seed-ai-quote-helper", filePath: "src/components/quotes/SuggestionRail.tsx", lineNumber: 88, commitSha: "31fbe7a8", daysAgo: 7 },
+    { flagKey: "seed-ai-quote-helper", filePath: "src/server/quotes/aiHelper.ts", lineNumber: 12, commitSha: "31fbe7a8", daysAgo: 7 },
+    { flagKey: "seed-checkout-button-copy", filePath: "src/components/checkout/PrimaryButton.tsx", lineNumber: 24, commitSha: "4f9a02b1", daysAgo: 14 },
+    { flagKey: "seed-bulk-invoice-export", filePath: "src/app/api/invoices/export/route.ts", lineNumber: 36, commitSha: "8b1c4e72", daysAgo: 21 },
+    { flagKey: "seed-realtime-collaboration", filePath: "src/server/realtime/gateway.ts", lineNumber: 102, commitSha: "55ea2918", daysAgo: 4 },
+    { flagKey: "seed-realtime-collaboration", filePath: "src/components/quotes/CursorOverlay.tsx", lineNumber: 14, commitSha: "55ea2918", daysAgo: 4 },
+    { flagKey: "seed-payment-provider-default", filePath: "src/server/billing/providerRouter.ts", lineNumber: 18, commitSha: "ca1f7d20", daysAgo: 9 },
+    { flagKey: "seed-max-upload-size-mb", filePath: "src/app/api/uploads/sign/route.ts", lineNumber: 41, commitSha: "7d8c9b13", daysAgo: 12 },
+    { flagKey: "seed-dashboard-layout-config", filePath: "src/app/t/[slug]/dashboard/page.tsx", lineNumber: 78, commitSha: "f4a18db2", daysAgo: 22 },
+    { flagKey: "seed-emergency-readonly", filePath: "src/middleware.ts", lineNumber: 56, commitSha: "0e7b3c41", daysAgo: 35 },
+    { flagKey: "seed-3ds-strict-mode", filePath: "src/server/billing/threeDS.ts", lineNumber: 88, commitSha: "fe2491a8", daysAgo: 2 },
+    { flagKey: "seed-vendor-portal-v2", filePath: "src/app/vendor/page.tsx", lineNumber: 9, commitSha: "21ca80b9", daysAgo: 11 },
+  ];
+  for (const r of codeRefs) {
+    const flagId = flagByKey.get(r.flagKey);
+    if (!flagId) continue;
+    await db.platformFlagCodeRef.create({
+      data: {
+        flagId, filePath: r.filePath, lineNumber: r.lineNumber,
+        commitSha: r.commitSha, branchName: "main",
+        context: null,
+        lastSeenAt: new Date(Date.now() - r.daysAgo * DAY),
+      },
+    });
+  }
+
+  // 7. Evaluation stats — 30 days × top 6 flags × 3 envs.
+  const evalFlags = ["seed-new-checkout-flow", "seed-ai-quote-helper", "seed-checkout-button-copy",
+                     "seed-realtime-collaboration", "seed-payment-provider-default", "seed-max-upload-size-mb"];
+  let evalRows = 0;
+  for (const fk of evalFlags) {
+    const flagId = flagByKey.get(fk);
+    if (!flagId) continue;
+    for (let day = 0; day < 30; day++) {
+      const d = daysAgo(day);
+      d.setUTCHours(0, 0, 0, 0);
+      for (const env of ["PRODUCTION", "STAGING", "SANDBOX"] as const) {
+        const base = env === "PRODUCTION" ? 50_000 : env === "STAGING" ? 8_000 : 2_000;
+        const flagMultiplier = fk.includes("checkout") ? 2.5
+                              : fk.includes("payment") ? 2.0
+                              : fk.includes("upload") ? 1.6
+                              : 1.0;
+        const noise = 0.7 + Math.random() * 0.6;
+        const recencyBoost = 1 + (30 - day) / 80;
+        const count = Math.floor(base * flagMultiplier * noise * recencyBoost);
+        // Variant breakdown for multivariate
+        const isMultivariate = fk === "seed-checkout-button-copy";
+        const variantBreakdown = isMultivariate
+          ? { control: Math.floor(count * 0.33), review: Math.floor(count * 0.33), confirm: Math.floor(count * 0.34) }
+          : null;
+        await db.platformFlagEvalStat.upsert({
+          where: { flagId_env_day: { flagId, env, day: d } },
+          create: { flagId, env, day: d, evaluations: count, variantBreakdown: variantBreakdown as never },
+          update: { evaluations: count, variantBreakdown: variantBreakdown as never },
+        });
+        evalRows++;
+      }
+    }
+  }
+
+  // 8. Change history — synthesize realistic change rows per flag.
+  type ChangeBp = { flagKey: string; kind: "CREATED" | "UPDATED" | "ROLLOUT_CHANGED" | "KILL_SWITCH" | "ENABLED" | "DISABLED" | "VARIANT_CHANGED" | "RULE_ADDED" | "SCHEDULED" | "ARCHIVED"; summary: string; actor: string; env?: "PRODUCTION" | "STAGING" | "SANDBOX"; hoursAgo: number };
+  const changes: ChangeBp[] = [
+    // new-checkout-flow lifecycle
+    { flagKey: "seed-new-checkout-flow", kind: "CREATED", summary: "Created flag with 0% prod rollout", actor: owners[0]!, hoursAgo: 30 * 24 },
+    { flagKey: "seed-new-checkout-flow", kind: "ENABLED", summary: "Enabled in staging", env: "STAGING", actor: owners[0]!, hoursAgo: 28 * 24 },
+    { flagKey: "seed-new-checkout-flow", kind: "RULE_ADDED", summary: "Added rule for beta customers", env: "PRODUCTION", actor: owners[0]!, hoursAgo: 14 * 24 },
+    { flagKey: "seed-new-checkout-flow", kind: "ROLLOUT_CHANGED", summary: "PRODUCTION rollout → 10%", env: "PRODUCTION", actor: owners[0]!, hoursAgo: 7 * 24 },
+    { flagKey: "seed-new-checkout-flow", kind: "ROLLOUT_CHANGED", summary: "PRODUCTION rollout → 25%", env: "PRODUCTION", actor: owners[0]!, hoursAgo: 2 * 24 },
+    { flagKey: "seed-new-checkout-flow", kind: "SCHEDULED", summary: "Scheduled 50% ramp for 2026-05-15", env: "PRODUCTION", actor: owners[0]!, hoursAgo: 1 * 24 },
+    // ai-quote-helper
+    { flagKey: "seed-ai-quote-helper", kind: "CREATED", summary: "Created flag", actor: owners[1]!, hoursAgo: 21 * 24 },
+    { flagKey: "seed-ai-quote-helper", kind: "RULE_ADDED", summary: "Restricted to Pro/Enterprise plans", env: "PRODUCTION", actor: owners[1]!, hoursAgo: 20 * 24 },
+    { flagKey: "seed-ai-quote-helper", kind: "ROLLOUT_CHANGED", summary: "PRODUCTION rollout → 100% (for eligible plans)", env: "PRODUCTION", actor: owners[1]!, hoursAgo: 14 * 24 },
+    // 3ds-strict-mode kill switch
+    { flagKey: "seed-3ds-strict-mode", kind: "CREATED", summary: "Created flag", actor: owners[3]!, hoursAgo: 18 * 24 },
+    { flagKey: "seed-3ds-strict-mode", kind: "ROLLOUT_CHANGED", summary: "PRODUCTION rollout → 100%", env: "PRODUCTION", actor: owners[3]!, hoursAgo: 10 * 24 },
+    { flagKey: "seed-3ds-strict-mode", kind: "KILL_SWITCH", summary: "Kill-switched after legitimate $600 wires were blocked", env: "PRODUCTION", actor: owners[3]!, hoursAgo: 30 },
+    // checkout-button-copy
+    { flagKey: "seed-checkout-button-copy", kind: "CREATED", summary: "Created A/B test", actor: owners[4]!, hoursAgo: 16 * 24 },
+    { flagKey: "seed-checkout-button-copy", kind: "VARIANT_CHANGED", summary: "Added 'Confirm purchase' variant", actor: owners[4]!, hoursAgo: 14 * 24 },
+    // realtime-collaboration
+    { flagKey: "seed-realtime-collaboration", kind: "CREATED", summary: "Created flag (canary cohort only)", actor: owners[0]!, hoursAgo: 9 * 24 },
+    { flagKey: "seed-realtime-collaboration", kind: "ROLLOUT_CHANGED", summary: "PRODUCTION rollout → 5%", env: "PRODUCTION", actor: owners[0]!, hoursAgo: 6 * 24 },
+    // emergency-readonly
+    { flagKey: "seed-emergency-readonly", kind: "CREATED", summary: "Created emergency flag", actor: owners[3]!, hoursAgo: 60 * 24 },
+    // archived flag
+    { flagKey: "seed-new-onboarding-wizard", kind: "CREATED", summary: "Created flag", actor: owners[2]!, hoursAgo: 90 * 24 },
+    { flagKey: "seed-new-onboarding-wizard", kind: "ROLLOUT_CHANGED", summary: "PRODUCTION → 100%", env: "PRODUCTION", actor: owners[2]!, hoursAgo: 35 * 24 },
+    { flagKey: "seed-new-onboarding-wizard", kind: "ARCHIVED", summary: "Archived — full rollout complete, cleanup ticket filed", actor: owners[2]!, hoursAgo: 25 * 24 },
+    // vendor-portal-v2
+    { flagKey: "seed-vendor-portal-v2", kind: "CREATED", summary: "Created flag for GA tracking", actor: owners[1]!, hoursAgo: 12 * 24 },
+    // bulk-invoice-export
+    { flagKey: "seed-bulk-invoice-export", kind: "CREATED", summary: "Created with prod OFF — perf issues", actor: owners[3]!, hoursAgo: 22 * 24 },
+    { flagKey: "seed-bulk-invoice-export", kind: "DISABLED", summary: "Holding at 0% — OOMs at 5k+ rows", env: "PRODUCTION", actor: owners[3]!, hoursAgo: 21 * 24 },
+  ];
+  for (const c of changes) {
+    const flagId = flagByKey.get(c.flagKey);
+    if (!flagId) continue;
+    await db.platformFlagChange.create({
+      data: {
+        flagId, kind: c.kind, actorEmail: c.actor,
+        summary: c.summary, env: c.env ?? null,
+        createdAt: new Date(Date.now() - c.hoursAgo * 3600_000),
+      },
+    });
+  }
+
+  console.log(
+    `  ✓ ${flags.length} flags, ${segments.length} segments, ${deps.length} dependencies, ${scheduleCount} scheduled steps, ${codeRefs.length} code refs, ${evalRows} eval samples, ${changes.length} change events`,
   );
 }
 
