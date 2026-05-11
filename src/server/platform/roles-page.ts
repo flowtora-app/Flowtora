@@ -128,6 +128,8 @@ export const PERMISSION_DESCRIPTIONS: Record<PlatformPermission, string> = {
   "storage.egress.read": "View egress cost dashboard (finance + SRE).",
   "database.read":   "View database health — connections, replication, slow queries, indexes, locks.",
   "database.manage": "Kill sessions, run vacuum/analyze, mark slow queries reviewed, save DB settings.",
+  "ratelimits.read":   "View rate-limit rules, plan quotas, tenant overrides, top consumers, throttled requests, abuse alerts.",
+  "ratelimits.manage": "Edit rules, plan quotas, tenant overrides; acknowledge/resolve abuse alerts.",
   // Analytics
   "analytics.read":        "Read analytics dashboards.",
   "analytics.export":      "Export analytics datasets.",

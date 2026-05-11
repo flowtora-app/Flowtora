@@ -83,6 +83,7 @@ async function main() {
   await seedEmailDeliverability(tenants);              // Page 58
   await seedStorageCdn(tenants);                       // Page 59
   await seedDatabaseHealth();                          // Page 60
+  await seedRateLimits(tenants);                       // Page 61
 
   console.log("\n✓ Seed complete.\n");
   await db.$disconnect();
@@ -341,6 +342,12 @@ async function wipeOldSeed() {
   await db.cdnTopUrl.deleteMany({ where: { url: { contains: "seed-" } } });
   // Page 60 — DB Health wipe (cascades samples/slow/index/tables/locks/sessions/vacuum).
   await db.dbInstance.deleteMany({ where: { slug: { startsWith: "seed-" } } });
+  // Page 61 — Rate Limits wipe.
+  await db.rateLimitRule.deleteMany({ where: { endpoint: { startsWith: "/seed-" } } });
+  await db.tenantRateLimitOverride.deleteMany({ where: { reason: { startsWith: SEED_TAG } } });
+  await db.rateLimitConsumer.deleteMany({ where: { endpoint: { startsWith: "/seed-" } } });
+  await db.throttledSample.deleteMany({ where: { endpoint: { startsWith: "/seed-" } } });
+  await db.abuseAlert.deleteMany({ where: { pattern: { startsWith: SEED_TAG } } });
   // Customers tagged seed (after orders are gone).
   await db.customer.deleteMany({ where: { tags: { has: "seed" } } });
   // Products tagged seed (use description marker since Product has no tags array).
@@ -12026,6 +12033,342 @@ async function seedDatabaseHealth() {
 
   console.log(
     `  ✓ ${instances.length} instances, ${connSamples.length} conn samples, ${repSamples.length} rep samples, ${cacheSamples.length} cache samples, ${slowQueries.length} slow queries, ${indexes.length} indexes, ${tableStats.length} tables, ${locks.length} locks, ${vacuum.length} vacuum runs, ${sessions.length} sessions`,
+  );
+}
+
+/* ── Page 61 — Rate Limits & Quotas seed ───────────────── */
+
+async function seedRateLimits(tenants: { id: string; name: string; slug: string }[]) {
+  console.log("── Seeding Rate Limits & Quotas (Page 61)…");
+
+  // 1. Settings singleton.
+  await db.rateLimitSettings.upsert({
+    where: { id: "default" },
+    create: {
+      id: "default",
+      defaultRps: 10,
+      defaultBurst: 20,
+      spikeMultiplier: 10,
+      notifyOnHighUsage: true,
+      consumerRefreshH: 1,
+      notes: "Rules are enforced at the edge (Cloudflare) and re-checked in the API gateway. Anomaly detection runs every 5 minutes.",
+    },
+    update: {},
+  });
+
+  // 2. Rate-limit rules.
+  type RuleBp = {
+    endpoint: string; name: string; description: string;
+    rps: number; burst: number; dailyCap: number;
+    scope: "PER_KEY" | "PER_IP" | "PER_TENANT" | "PER_USER" | "GLOBAL";
+    algorithm: "TOKEN_BUCKET" | "SLIDING_WINDOW" | "FIXED_WINDOW" | "LEAKY_BUCKET";
+    action: "THROTTLE" | "CHALLENGE" | "BLOCK" | "LOG_ONLY";
+    active: boolean;
+    hits24h: number; throttled24h: number;
+    notes?: string;
+  };
+  const rules: RuleBp[] = [
+    { endpoint: "/seed-v1/api",            name: "General API",           description: "Default ceiling for all authenticated API calls.",
+      rps: 50, burst: 100, dailyCap: 1_000_000, scope: "PER_KEY", algorithm: "TOKEN_BUCKET", action: "THROTTLE", active: true,
+      hits24h: 2_840_192, throttled24h: 12_482, notes: "Most generous bucket — tightens automatically on consumers above 90% quota." },
+    { endpoint: "/seed-v1/files/upload",   name: "File uploads",          description: "Limits upload bandwidth + storage write contention.",
+      rps: 5, burst: 10, dailyCap: 50_000, scope: "PER_KEY", algorithm: "LEAKY_BUCKET", action: "THROTTLE", active: true,
+      hits24h: 184_204, throttled24h: 4_812, notes: "Leaky bucket smooths spiky desktop client uploads." },
+    { endpoint: "/seed-v1/files/download", name: "File downloads",        description: "Public + signed CDN bypass downloads.",
+      rps: 30, burst: 60, dailyCap: 500_000, scope: "PER_KEY", algorithm: "SLIDING_WINDOW", action: "THROTTLE", active: true,
+      hits24h: 612_488, throttled24h: 2_104 },
+    { endpoint: "/seed-v1/webhooks",       name: "Webhook delivery",      description: "Outbound webhook fire-rate per tenant.",
+      rps: 20, burst: 40, dailyCap: 200_000, scope: "PER_TENANT", algorithm: "TOKEN_BUCKET", action: "THROTTLE", active: true,
+      hits24h: 92_104, throttled24h: 1_204 },
+    { endpoint: "/seed-v1/auth/login",     name: "Login (anti-stuffing)", description: "Per-IP login attempt limit to block credential stuffing.",
+      rps: 2, burst: 5, dailyCap: 200, scope: "PER_IP", algorithm: "FIXED_WINDOW", action: "CHALLENGE", active: true,
+      hits24h: 18_402, throttled24h: 842, notes: "Failures trigger Turnstile challenge; 5+ in 1m blocks the IP for 15m." },
+    { endpoint: "/seed-v1/auth/password-reset", name: "Password reset",   description: "Throttle reset requests by email + IP.",
+      rps: 1, burst: 3, dailyCap: 30, scope: "PER_IP", algorithm: "FIXED_WINDOW", action: "BLOCK", active: true,
+      hits24h: 412, throttled24h: 28 },
+    { endpoint: "/seed-v1/reports",        name: "Heavy reports",         description: "Expensive aggregation endpoints (CSV exports, analytics).",
+      rps: 2, burst: 4, dailyCap: 10_000, scope: "PER_KEY", algorithm: "TOKEN_BUCKET", action: "THROTTLE", active: true,
+      hits24h: 4_902, throttled24h: 184 },
+    { endpoint: "/seed-v1/search",         name: "Search",                description: "Tenant-scoped search index queries.",
+      rps: 20, burst: 40, dailyCap: 0, scope: "PER_USER", algorithm: "SLIDING_WINDOW", action: "THROTTLE", active: true,
+      hits24h: 412_804, throttled24h: 894 },
+    { endpoint: "/seed-v1/public/landing", name: "Public landing pages",  description: "Anonymous traffic to /lp/* pages.",
+      rps: 100, burst: 200, dailyCap: 0, scope: "PER_IP", algorithm: "SLIDING_WINDOW", action: "LOG_ONLY", active: true,
+      hits24h: 1_802_412, throttled24h: 0, notes: "Log-only for now — we want to observe shape before throttling marketing traffic." },
+    { endpoint: "/seed-v1/admin/impersonate", name: "Admin impersonation", description: "Platform-side impersonation endpoint.",
+      rps: 1, burst: 1, dailyCap: 20, scope: "GLOBAL", algorithm: "FIXED_WINDOW", action: "BLOCK", active: true,
+      hits24h: 12, throttled24h: 0 },
+    { endpoint: "/seed-v1/legacy/v0",      name: "Legacy v0 (deprecated)", description: "Deprecated v0 endpoints kept alive for old clients.",
+      rps: 1, burst: 2, dailyCap: 1_000, scope: "PER_KEY", algorithm: "TOKEN_BUCKET", action: "THROTTLE", active: false,
+      hits24h: 0, throttled24h: 0, notes: "Disabled — schedule removal once telemetry shows zero usage for 30d." },
+  ];
+  const ruleByEndpoint = new Map<string, string>();
+  for (const r of rules) {
+    const row = await db.rateLimitRule.upsert({
+      where: { endpoint: r.endpoint },
+      create: {
+        endpoint: r.endpoint, name: r.name, description: r.description,
+        rps: r.rps, burst: r.burst, dailyCap: r.dailyCap,
+        scope: r.scope, algorithm: r.algorithm, action: r.action,
+        active: r.active, hits24h: r.hits24h, throttled24h: r.throttled24h,
+        notes: r.notes ?? null,
+      },
+      update: {
+        name: r.name, description: r.description,
+        rps: r.rps, burst: r.burst, dailyCap: r.dailyCap,
+        scope: r.scope, algorithm: r.algorithm, action: r.action,
+        active: r.active, hits24h: r.hits24h, throttled24h: r.throttled24h,
+        notes: r.notes ?? null,
+      },
+    });
+    ruleByEndpoint.set(r.endpoint, row.id);
+  }
+
+  // 3. Plan quotas — one row per Plan enum value.
+  type QuotaBp = {
+    plan: "STARTER" | "GROWTH" | "PRO" | "ENTERPRISE";
+    apiCallsPerMonth: number; storageBytes: bigint;
+    users: number; webhooksPerMonth: number;
+    overageRateCents: number; softCap: boolean; hardCap: boolean;
+    notes: string;
+  };
+  const quotas: QuotaBp[] = [
+    { plan: "STARTER",    apiCallsPerMonth:   100_000, storageBytes:   10n * 1024n * 1024n * 1024n,   users:  3, webhooksPerMonth:    10_000, overageRateCents:  50, softCap: true,  hardCap: false, notes: "Generous soft cap; we warn but don't block — most starters are evaluating." },
+    { plan: "GROWTH",     apiCallsPerMonth:   500_000, storageBytes:  100n * 1024n * 1024n * 1024n,   users: 10, webhooksPerMonth:    50_000, overageRateCents:  30, softCap: true,  hardCap: false, notes: "Soft cap with overage billing — most overages are seasonal." },
+    { plan: "PRO",        apiCallsPerMonth: 2_500_000, storageBytes:  500n * 1024n * 1024n * 1024n,   users: 50, webhooksPerMonth:   250_000, overageRateCents:  20, softCap: true,  hardCap: true,  notes: "Soft cap at 100%, hard cap at 150%." },
+    { plan: "ENTERPRISE", apiCallsPerMonth: 0,         storageBytes: 0n,                              users:  0, webhooksPerMonth:   0,        overageRateCents:   0, softCap: false, hardCap: false, notes: "Negotiated per-contract; treat 0 as unlimited and use TenantRateLimitOverride for specifics." },
+  ];
+  for (const q of quotas) {
+    await db.planQuota.upsert({
+      where: { plan: q.plan },
+      create: q,
+      update: q,
+    });
+  }
+
+  // 4. Per-tenant overrides — mix of active, expiring, and permanent.
+  if (tenants.length > 0) {
+    type OverrideBp = {
+      tenantSlug: string; ruleEndpoint?: string; endpoint?: string;
+      rps?: number; burst?: number; dailyCap?: number;
+      action?: "THROTTLE" | "CHALLENGE" | "BLOCK" | "LOG_ONLY";
+      reason: string; expiresInDays?: number; grantedBy: string; active: boolean;
+    };
+    const overrides: OverrideBp[] = [
+      { tenantSlug: tenants[0]!.slug, ruleEndpoint: "/seed-v1/api",            rps: 200, burst: 400,
+        reason: `${SEED_TAG} Anchor customer running batch import — temporary 4x bump`,
+        expiresInDays: 14, grantedBy: "ops@flowtora.com", active: true },
+      { tenantSlug: tenants[0]!.slug, ruleEndpoint: "/seed-v1/webhooks",       rps: 100, burst: 200,
+        reason: `${SEED_TAG} Anchor customer webhook spike — promoted from trial`,
+        expiresInDays: 90, grantedBy: "ops@flowtora.com", active: true },
+      { tenantSlug: tenants[Math.min(1, tenants.length - 1)]!.slug, ruleEndpoint: "/seed-v1/files/upload",
+        rps: 20, burst: 40,
+        reason: `${SEED_TAG} Migration window — upload limit increased while importing legacy assets`,
+        expiresInDays: 7, grantedBy: "ops@flowtora.com", active: true },
+      { tenantSlug: tenants[Math.min(2, tenants.length - 1)]!.slug, ruleEndpoint: "/seed-v1/reports",
+        rps: 5, burst: 10,
+        reason: `${SEED_TAG} Approved exception for nightly BI export window`,
+        grantedBy: "engineering@flowtora.com", active: true },
+      { tenantSlug: tenants[Math.min(3, tenants.length - 1)]!.slug, endpoint: "/v1/custom/legacy",
+        rps: 1, burst: 2, action: "LOG_ONLY",
+        reason: `${SEED_TAG} Custom endpoint exception — legacy ETL contract`,
+        grantedBy: "sre@flowtora.com", active: true },
+      { tenantSlug: tenants[Math.min(4, tenants.length - 1)]!.slug, ruleEndpoint: "/seed-v1/auth/login",
+        rps: 5, burst: 10, action: "CHALLENGE",
+        reason: `${SEED_TAG} Expired bump — kept for audit reference`,
+        expiresInDays: -3, grantedBy: "security@flowtora.com", active: false },
+    ];
+    const tenantBySlug = new Map(tenants.map((t) => [t.slug, t.id]));
+    for (const o of overrides) {
+      const tenantId = tenantBySlug.get(o.tenantSlug);
+      if (!tenantId) continue;
+      const ruleId = o.ruleEndpoint ? ruleByEndpoint.get(o.ruleEndpoint) ?? null : null;
+      const expiresAt = o.expiresInDays != null
+        ? new Date(Date.now() + o.expiresInDays * DAY)
+        : null;
+      await db.tenantRateLimitOverride.create({
+        data: {
+          tenantId, ruleId, endpoint: o.endpoint ?? null,
+          rps: o.rps ?? null, burst: o.burst ?? null, dailyCap: o.dailyCap ?? null,
+          action: o.action ?? null,
+          reason: o.reason, expiresAt, grantedByEmail: o.grantedBy,
+          active: o.active,
+        },
+      });
+    }
+  }
+
+  // 5. Top consumers — synthesized across tenants.
+  type ConsumerBp = {
+    tenantSlug?: string; tenantName?: string; apiKeyKey?: string;
+    endpoint: string; requests24h: number; throttled24h: number;
+    pctOfQuota: number; notified: boolean;
+  };
+  const sampleSlugs = tenants.slice(0, Math.min(8, tenants.length));
+  const consumers: ConsumerBp[] = [];
+  const endpoints = rules.filter((r) => r.endpoint.startsWith("/seed-")).map((r) => r.endpoint);
+  for (let i = 0; i < sampleSlugs.length; i++) {
+    const t = sampleSlugs[i]!;
+    // Each tenant gets 2-3 endpoint roll-ups.
+    const sampled = sample(endpoints, 3);
+    for (const ep of sampled) {
+      const req = randInt(50_000, 1_200_000);
+      const thr = Math.max(0, Math.floor(req * (Math.random() * 0.04)));
+      const pct = Math.min(180, Math.floor((req / 1_000_000) * 100));
+      consumers.push({
+        tenantSlug: t.slug, tenantName: t.name,
+        apiKeyKey: `key_${createHash("md5").update(`${t.slug}-${ep}`).digest("hex").slice(0, 12)}`,
+        endpoint: ep, requests24h: req, throttled24h: thr,
+        pctOfQuota: pct, notified: pct > 80 && Math.random() > 0.3,
+      });
+    }
+  }
+  // Plus a few "unknown tenant" consumers (e.g. anonymous public traffic).
+  consumers.push({
+    tenantName: "anonymous", apiKeyKey: null as never,
+    endpoint: "/seed-v1/public/landing", requests24h: 1_412_804, throttled24h: 0,
+    pctOfQuota: 0, notified: false,
+  });
+  consumers.push({
+    tenantName: "abuse-probe", apiKeyKey: null as never,
+    endpoint: "/seed-v1/auth/login", requests24h: 18_402, throttled24h: 4_812,
+    pctOfQuota: 0, notified: false,
+  });
+  const tenantBySlug2 = new Map(tenants.map((t) => [t.slug, t.id]));
+  for (const c of consumers) {
+    const tenantId = c.tenantSlug ? tenantBySlug2.get(c.tenantSlug) ?? null : null;
+    await db.rateLimitConsumer.create({
+      data: {
+        tenantId, tenantName: c.tenantName ?? null,
+        apiKeyKey: c.apiKeyKey ?? null,
+        endpoint: c.endpoint,
+        requests24h: c.requests24h, throttled24h: c.throttled24h,
+        pctOfQuota: c.pctOfQuota, notified: c.notified,
+        refreshedAt: minutesAgo(randInt(0, 55)),
+      },
+    });
+  }
+
+  // 6. Throttled samples — 30 days × ~5 endpoints.
+  const throttledEndpoints = endpoints.filter((e) => !e.includes("/legacy") && !e.includes("/admin"));
+  let throttledRows = 0;
+  for (let day = 0; day < 30; day++) {
+    const d = daysAgo(day);
+    d.setUTCHours(0, 0, 0, 0);
+    for (const ep of throttledEndpoints) {
+      // Recent days have more activity; baseline scales by endpoint.
+      const base = ep.includes("/api") ? 12_000
+                 : ep.includes("/upload") ? 5_000
+                 : ep.includes("/download") ? 2_500
+                 : ep.includes("/webhooks") ? 1_500
+                 : ep.includes("/auth/login") ? 800
+                 : ep.includes("/auth/password-reset") ? 30
+                 : ep.includes("/reports") ? 200
+                 : ep.includes("/search") ? 900
+                 : 100;
+      const noise = 0.6 + Math.random() * 0.8;
+      const recencyBoost = 1 + (30 - day) / 60;
+      const count = Math.floor(base * noise * recencyBoost);
+      await db.throttledSample.upsert({
+        where: { day_endpoint: { day: d, endpoint: ep } },
+        create: { day: d, endpoint: ep, count },
+        update: { count },
+      });
+      throttledRows++;
+    }
+  }
+
+  // 7. Abuse alerts — mix of severities and statuses.
+  type AlertBp = {
+    tenantSlug?: string; tenantName?: string; apiKeyKey?: string; endpoint?: string;
+    severity: "LOW" | "MEDIUM" | "HIGH" | "CRITICAL";
+    status: "OPEN" | "ACKNOWLEDGED" | "ACTION_TAKEN" | "DISMISSED";
+    pattern: string; description: string; suggestedAction: string;
+    detectedHoursAgo: number;
+  };
+  const alerts: AlertBp[] = [
+    { tenantSlug: tenants[0]?.slug, tenantName: tenants[0]?.name,
+      apiKeyKey: "key_8f2b1c4e9a3d", endpoint: "/seed-v1/api",
+      severity: "HIGH", status: "OPEN",
+      pattern: `${SEED_TAG} 12x request spike vs 7-day baseline`,
+      description: "Single API key drove 12x the rolling baseline in a 30-minute window starting 02:14 UTC. Pattern suggests a runaway script — no human-paced cadence in the request timing.",
+      suggestedAction: "Throttle aggressively + notify tenant owner",
+      detectedHoursAgo: 2 },
+    { tenantName: "abuse-probe", apiKeyKey: "key_unauthenticated",
+      endpoint: "/seed-v1/auth/login",
+      severity: "CRITICAL", status: "ACTION_TAKEN",
+      pattern: `${SEED_TAG} Credential stuffing pattern across 1,842 IPs`,
+      description: "Distributed login attempts hitting /v1/auth/login from 1,842 unique IPs across 14 ASNs. Username list appears to match a public breach corpus.",
+      suggestedAction: "Block at edge + escalate to security on-call",
+      detectedHoursAgo: 8 },
+    { tenantSlug: tenants[1]?.slug, tenantName: tenants[1]?.name,
+      apiKeyKey: "key_a31bf04e", endpoint: "/seed-v1/files/upload",
+      severity: "MEDIUM", status: "ACKNOWLEDGED",
+      pattern: `${SEED_TAG} Sustained quota overage (130% for 6h)`,
+      description: "Tenant is consistently above their soft cap. Account exec is engaged — flagged for plan upgrade conversation.",
+      suggestedAction: "Notify account exec; offer Pro plan with higher cap",
+      detectedHoursAgo: 14 },
+    { tenantSlug: tenants[2]?.slug, tenantName: tenants[2]?.name,
+      apiKeyKey: "key_c4d2a91b", endpoint: "/seed-v1/reports",
+      severity: "LOW", status: "DISMISSED",
+      pattern: `${SEED_TAG} Single user driving 80% of report traffic`,
+      description: "Customer's BI lead is iterating on a dashboard. Expected behavior.",
+      suggestedAction: "No action — informational",
+      detectedHoursAgo: 32 },
+    { tenantSlug: tenants[3]?.slug, tenantName: tenants[3]?.name,
+      apiKeyKey: "key_91f4ac82", endpoint: "/seed-v1/webhooks",
+      severity: "HIGH", status: "OPEN",
+      pattern: `${SEED_TAG} Webhook fan-out spike (8x)`,
+      description: "Webhook deliveries jumped 8x in 15 minutes — likely a runaway loop from an integration partner.",
+      suggestedAction: "Pause delivery + reach out to integration owner",
+      detectedHoursAgo: 1 },
+    { tenantSlug: tenants[4]?.slug, tenantName: tenants[4]?.name,
+      apiKeyKey: "key_45ef82c1", endpoint: "/seed-v1/files/download",
+      severity: "MEDIUM", status: "OPEN",
+      pattern: `${SEED_TAG} Unusual geographic spread (38 countries in 1h)`,
+      description: "Downloads of the same signed URL from 38 countries within 1 hour. Either a link leak or legit CDN-bypass.",
+      suggestedAction: "Rotate signing key + check referer headers",
+      detectedHoursAgo: 4 },
+    { tenantSlug: tenants[5]?.slug, tenantName: tenants[5]?.name,
+      apiKeyKey: "key_72b9e413", endpoint: "/seed-v1/api",
+      severity: "LOW", status: "ACKNOWLEDGED",
+      pattern: `${SEED_TAG} Latency-driven retry storm`,
+      description: "Client appears to be retrying aggressively on 5xx responses. Not abusive — but generating throttle noise.",
+      suggestedAction: "Notify tenant to enable jittered backoff",
+      detectedHoursAgo: 22 },
+    { tenantName: "anonymous", apiKeyKey: null as never,
+      endpoint: "/seed-v1/public/landing",
+      severity: "LOW", status: "DISMISSED",
+      pattern: `${SEED_TAG} Bot scraping on marketing pages`,
+      description: "AI training crawler hitting /lp/* aggressively. Already blocked by Cloudflare bot fight mode — alert was a duplicate.",
+      suggestedAction: "No action — already mitigated upstream",
+      detectedHoursAgo: 48 },
+  ];
+  for (const a of alerts) {
+    const tenantId = a.tenantSlug
+      ? (tenants.find((t) => t.slug === a.tenantSlug)?.id ?? null)
+      : null;
+    const detected = new Date(Date.now() - a.detectedHoursAgo * 3600_000);
+    const acknowledged = a.status === "OPEN" ? null : new Date(detected.getTime() + 30 * 60_000);
+    const resolved = (a.status === "ACTION_TAKEN" || a.status === "DISMISSED")
+      ? new Date(detected.getTime() + 90 * 60_000)
+      : null;
+    await db.abuseAlert.create({
+      data: {
+        tenantId, tenantName: a.tenantName ?? null,
+        apiKeyKey: a.apiKeyKey ?? null, endpoint: a.endpoint ?? null,
+        severity: a.severity, status: a.status,
+        pattern: a.pattern, description: a.description,
+        suggestedAction: a.suggestedAction,
+        detectedAt: detected,
+        acknowledgedAt: acknowledged,
+        resolvedAt: resolved,
+      },
+    });
+  }
+
+  console.log(
+    `  ✓ ${rules.length} rules, ${quotas.length} plan quotas, ${consumers.length} consumers, ${throttledRows} throttled samples, ${alerts.length} abuse alerts`,
   );
 }
 

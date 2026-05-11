@@ -433,6 +433,10 @@ model Tenant {
   // Page 59 — per-tenant storage + egress usage.
   storageUsage           TenantStorageUsage?
   egressUsage            EgressTenantUsage?
+  // Page 61 — per-tenant rate-limit overrides + consumer roll-ups + abuse alerts.
+  rateLimitOverrides     TenantRateLimitOverride[]
+  rateLimitConsumers     RateLimitConsumer[]
+  abuseAlerts            AbuseAlert[]
 }
 
 // ────────────────────────────────────────────────────────────
@@ -14700,6 +14704,238 @@ model DbHealthSettings {
   /** Vacuum cadence — days between auto-runs. */
   autoVacuumCadenceDays Int @default(1)
   notes String?
+
+  updatedById String?
+  updatedAt   DateTime @updatedAt
+  createdAt   DateTime @default(now())
+}
+
+// ────────────────────────────────────────────────────────────
+// Page 61 — Rate Limits & Quotas.
+// ────────────────────────────────────────────────────────────
+
+enum RateLimitAlgorithm {
+  TOKEN_BUCKET
+  SLIDING_WINDOW
+  FIXED_WINDOW
+  LEAKY_BUCKET
+}
+
+enum RateLimitScope {
+  PER_KEY
+  PER_IP
+  PER_TENANT
+  PER_USER
+  GLOBAL
+}
+
+enum RateLimitAction {
+  THROTTLE
+  CHALLENGE
+  BLOCK
+  LOG_ONLY
+}
+
+enum QuotaCap {
+  SOFT
+  HARD
+}
+
+enum AbuseAlertSeverity {
+  LOW
+  MEDIUM
+  HIGH
+  CRITICAL
+}
+
+enum AbuseAlertStatus {
+  OPEN
+  ACKNOWLEDGED
+  ACTION_TAKEN
+  DISMISSED
+}
+
+/** Per-endpoint rate-limit rule. */
+model RateLimitRule {
+  id String @id @default(cuid())
+
+  /** Endpoint pattern (e.g. "/v1/jobs", "/v1/files/*"). */
+  endpoint    String @unique
+  /** Friendly display name. */
+  name        String
+  description String?
+  /** Requests per second. */
+  rps         Int    @default(10)
+  /** Burst allowance. */
+  burst       Int    @default(20)
+  /** Daily cap (0 = unlimited). */
+  dailyCap    Int    @default(0)
+  scope       RateLimitScope     @default(PER_KEY)
+  algorithm   RateLimitAlgorithm @default(TOKEN_BUCKET)
+  action      RateLimitAction    @default(THROTTLE)
+
+  /** Whether rule is currently enforced. */
+  active      Boolean @default(true)
+
+  /** Rolling 24h hit counters. */
+  hits24h         Int @default(0)
+  throttled24h    Int @default(0)
+
+  /** Optional notes. */
+  notes      String?
+
+  createdAt DateTime @default(now())
+  updatedAt DateTime @updatedAt
+
+  overrides TenantRateLimitOverride[]
+
+  @@index([active, endpoint])
+}
+
+/** Plan-based quotas (per Plan enum). */
+model PlanQuota {
+  id String @id @default(cuid())
+
+  plan Plan @unique
+
+  apiCallsPerMonth Int   @default(0)
+  /** Storage in bytes (0 = unlimited). */
+  storageBytes     BigInt @default(0)
+  /** Maximum staff users. */
+  users            Int   @default(0)
+  /** Webhook deliveries per month. */
+  webhooksPerMonth Int   @default(0)
+  /** Overage rate in cents per unit (e.g. cents per 1k API calls). */
+  overageRateCents Int   @default(0)
+  /** Whether soft/hard caps apply. */
+  softCap          Boolean @default(true)
+  hardCap          Boolean @default(false)
+
+  notes            String?
+
+  createdAt DateTime @default(now())
+  updatedAt DateTime @updatedAt
+}
+
+/** Per-tenant rate-limit override. */
+model TenantRateLimitOverride {
+  id String @id @default(cuid())
+
+  tenantId   String
+  tenant     Tenant @relation(fields: [tenantId], references: [id], onDelete: Cascade)
+
+  ruleId     String?
+  rule       RateLimitRule? @relation(fields: [ruleId], references: [id], onDelete: SetNull)
+  /** Override-specific endpoint (when ruleId is null). */
+  endpoint   String?
+
+  /** Override values; null = inherit from rule. */
+  rps        Int?
+  burst      Int?
+  dailyCap   Int?
+  action     RateLimitAction?
+
+  reason     String
+  expiresAt  DateTime?
+  grantedByEmail String?
+
+  active     Boolean @default(true)
+
+  createdAt DateTime @default(now())
+  updatedAt DateTime @updatedAt
+
+  @@index([tenantId, active])
+  @@index([expiresAt])
+}
+
+/** Top consumer roll-up (24h). */
+model RateLimitConsumer {
+  id String @id @default(cuid())
+
+  tenantId   String?
+  tenant     Tenant? @relation(fields: [tenantId], references: [id], onDelete: SetNull)
+  /** Denormalized for display. */
+  tenantName String?
+  /** API key id (denormalized). */
+  apiKeyKey  String?
+  endpoint   String
+
+  requests24h    Int @default(0)
+  throttled24h   Int @default(0)
+  /** % of plan quota consumed (0..200 — over 100 means overage). */
+  pctOfQuota     Float @default(0)
+  /** Whether this consumer has been notified about throttling. */
+  notified       Boolean @default(false)
+
+  refreshedAt DateTime @default(now())
+
+  @@index([requests24h(sort: Desc)])
+  @@index([throttled24h(sort: Desc)])
+}
+
+/** Daily throttled-request samples — per (day × endpoint). */
+model ThrottledSample {
+  id String @id @default(cuid())
+
+  day        DateTime
+  endpoint   String
+  count      Int @default(0)
+
+  createdAt DateTime @default(now())
+
+  @@unique([day, endpoint])
+  @@index([day])
+}
+
+/** Abuse alert — anomaly detection on a tenant/key/endpoint. */
+model AbuseAlert {
+  id String @id @default(cuid())
+
+  tenantId   String?
+  tenant     Tenant? @relation(fields: [tenantId], references: [id], onDelete: SetNull)
+  /** Denormalized for display. */
+  tenantName String?
+  apiKeyKey  String?
+  endpoint   String?
+
+  severity   AbuseAlertSeverity @default(MEDIUM)
+  status     AbuseAlertStatus   @default(OPEN)
+  /** Short pattern description (e.g. "10x spike", "credential stuffing pattern"). */
+  pattern    String
+  /** Free-form description / context. */
+  description String?
+  /** Suggested action (e.g. "Throttle further", "Notify tenant"). */
+  suggestedAction String?
+
+  detectedAt    DateTime @default(now())
+  acknowledgedAt DateTime?
+  resolvedAt    DateTime?
+  resolvedById  String?
+
+  metadata Json?
+
+  createdAt DateTime @default(now())
+  updatedAt DateTime @updatedAt
+
+  @@index([status, severity])
+  @@index([detectedAt])
+}
+
+/** Singleton — rate-limit program settings. */
+model RateLimitSettings {
+  id String @id @default("default")
+
+  /** Default RPS for new rules. */
+  defaultRps         Int @default(10)
+  /** Default burst. */
+  defaultBurst       Int @default(20)
+  /** Abuse anomaly threshold (spike multiplier triggers an alert). */
+  spikeMultiplier    Int @default(10)
+  /** Whether tenants get an email when throttled at >80% quota. */
+  notifyOnHighUsage  Boolean @default(true)
+  /** Hours between consumer roll-up refresh. */
+  consumerRefreshH   Int @default(1)
+  notes              String?
 
   updatedById String?
   updatedAt   DateTime @updatedAt

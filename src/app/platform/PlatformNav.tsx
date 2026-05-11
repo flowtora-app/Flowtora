@@ -102,6 +102,7 @@ const NAV_ITEMS: NavItem[] = [
   { href: "/platform/system/email",                 label: "Email Deliverability", icon: "Megaphone" },
   { href: "/platform/system/storage",               label: "Storage & CDN",        icon: "Package" },
   { href: "/platform/system/database",              label: "Database Health",      icon: "Pipeline" },
+  { href: "/platform/system/rate-limits",           label: "Rate Limits & Quotas", icon: "Scale" },
 ];
 
 const COLLAPSE_KEY = "flowtora.platform-nav.collapsed";
