@@ -121,6 +121,8 @@ export const PERMISSION_DESCRIPTIONS: Record<PlatformPermission, string> = {
   "system.status.manage": "Edit service catalog, dependencies, override status, ack alerts, log deploys.",
   "queues.read":   "View queues, workers, failed jobs, dead-letter queue, cron schedules, slowest jobs.",
   "queues.manage": "Pause / resume / drain queues, retry / skip / DLQ jobs, toggle cron schedules.",
+  "email.deliverability.read":   "View email volume, bounces, complaints, suppression, domain auth, providers.",
+  "email.deliverability.manage": "Suppress/unsuppress recipients, re-verify domains, route providers, suspend templates.",
   // Analytics
   "analytics.read":        "Read analytics dashboards.",
   "analytics.export":      "Export analytics datasets.",

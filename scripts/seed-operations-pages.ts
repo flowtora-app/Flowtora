@@ -80,6 +80,7 @@ async function main() {
   await seedNetwork(platformUsers, tenants);          // Page 55
   await seedSystemStatus();                            // Page 56
   await seedQueues(tenants);                           // Page 57
+  await seedEmailDeliverability(tenants);              // Page 58
 
   console.log("\n✓ Seed complete.\n");
   await db.$disconnect();
@@ -323,6 +324,14 @@ async function wipeOldSeed() {
   await db.cronSchedule.deleteMany({ where: { slug: { startsWith: "seed-" } } });
   await db.queueWorker.deleteMany({ where: { workerId: { startsWith: "seed-" } } });
   await db.jobQueue.deleteMany({ where: { slug: { startsWith: "seed-" } } });
+  // Page 58 — Email deliverability wipe.
+  await db.emailVolumeSample.deleteMany({ where: { provider: { startsWith: "seed-" } } });
+  await db.emailBounce.deleteMany({ where: { provider: { startsWith: "seed-" } } });
+  await db.emailComplaint.deleteMany({ where: { provider: { startsWith: "seed-" } } });
+  await db.emailSuppression.deleteMany({ where: { email: { contains: "seed.flowtora.example" } } });
+  await db.emailSendingDomain.deleteMany({ where: { domain: { contains: "seed-" } } });
+  await db.emailTemplateStats.deleteMany({ where: { templateKey: { startsWith: "seed-" } } });
+  await db.emailProvider.deleteMany({ where: { key: { startsWith: "seed-" } } });
   // Customers tagged seed (after orders are gone).
   await db.customer.deleteMany({ where: { tags: { has: "seed" } } });
   // Products tagged seed (use description marker since Product has no tags array).
@@ -10877,6 +10886,440 @@ async function seedQueues(tenants: { id: string; name: string; slug: string }[])
 
   console.log(
     `  ✓ ${queueBps.length} queues, ${workerBps.length} workers, ${cronBps.length} cron schedules, ${jobsToCreate.length} jobs (failed + DLQ + completed)`,
+  );
+}
+
+/* ── Page 58 — Email Deliverability seed ───────────────── */
+
+async function seedEmailDeliverability(tenants: { id: string; name: string; slug: string }[]) {
+  console.log("── Seeding Email Deliverability (Page 58)…");
+
+  // 1. Settings singleton.
+  await db.emailDeliverabilitySettings.upsert({
+    where: { id: "default" },
+    create: {
+      id: "default",
+      bounceTargetPct: 2.0,
+      complaintTargetPct: 0.1,
+      autoSuppressOnComplaint: true,
+      autoSuppressOnHardBounce: true,
+      softBounceBackoffH: 72,
+      failoverOrder: ["seed-resend", "seed-sendgrid", "seed-ses-bulk"],
+      notes: "Resend primary for transactional; SES bulk for marketing >10k.",
+    },
+    update: {},
+  });
+
+  // 2. Providers.
+  type PBp = {
+    key: string;
+    name: string;
+    role: "PRIMARY" | "BACKUP" | "BULK" | "TRANSACTIONAL" | "DISABLED";
+    health: "HEALTHY" | "DEGRADED" | "WARNING" | "OFFLINE";
+    costPer1000Cents: number;
+    autoFailover: boolean;
+    dailyCap: number;
+    sent24h: number;
+    bounceRate24h: number;
+    complaintRate24h: number;
+    errorRate24h: number;
+    domains: string[];
+    notes?: string;
+  };
+  const providers: PBp[] = [
+    { key: "seed-resend",   name: "Resend",   role: "PRIMARY", health: "HEALTHY",
+      costPer1000Cents: 80, autoFailover: true, dailyCap: 100_000,
+      sent24h: 14_812, bounceRate24h: 0.42, complaintRate24h: 0.04, errorRate24h: 0.05,
+      domains: ["flowtora.com", "go.flowtora.com"],
+      notes: "Primary route for transactional + low-volume marketing." },
+    { key: "seed-sendgrid", name: "SendGrid", role: "BACKUP", health: "HEALTHY",
+      costPer1000Cents: 95, autoFailover: true, dailyCap: 200_000,
+      sent24h: 1_204, bounceRate24h: 0.6, complaintRate24h: 0.08, errorRate24h: 0.1,
+      domains: ["flowtora.com"],
+      notes: "Backup — takes over when Resend bounce rate spikes." },
+    { key: "seed-ses-bulk", name: "AWS SES (bulk)", role: "BULK", health: "DEGRADED",
+      costPer1000Cents: 10, autoFailover: false, dailyCap: 1_000_000,
+      sent24h: 38_412, bounceRate24h: 1.4, complaintRate24h: 0.12, errorRate24h: 0.3,
+      domains: ["mail.flowtora.com"],
+      notes: "Bulk send (newsletters, digests). Currently degraded — investigating." },
+    { key: "seed-postmark", name: "Postmark (transactional fallback)", role: "TRANSACTIONAL", health: "HEALTHY",
+      costPer1000Cents: 100, autoFailover: true, dailyCap: 50_000,
+      sent24h: 220, bounceRate24h: 0.2, complaintRate24h: 0.02, errorRate24h: 0.0,
+      domains: ["flowtora.com"],
+      notes: "Secondary transactional path for password resets if Resend down." },
+    { key: "seed-mailgun-disabled", name: "Mailgun (decommissioned)", role: "DISABLED", health: "OFFLINE",
+      costPer1000Cents: 80, autoFailover: false, dailyCap: 0,
+      sent24h: 0, bounceRate24h: 0, complaintRate24h: 0, errorRate24h: 0,
+      domains: [],
+      notes: "Decommissioned 2026-02. Kept for audit." },
+  ];
+  for (const p of providers) {
+    await db.emailProvider.upsert({
+      where: { key: p.key },
+      create: {
+        key: p.key, name: p.name, role: p.role, health: p.health,
+        costPer1000Cents: p.costPer1000Cents, autoFailover: p.autoFailover,
+        dailyCap: p.dailyCap, sent24h: p.sent24h,
+        bounceRate24h: p.bounceRate24h, complaintRate24h: p.complaintRate24h,
+        errorRate24h: p.errorRate24h, domains: p.domains,
+        notes: p.notes ?? null,
+        lastDeliveredAt: p.sent24h > 0 ? new Date(Date.now() - 60_000) : null,
+      },
+      update: {
+        role: p.role, health: p.health, sent24h: p.sent24h,
+        bounceRate24h: p.bounceRate24h, complaintRate24h: p.complaintRate24h,
+        errorRate24h: p.errorRate24h,
+      },
+    });
+  }
+
+  // 3. Sending domains.
+  type DBp = {
+    domain: string;
+    hostname?: string;
+    mxRecord?: string;
+    spfRecord?: string;
+    spfStatus: "PASS" | "FAIL" | "WARN" | "UNCONFIGURED";
+    dkimStatus: "PASS" | "FAIL" | "WARN" | "UNCONFIGURED";
+    dkimSelectors?: string[];
+    dmarcRecord?: string;
+    dmarcStatus: "PASS" | "FAIL" | "WARN" | "UNCONFIGURED";
+    dmarcPolicy?: string;
+    dmarcReportingUri?: string;
+    bimiStatus: "PASS" | "FAIL" | "WARN" | "UNCONFIGURED";
+    bimiVmcUrl?: string;
+    bimiRecord?: string;
+    verifiedDaysAgo: number;
+    notes?: string;
+  };
+  const domains: DBp[] = [
+    { domain: "seed-flowtora.com",
+      hostname: "mail.flowtora.com", mxRecord: "10 mx.aspmx.l.google.com",
+      spfRecord: "v=spf1 include:_spf.resend.com include:amazonses.com -all", spfStatus: "PASS",
+      dkimSelectors: ["resend._domainkey", "sgkey._domainkey"], dkimStatus: "PASS",
+      dmarcRecord: "v=DMARC1; p=quarantine; rua=mailto:dmarc@flowtora.com; pct=100",
+      dmarcStatus: "PASS", dmarcPolicy: "quarantine",
+      dmarcReportingUri: "mailto:dmarc@flowtora.com",
+      bimiStatus: "PASS", bimiVmcUrl: "https://docs.flowtora.com/bimi/flowtora.pem",
+      bimiRecord: "v=BIMI1; l=https://flowtora.com/bimi-logo.svg; a=https://docs.flowtora.com/bimi/flowtora.pem",
+      verifiedDaysAgo: 1, notes: "Primary marketing + transactional domain." },
+    { domain: "seed-go.flowtora.com",
+      hostname: "go.flowtora.com",
+      spfRecord: "v=spf1 include:_spf.resend.com -all", spfStatus: "PASS",
+      dkimSelectors: ["resend._domainkey"], dkimStatus: "PASS",
+      dmarcRecord: "v=DMARC1; p=reject; rua=mailto:dmarc@flowtora.com",
+      dmarcStatus: "PASS", dmarcPolicy: "reject",
+      dmarcReportingUri: "mailto:dmarc@flowtora.com",
+      bimiStatus: "UNCONFIGURED",
+      verifiedDaysAgo: 1, notes: "Click-tracking subdomain." },
+    { domain: "seed-mail.flowtora.com",
+      hostname: "mail.flowtora.com",
+      spfRecord: "v=spf1 include:amazonses.com -all", spfStatus: "PASS",
+      dkimSelectors: ["amazonses._domainkey"], dkimStatus: "WARN",
+      dmarcRecord: "v=DMARC1; p=quarantine; rua=mailto:dmarc@flowtora.com",
+      dmarcStatus: "PASS", dmarcPolicy: "quarantine",
+      bimiStatus: "UNCONFIGURED",
+      verifiedDaysAgo: 4, notes: "Bulk-send subdomain — DKIM key rotation pending." },
+    { domain: "seed-staging.flowtora.app",
+      spfRecord: "v=spf1 include:_spf.resend.com -all", spfStatus: "PASS",
+      dkimSelectors: ["resend._domainkey"], dkimStatus: "PASS",
+      dmarcRecord: "v=DMARC1; p=none; rua=mailto:dmarc@flowtora.com",
+      dmarcStatus: "WARN", dmarcPolicy: "none",
+      bimiStatus: "UNCONFIGURED",
+      verifiedDaysAgo: 18, notes: "Staging — DMARC still at p=none." },
+    { domain: "seed-old-mail.flowtora.com",
+      spfStatus: "UNCONFIGURED", dkimStatus: "UNCONFIGURED",
+      dmarcStatus: "UNCONFIGURED",
+      bimiStatus: "UNCONFIGURED",
+      verifiedDaysAgo: 90, notes: "Decommissioned — kept for audit." },
+  ];
+  const domainIdByDomain = new Map<string, string>();
+  for (const d of domains) {
+    const saved = await db.emailSendingDomain.upsert({
+      where: { domain: d.domain },
+      create: {
+        domain: d.domain,
+        hostname: d.hostname ?? null,
+        mxRecord: d.mxRecord ?? null,
+        spfRecord: d.spfRecord ?? null,
+        spfStatus: d.spfStatus,
+        dkimSelectors: (d.dkimSelectors ?? []) as never,
+        dkimStatus: d.dkimStatus,
+        dmarcRecord: d.dmarcRecord ?? null,
+        dmarcStatus: d.dmarcStatus,
+        dmarcPolicy: d.dmarcPolicy ?? null,
+        dmarcReportingUri: d.dmarcReportingUri ?? null,
+        bimiRecord: d.bimiRecord ?? null,
+        bimiStatus: d.bimiStatus,
+        bimiVmcUrl: d.bimiVmcUrl ?? null,
+        lastVerifiedAt: daysAgo(d.verifiedDaysAgo),
+        lastDmarcReportAt: d.dmarcStatus === "PASS" ? daysAgo(2) : null,
+        notes: d.notes ?? null,
+      },
+      update: {
+        spfStatus: d.spfStatus, dkimStatus: d.dkimStatus,
+        dmarcStatus: d.dmarcStatus, bimiStatus: d.bimiStatus,
+        lastVerifiedAt: daysAgo(d.verifiedDaysAgo),
+      },
+      select: { id: true, domain: true },
+    });
+    domainIdByDomain.set(saved.domain, saved.id);
+  }
+
+  // DMARC reports for primary domain.
+  const primaryDomainId = domainIdByDomain.get("seed-flowtora.com");
+  if (primaryDomainId) {
+    await db.dmarcReport.createMany({
+      data: [
+        { domainId: primaryDomainId, reporter: "google.com",
+          periodStart: daysAgo(2), periodEnd: daysAgo(1),
+          totalMessages: 14_812, passCount: 14_780, failCount: 32,
+          sources: [
+            { ip: "199.255.192.105", count: 12_412, spf: "pass", dkim: "pass", disposition: "none" },
+            { ip: "35.190.247.45", count: 2_400, spf: "pass", dkim: "pass", disposition: "none" },
+          ] as never,
+          receivedAt: daysAgo(1) },
+        { domainId: primaryDomainId, reporter: "yahoo.com",
+          periodStart: daysAgo(2), periodEnd: daysAgo(1),
+          totalMessages: 1_842, passCount: 1_840, failCount: 2,
+          sources: [
+            { ip: "199.255.192.105", count: 1_820, spf: "pass", dkim: "pass", disposition: "none" },
+          ] as never,
+          receivedAt: daysAgo(1) },
+        { domainId: primaryDomainId, reporter: "microsoft.com",
+          periodStart: daysAgo(2), periodEnd: daysAgo(1),
+          totalMessages: 612, passCount: 600, failCount: 12,
+          sources: [
+            { ip: "199.255.192.105", count: 600, spf: "pass", dkim: "pass", disposition: "none" },
+          ] as never,
+          receivedAt: daysAgo(1) },
+      ],
+    });
+  }
+
+  // 4. Template stats.
+  type TBp = {
+    templateKey: string;
+    name: string;
+    category: string;
+    sent24h: number;
+    delivered24h: number;
+    opens24h: number;
+    clicks24h: number;
+    bounces24h: number;
+    complaints24h: number;
+    hasAbVariant?: boolean;
+    suspended?: boolean;
+    suspendedReason?: string;
+  };
+  const templates: TBp[] = [
+    { templateKey: "seed-invoice-send", name: "Invoice — sent", category: "transactional",
+      sent24h: 4_812, delivered24h: 4_801, opens24h: 2_402, clicks24h: 412, bounces24h: 11, complaints24h: 0 },
+    { templateKey: "seed-invoice-paid", name: "Invoice — paid receipt", category: "transactional",
+      sent24h: 3_412, delivered24h: 3_410, opens24h: 1_220, clicks24h: 184, bounces24h: 2, complaints24h: 0 },
+    { templateKey: "seed-dunning-day3", name: "Dunning — day 3", category: "transactional",
+      sent24h: 412, delivered24h: 410, opens24h: 220, clicks24h: 38, bounces24h: 2, complaints24h: 1, hasAbVariant: true },
+    { templateKey: "seed-welcome", name: "Welcome — onboarding", category: "transactional",
+      sent24h: 184, delivered24h: 184, opens24h: 142, clicks24h: 88, bounces24h: 0, complaints24h: 0, hasAbVariant: true },
+    { templateKey: "seed-password-reset", name: "Password reset", category: "transactional",
+      sent24h: 412, delivered24h: 412, opens24h: 380, clicks24h: 360, bounces24h: 0, complaints24h: 0 },
+    { templateKey: "seed-newsletter-weekly", name: "Weekly digest", category: "marketing",
+      sent24h: 38_412, delivered24h: 38_212, opens24h: 9_812, clicks24h: 1_812, bounces24h: 200, complaints24h: 24, hasAbVariant: true },
+    { templateKey: "seed-feature-launch", name: "Feature launch — flow-3", category: "marketing",
+      sent24h: 8_412, delivered24h: 8_400, opens24h: 2_812, clicks24h: 412, bounces24h: 12, complaints24h: 2 },
+    { templateKey: "seed-trial-expiry", name: "Trial expiry reminder", category: "marketing",
+      sent24h: 84, delivered24h: 84, opens24h: 60, clicks24h: 38, bounces24h: 0, complaints24h: 0 },
+    { templateKey: "seed-proof-shared", name: "Proof shared — notification", category: "transactional",
+      sent24h: 1_812, delivered24h: 1_810, opens24h: 1_412, clicks24h: 612, bounces24h: 2, complaints24h: 0 },
+    { templateKey: "seed-bad-content", name: "Old promo — high bounce", category: "marketing",
+      sent24h: 0, delivered24h: 0, opens24h: 0, clicks24h: 0, bounces24h: 0, complaints24h: 0,
+      suspended: true, suspendedReason: "Bounce rate >5% — content needs review." },
+  ];
+  for (const t of templates) {
+    const openRate   = t.sent24h === 0 ? 0 : (t.opens24h / t.sent24h) * 100;
+    const clickRate  = t.sent24h === 0 ? 0 : (t.clicks24h / t.sent24h) * 100;
+    const bounceRate = t.sent24h === 0 ? 0 : (t.bounces24h / t.sent24h) * 100;
+    await db.emailTemplateStats.upsert({
+      where: { templateKey: t.templateKey },
+      create: {
+        templateKey: t.templateKey, name: t.name, category: t.category,
+        sent24h: t.sent24h, delivered24h: t.delivered24h,
+        opens24h: t.opens24h, clicks24h: t.clicks24h,
+        bounces24h: t.bounces24h, complaints24h: t.complaints24h,
+        openRate, clickRate, bounceRate,
+        hasAbVariant: t.hasAbVariant ?? false,
+        suspended: t.suspended ?? false,
+        suspendedReason: t.suspendedReason ?? null,
+      },
+      update: {
+        sent24h: t.sent24h, delivered24h: t.delivered24h,
+        opens24h: t.opens24h, clicks24h: t.clicks24h,
+        bounces24h: t.bounces24h, complaints24h: t.complaints24h,
+        openRate, clickRate, bounceRate,
+        suspended: t.suspended ?? false,
+        suspendedReason: t.suspendedReason ?? null,
+      },
+    });
+  }
+
+  // 5. Daily volume samples for last 30 days.
+  const samples: Array<{
+    day: Date;
+    kind: "SENT" | "DELIVERED" | "OPEN" | "CLICK" | "BOUNCE" | "COMPLAINT" | "UNSUBSCRIBE";
+    count: number;
+    provider: string;
+    tenantId?: string | null;
+    templateKey?: string | null;
+  }> = [];
+  for (let i = 29; i >= 0; i--) {
+    const day = new Date(Date.now() - i * 86_400_000);
+    day.setUTCHours(0, 0, 0, 0);
+    const sentBase = 50_000 + Math.floor(Math.random() * 12_000);
+    const sent = sentBase;
+    const delivered = sent - Math.floor(sent * 0.012);
+    const opens = Math.floor(delivered * (0.22 + Math.random() * 0.06));
+    const clicks = Math.floor(opens * (0.12 + Math.random() * 0.05));
+    const bounces = sent - delivered;
+    const complaints = Math.floor(sent * (0.0003 + Math.random() * 0.0002));
+    const unsubs = Math.floor(sent * (0.001 + Math.random() * 0.0005));
+    samples.push({ day, kind: "SENT",        count: sent,       provider: "seed-resend" });
+    samples.push({ day, kind: "DELIVERED",   count: delivered,  provider: "seed-resend" });
+    samples.push({ day, kind: "OPEN",        count: opens,      provider: "seed-resend" });
+    samples.push({ day, kind: "CLICK",       count: clicks,     provider: "seed-resend" });
+    samples.push({ day, kind: "BOUNCE",      count: bounces,    provider: "seed-resend" });
+    samples.push({ day, kind: "COMPLAINT",   count: complaints, provider: "seed-resend" });
+    samples.push({ day, kind: "UNSUBSCRIBE", count: unsubs,     provider: "seed-resend" });
+  }
+  for (let i = 0; i < samples.length; i += 200) {
+    await db.emailVolumeSample.createMany({ data: samples.slice(i, i + 200), skipDuplicates: true });
+  }
+
+  // 6. Bounces.
+  type BBp = {
+    recipient: string;
+    type: "HARD" | "SOFT" | "BLOCK" | "CONTENT" | "UNKNOWN";
+    reason: string;
+    smtpCode: string;
+    provider: string;
+    templateKey: string;
+    tenantIdx?: number;
+    sentHoursAgo: number;
+    bouncedHoursAgo: number;
+    status: "OPEN" | "SUPPRESSED" | "INVESTIGATING" | "RESOLVED";
+  };
+  const bounces: BBp[] = [
+    { recipient: "anja.berger-seed@example.de", type: "HARD",
+      reason: "550 No such user", smtpCode: "550-5.1.1", provider: "seed-resend",
+      templateKey: "seed-newsletter-weekly", tenantIdx: 0,
+      sentHoursAgo: 1, bouncedHoursAgo: 1, status: "SUPPRESSED" },
+    { recipient: "marcus.chen-seed@example.com", type: "HARD",
+      reason: "Mailbox full", smtpCode: "552", provider: "seed-resend",
+      templateKey: "seed-invoice-send", tenantIdx: 1,
+      sentHoursAgo: 2, bouncedHoursAgo: 2, status: "SUPPRESSED" },
+    { recipient: "lina.hofmann-seed@example.de", type: "SOFT",
+      reason: "Mailbox temporarily unavailable", smtpCode: "451", provider: "seed-resend",
+      templateKey: "seed-dunning-day3", tenantIdx: 0,
+      sentHoursAgo: 3, bouncedHoursAgo: 2, status: "OPEN" },
+    { recipient: "olivia.perez-seed@example.com", type: "BLOCK",
+      reason: "Receiver blocked sender domain", smtpCode: "554-5.7.1", provider: "seed-ses-bulk",
+      templateKey: "seed-newsletter-weekly", tenantIdx: 1,
+      sentHoursAgo: 4, bouncedHoursAgo: 4, status: "INVESTIGATING" },
+    { recipient: "henrik.larsson-seed@example.se", type: "SOFT",
+      reason: "Greylisted", smtpCode: "450", provider: "seed-resend",
+      templateKey: "seed-welcome", tenantIdx: 2,
+      sentHoursAgo: 5, bouncedHoursAgo: 4, status: "OPEN" },
+    { recipient: "sara.karimi-seed@example.fr", type: "HARD",
+      reason: "Recipient domain returns NXDOMAIN", smtpCode: "550", provider: "seed-resend",
+      templateKey: "seed-invoice-paid", tenantIdx: 0,
+      sentHoursAgo: 6, bouncedHoursAgo: 6, status: "SUPPRESSED" },
+    { recipient: "ravi.patel-seed@example.in", type: "CONTENT",
+      reason: "Message rejected by content filter (spam-like subject)", smtpCode: "554",
+      provider: "seed-ses-bulk", templateKey: "seed-feature-launch", tenantIdx: 2,
+      sentHoursAgo: 7, bouncedHoursAgo: 7, status: "INVESTIGATING" },
+    { recipient: "james.whitfield-seed@example.co.uk", type: "SOFT",
+      reason: "Connection timeout", smtpCode: "421", provider: "seed-resend",
+      templateKey: "seed-password-reset", tenantIdx: 0,
+      sentHoursAgo: 8, bouncedHoursAgo: 7, status: "RESOLVED" },
+    { recipient: "beatriz.almeida-seed@example.br", type: "HARD",
+      reason: "550 5.1.1 The email account does not exist", smtpCode: "550-5.1.1",
+      provider: "seed-resend", templateKey: "seed-trial-expiry", tenantIdx: 1,
+      sentHoursAgo: 12, bouncedHoursAgo: 12, status: "SUPPRESSED" },
+    { recipient: "emile.tremblay-seed@example.ca", type: "BLOCK",
+      reason: "Blocked by SpamAssassin policy", smtpCode: "554",
+      provider: "seed-ses-bulk", templateKey: "seed-newsletter-weekly", tenantIdx: 0,
+      sentHoursAgo: 18, bouncedHoursAgo: 18, status: "OPEN" },
+    { recipient: "mikaela.niemi-seed@example.fi", type: "HARD",
+      reason: "User unknown", smtpCode: "550", provider: "seed-postmark",
+      templateKey: "seed-password-reset", tenantIdx: 2,
+      sentHoursAgo: 30, bouncedHoursAgo: 30, status: "SUPPRESSED" },
+    { recipient: "unknown-bounce-seed@protonmail.example", type: "UNKNOWN",
+      reason: "Generic delivery failure", smtpCode: "550", provider: "seed-resend",
+      templateKey: "seed-newsletter-weekly",
+      sentHoursAgo: 36, bouncedHoursAgo: 36, status: "OPEN" },
+  ];
+  await db.emailBounce.createMany({
+    data: bounces.map((b) => ({
+      recipient: b.recipient, type: b.type, reason: b.reason, smtpCode: b.smtpCode,
+      provider: b.provider, templateKey: b.templateKey,
+      tenantId: b.tenantIdx != null ? tenants[b.tenantIdx]?.id ?? null : null,
+      status: b.status,
+      sentAt: new Date(Date.now() - b.sentHoursAgo * 3_600_000),
+      bouncedAt: new Date(Date.now() - b.bouncedHoursAgo * 3_600_000),
+    })),
+  });
+
+  // 7. Complaints.
+  await db.emailComplaint.createMany({
+    data: [
+      { recipient: "spam-complainer-seed@example.com", provider: "seed-resend",
+        templateKey: "seed-newsletter-weekly", reason: "User marked as spam",
+        sentAt: daysAgo(0.3), reportedAt: daysAgo(0.2), autoSuppressed: true,
+        tenantId: tenants[0]?.id ?? null },
+      { recipient: "unsubscribe-fast-seed@example.com", provider: "seed-ses-bulk",
+        templateKey: "seed-feature-launch", reason: "User reported as junk",
+        sentAt: daysAgo(0.5), reportedAt: daysAgo(0.4), autoSuppressed: true,
+        tenantId: tenants[1]?.id ?? null },
+      { recipient: "annoyed-seed@example.com", provider: "seed-ses-bulk",
+        templateKey: "seed-newsletter-weekly", reason: "Marked as spam (FBL: Yahoo)",
+        sentAt: daysAgo(1), reportedAt: daysAgo(0.9), autoSuppressed: true,
+        tenantId: tenants[2]?.id ?? null },
+      { recipient: "another-complaint-seed@example.com", provider: "seed-ses-bulk",
+        templateKey: "seed-newsletter-weekly", reason: "User reported as spam",
+        sentAt: daysAgo(2), reportedAt: daysAgo(1.9), autoSuppressed: true,
+        tenantId: tenants[0]?.id ?? null },
+    ],
+  });
+
+  // 8. Suppressions (from bounce/complaint + manual).
+  const suppressions = [
+    { email: "anja.berger-seed@example.de", source: "BOUNCE" as const, reason: "Hard bounce — 550", addedBy: "system" },
+    { email: "marcus.chen-seed@example.com", source: "BOUNCE" as const, reason: "Mailbox full repeatedly", addedBy: "system" },
+    { email: "sara.karimi-seed@example.fr", source: "BOUNCE" as const, reason: "NXDOMAIN", addedBy: "system" },
+    { email: "beatriz.almeida-seed@example.br", source: "BOUNCE" as const, reason: "Account does not exist", addedBy: "system" },
+    { email: "mikaela.niemi-seed@example.fi", source: "BOUNCE" as const, reason: "User unknown", addedBy: "system" },
+    { email: "spam-complainer-seed@example.com", source: "COMPLAINT" as const, reason: "Marked as spam", addedBy: "system" },
+    { email: "unsubscribe-fast-seed@example.com", source: "COMPLAINT" as const, reason: "Marked as spam", addedBy: "system" },
+    { email: "annoyed-seed@example.com", source: "COMPLAINT" as const, reason: "Marked as spam (Yahoo FBL)", addedBy: "system" },
+    { email: "another-complaint-seed@example.com", source: "COMPLAINT" as const, reason: "Marked as spam", addedBy: "system" },
+    { email: "test1-seed.flowtora.example", source: "MANUAL" as const, reason: "Test inbox — never deliver", addedBy: "ciso@flowtora.com" },
+    { email: "test2-seed.flowtora.example", source: "MANUAL" as const, reason: "Internal QA address", addedBy: "ciso@flowtora.com" },
+    { email: "gdpr-request-seed@example.com", source: "GDPR_REQUEST" as const, reason: "DSR-2026-0042 — opt-out of marketing", addedBy: "dpo@flowtora.com" },
+    { email: "csv-import-1-seed@example.com", source: "CSV_IMPORT" as const, reason: "Bulk import — known abuse", addedBy: "marketing@flowtora.com" },
+    { email: "csv-import-2-seed@example.com", source: "CSV_IMPORT" as const, reason: "Bulk import — known abuse", addedBy: "marketing@flowtora.com" },
+  ];
+  for (const s of suppressions) {
+    await db.emailSuppression.upsert({
+      where: { email: s.email },
+      create: {
+        email: s.email, source: s.source, reason: s.reason,
+        addedByEmail: s.addedBy,
+      },
+      update: { source: s.source, reason: s.reason },
+    });
+  }
+
+  console.log(
+    `  ✓ ${providers.length} providers, ${domains.length} domains, ${templates.length} template stats, ${samples.length} volume samples, ${bounces.length} bounces, 4 complaints, ${suppressions.length} suppressions`,
   );
 }
 

@@ -13743,3 +13743,330 @@ model CronSchedule {
 
   @@index([enabled, nextRunAt])
 }
+
+// ────────────────────────────────────────────────────────────
+// Page 58 — Email Deliverability.
+// ────────────────────────────────────────────────────────────
+
+enum EmailVolumeKind {
+  SENT
+  DELIVERED
+  OPEN
+  CLICK
+  BOUNCE
+  COMPLAINT
+  UNSUBSCRIBE
+}
+
+enum EmailBounceType {
+  HARD
+  SOFT
+  BLOCK
+  CONTENT
+  UNKNOWN
+}
+
+enum EmailBounceStatus {
+  OPEN
+  SUPPRESSED
+  INVESTIGATING
+  RESOLVED
+}
+
+enum EmailSuppressionSource {
+  BOUNCE
+  COMPLAINT
+  MANUAL
+  CSV_IMPORT
+  GDPR_REQUEST
+}
+
+enum DomainAuthStatus {
+  PASS
+  FAIL
+  WARN
+  UNCONFIGURED
+}
+
+enum EmailProviderRole {
+  PRIMARY
+  BACKUP
+  BULK
+  TRANSACTIONAL
+  DISABLED
+}
+
+enum EmailProviderHealth {
+  HEALTHY
+  DEGRADED
+  WARNING
+  OFFLINE
+}
+
+/** Daily volume sample — one row per (date × kind × tenant?). */
+model EmailVolumeSample {
+  id String @id @default(cuid())
+
+  /** UTC day bucket (00:00). */
+  day        DateTime
+  kind       EmailVolumeKind
+  /** Optional tenant scope. */
+  tenantId   String?
+  /** Optional provider key. */
+  provider   String?
+  /** Optional template slug. */
+  templateKey String?
+
+  count      Int     @default(0)
+
+  createdAt DateTime @default(now())
+
+  @@unique([day, kind, tenantId, provider, templateKey])
+  @@index([day, kind])
+  @@index([provider, day])
+}
+
+/** Individual bounce event. */
+model EmailBounce {
+  id String @id @default(cuid())
+
+  recipient   String
+  type        EmailBounceType
+  reason      String?
+  smtpCode    String?
+  provider    String?
+  templateKey String?
+  tenantId    String?
+
+  status      EmailBounceStatus @default(OPEN)
+
+  /** When the original send happened. */
+  sentAt      DateTime
+  /** When the bounce was recorded. */
+  bouncedAt   DateTime @default(now())
+
+  /** Optional pointer to the suppression entry created from this bounce. */
+  suppressionId String?
+
+  metadata Json?
+
+  createdAt DateTime @default(now())
+  updatedAt DateTime @updatedAt
+
+  @@index([type, bouncedAt])
+  @@index([status, bouncedAt])
+  @@index([provider, bouncedAt])
+  @@index([recipient])
+}
+
+/** Spam/complaint event (FBL feedback loop). */
+model EmailComplaint {
+  id String @id @default(cuid())
+
+  recipient   String
+  provider    String?
+  templateKey String?
+  tenantId    String?
+
+  reason      String?
+  reportedAt  DateTime @default(now())
+  sentAt      DateTime
+
+  /** Whether the recipient was auto-suppressed. */
+  autoSuppressed Boolean @default(true)
+  suppressionId  String?
+
+  createdAt DateTime @default(now())
+
+  @@index([reportedAt])
+  @@index([provider, reportedAt])
+  @@index([recipient])
+}
+
+/** Suppression list entry — global per email. */
+model EmailSuppression {
+  id String @id @default(cuid())
+
+  email     String  @unique
+  source    EmailSuppressionSource
+  reason    String?
+  /** Optional expiration — null = permanent. */
+  expiresAt DateTime?
+
+  /** Audit trail. */
+  addedById    String?
+  addedByEmail String?
+  removedById  String?
+  removedAt    DateTime?
+
+  notes        String?
+
+  createdAt DateTime @default(now())
+  updatedAt DateTime @updatedAt
+
+  @@index([source, createdAt])
+  @@index([expiresAt])
+}
+
+/** Per-domain authentication snapshot — SPF / DKIM / DMARC / BIMI. */
+model EmailSendingDomain {
+  id String @id @default(cuid())
+
+  /** Domain we send from (e.g. flowtora.com). */
+  domain String @unique
+
+  /** Hostname / MX records (display). */
+  hostname    String?
+  mxRecord    String?
+
+  /** SPF. */
+  spfRecord   String?
+  spfStatus   DomainAuthStatus @default(UNCONFIGURED)
+
+  /** DKIM — multiple selectors stored as JSON. */
+  dkimSelectors Json?
+  dkimStatus    DomainAuthStatus @default(UNCONFIGURED)
+
+  /** DMARC. */
+  dmarcRecord   String?
+  dmarcStatus   DomainAuthStatus @default(UNCONFIGURED)
+  /** Alignment policy: "none" / "quarantine" / "reject". */
+  dmarcPolicy   String?
+  /** rua reporting URI. */
+  dmarcReportingUri String?
+
+  /** BIMI. */
+  bimiRecord  String?
+  bimiStatus  DomainAuthStatus @default(UNCONFIGURED)
+  bimiVmcUrl  String?
+
+  /** When the last verification job ran. */
+  lastVerifiedAt DateTime?
+  /** When DMARC reports were last ingested. */
+  lastDmarcReportAt DateTime?
+
+  notes String?
+
+  createdAt DateTime @default(now())
+  updatedAt DateTime @updatedAt
+
+  reports DmarcReport[]
+}
+
+/** Decoded DMARC aggregate report. */
+model DmarcReport {
+  id String @id @default(cuid())
+
+  domainId  String
+  domain    EmailSendingDomain @relation(fields: [domainId], references: [id], onDelete: Cascade)
+
+  /** Reporter org (Google / Yahoo / Microsoft / etc.). */
+  reporter  String
+  /** Report period. */
+  periodStart DateTime
+  periodEnd   DateTime
+
+  /** Total messages, pass/fail breakdown. */
+  totalMessages Int @default(0)
+  passCount     Int @default(0)
+  failCount     Int @default(0)
+
+  /** Per-source breakdown (json: [{ip, count, spf, dkim, disposition}]). */
+  sources Json?
+
+  receivedAt DateTime @default(now())
+
+  @@unique([domainId, reporter, periodStart])
+  @@index([domainId, receivedAt])
+}
+
+/** Per-template deliverability stats snapshot. */
+model EmailTemplateStats {
+  id String @id @default(cuid())
+
+  /** Template key — matches EmailTemplate.key when present, free-form otherwise. */
+  templateKey String  @unique
+  /** Display name. */
+  name        String
+  /** Category: transactional / marketing / system. */
+  category    String?
+
+  sent24h     Int @default(0)
+  delivered24h Int @default(0)
+  opens24h    Int @default(0)
+  clicks24h   Int @default(0)
+  bounces24h  Int @default(0)
+  complaints24h Int @default(0)
+
+  /** Rolling rates. */
+  openRate    Float @default(0)
+  clickRate   Float @default(0)
+  bounceRate  Float @default(0)
+
+  /** Whether the template has an A/B variant. */
+  hasAbVariant Boolean @default(false)
+  /** Suspended templates won't send. */
+  suspended    Boolean @default(false)
+  suspendedReason String?
+
+  updatedAt DateTime @updatedAt
+  createdAt DateTime @default(now())
+}
+
+/** Multi-provider routing entry. */
+model EmailProvider {
+  id String @id @default(cuid())
+
+  /** Stable key (e.g. "resend", "sendgrid", "ses-bulk"). */
+  key         String  @unique
+  name        String
+  role        EmailProviderRole   @default(BACKUP)
+  health      EmailProviderHealth @default(HEALTHY)
+
+  /** Cost per 1000 sends in cents. */
+  costPer1000Cents Int  @default(0)
+  /** Whether auto-failover is on for this provider. */
+  autoFailover     Boolean @default(true)
+
+  /** Daily send cap (0 = unlimited). */
+  dailyCap         Int     @default(0)
+
+  /** Last 24h sent volume + status. */
+  sent24h          Int     @default(0)
+  bounceRate24h    Float   @default(0)
+  complaintRate24h Float   @default(0)
+  errorRate24h     Float   @default(0)
+  /** Last delivery success timestamp. */
+  lastDeliveredAt  DateTime?
+
+  /** Sending domains this provider handles, comma-separated. */
+  domains   String[]
+
+  notes     String?
+
+  createdAt DateTime @default(now())
+  updatedAt DateTime @updatedAt
+}
+
+/** Singleton — email deliverability settings. */
+model EmailDeliverabilitySettings {
+  id String @id @default("default")
+
+  bounceTargetPct     Float @default(2.0)
+  complaintTargetPct  Float @default(0.1)
+  /** Auto-suppress thresholds. */
+  autoSuppressOnComplaint Boolean @default(true)
+  autoSuppressOnHardBounce Boolean @default(true)
+  /** Hours to backoff before re-attempting a soft-bounced address. */
+  softBounceBackoffH  Int   @default(72)
+
+  /** Default failover order (provider keys). */
+  failoverOrder       String[]
+
+  /** Notes. */
+  notes               String?
+
+  updatedById String?
+  updatedAt   DateTime @updatedAt
+  createdAt   DateTime @default(now())
+}

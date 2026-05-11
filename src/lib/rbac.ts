@@ -271,6 +271,9 @@ export type PlatformPermission =
   // System & Infrastructure — Page 57 Background Jobs / Queues
   | "queues.read"
   | "queues.manage"
+  // System & Infrastructure — Page 58 Email Deliverability
+  | "email.deliverability.read"
+  | "email.deliverability.manage"
 
   // Analytics / BI
   | "analytics.read"
@@ -321,6 +324,7 @@ const PLATFORM_ALL: PlatformPermission[] = [
   "network.read", "network.manage", "network.waf.write",
   "system.status.read", "system.status.manage",
   "queues.read", "queues.manage",
+  "email.deliverability.read", "email.deliverability.manage",
   "analytics.read", "analytics.export", "revenue.read", "usage.read",
   "reports.read", "reports.create", "reports.edit", "reports.delete",
   "reports.schedule", "reports.export",
@@ -335,7 +339,7 @@ const PLATFORM_ALL: PlatformPermission[] = [
 const PLATFORM_BASELINE_READ: PlatformPermission[] = [
   "tenant.read", "billing.read", "staff.read", "users.read",
   "support.read", "health.read", "audit.read", "compliance.read",
-  "feature_flag.read", "announcement.read", "leads.read", "referrals.read", "affiliates.read", "seo.read", "integrations.read", "webhooks.read", "docs.read", "marketplace.read", "sso.read", "security.read", "privacy.read", "backups.read", "incidents.read", "network.read", "system.status.read", "queues.read",
+  "feature_flag.read", "announcement.read", "leads.read", "referrals.read", "affiliates.read", "seo.read", "integrations.read", "webhooks.read", "docs.read", "marketplace.read", "sso.read", "security.read", "privacy.read", "backups.read", "incidents.read", "network.read", "system.status.read", "queues.read", "email.deliverability.read",
   "analytics.read", "revenue.read", "usage.read",
   "reports.read", "reports.export", // every staff role reads + can export
   "system.read_settings", "notifications.read",
@@ -399,6 +403,7 @@ export const PLATFORM_ROLE_PERMISSIONS: Record<PlatformRole, PlatformPermission[
     "network.manage", "network.waf.write",
     "system.status.manage",
     "queues.manage",
+    "email.deliverability.manage",
     "analytics.export",
     "reports.create", "reports.edit", "reports.schedule",
     "notifications.manage",
@@ -445,6 +450,7 @@ export const PLATFORM_ROLE_PERMISSIONS: Record<PlatformRole, PlatformPermission[
     "network.manage", "network.waf.write", // SRE owns network rules + WAF
     "system.status.manage", // SRE owns the service catalog
     "queues.manage", // SRE owns queues + cron
+    "email.deliverability.manage", // SRE shares with Marketing Ops
   ]),
   // Marketing — leads, announcements, public plan/feature copy.
   MARKETING_MANAGER: dedup([
@@ -457,6 +463,7 @@ export const PLATFORM_ROLE_PERMISSIONS: Record<PlatformRole, PlatformPermission[
     "seo.read", "seo.manage",
     "analytics.read", "analytics.export",
     "notifications.read", "notifications.manage",
+    "email.deliverability.read", "email.deliverability.manage",
   ]),
   // Internal CMS — announcements + transactional templates, nothing else.
   CONTENT_MANAGER: dedup([
