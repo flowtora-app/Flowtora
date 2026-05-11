@@ -101,6 +101,7 @@ const NAV_ITEMS: NavItem[] = [
   { href: "/platform/system/queues",                label: "Queues & Jobs",        icon: "Pipeline" },
   { href: "/platform/system/email",                 label: "Email Deliverability", icon: "Megaphone" },
   { href: "/platform/system/storage",               label: "Storage & CDN",        icon: "Package" },
+  { href: "/platform/system/database",              label: "Database Health",      icon: "Pipeline" },
 ];
 
 const COLLAPSE_KEY = "flowtora.platform-nav.collapsed";

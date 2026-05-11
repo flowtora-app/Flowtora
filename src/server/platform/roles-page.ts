@@ -126,6 +126,8 @@ export const PERMISSION_DESCRIPTIONS: Record<PlatformPermission, string> = {
   "storage.read":        "View storage buckets, per-tenant usage, CDN POPs, image optimization, lifecycle policies.",
   "storage.manage":      "Configure buckets, lifecycle policies, CDN purges, hotlink flags, storage settings.",
   "storage.egress.read": "View egress cost dashboard (finance + SRE).",
+  "database.read":   "View database health — connections, replication, slow queries, indexes, locks.",
+  "database.manage": "Kill sessions, run vacuum/analyze, mark slow queries reviewed, save DB settings.",
   // Analytics
   "analytics.read":        "Read analytics dashboards.",
   "analytics.export":      "Export analytics datasets.",

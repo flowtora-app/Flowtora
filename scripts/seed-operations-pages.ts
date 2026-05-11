@@ -82,6 +82,7 @@ async function main() {
   await seedQueues(tenants);                           // Page 57
   await seedEmailDeliverability(tenants);              // Page 58
   await seedStorageCdn(tenants);                       // Page 59
+  await seedDatabaseHealth();                          // Page 60
 
   console.log("\n✓ Seed complete.\n");
   await db.$disconnect();
@@ -338,6 +339,8 @@ async function wipeOldSeed() {
   await db.storageLifecyclePolicy.deleteMany({ where: { name: { startsWith: "[seed] " } } });
   await db.cdnPopStats.deleteMany({ where: { popCode: { startsWith: "seed-" } } });
   await db.cdnTopUrl.deleteMany({ where: { url: { contains: "seed-" } } });
+  // Page 60 — DB Health wipe (cascades samples/slow/index/tables/locks/sessions/vacuum).
+  await db.dbInstance.deleteMany({ where: { slug: { startsWith: "seed-" } } });
   // Customers tagged seed (after orders are gone).
   await db.customer.deleteMany({ where: { tags: { has: "seed" } } });
   // Products tagged seed (use description marker since Product has no tags array).
@@ -11643,6 +11646,386 @@ async function seedStorageCdn(tenants: { id: string; name: string; slug: string 
 
   console.log(
     `  ✓ ${buckets.length} buckets, ${policies.length} lifecycle policies, ${pops.length} CDN POPs, ${topUrls.length} top URLs, ${egressCount} egress samples, ${tenants.length} tenant usage + egress rows`,
+  );
+}
+
+/* ── Page 60 — Database Health seed ────────────────────── */
+
+async function seedDatabaseHealth() {
+  console.log("── Seeding Database Health (Page 60)…");
+
+  // 1. Settings singleton.
+  await db.dbHealthSettings.upsert({
+    where: { id: "default" },
+    create: {
+      id: "default",
+      connectionWarnPct: 80,
+      replicationLagWarnSec: 30,
+      slowQueryThresholdMs: 500,
+      bufferHitTargetPct: 99,
+      autoVacuumCadenceDays: 1,
+      notes: "Neon hosts handle vacuum automatically; manual runs only for emergency bloat.",
+    },
+    update: {},
+  });
+
+  // 2. Instances.
+  type IBp = {
+    slug: string; name: string;
+    role: "PRIMARY" | "REPLICA" | "STANDBY" | "CACHE_REPLICA";
+    region: string; version: string;
+    status: "ONLINE" | "DEGRADED" | "RECOVERING" | "OFFLINE" | "MAINTENANCE";
+    connectionsUsed: number; connectionsMax: number;
+    diskUsedBytes: number; diskTotalBytes: number;
+    replicationLagSec?: number;
+    walPosition?: string;
+    lastRestartDaysAgo?: number;
+    restartCount24h?: number;
+  };
+  const instances: IBp[] = [
+    { slug: "seed-pg-primary",   name: "Neon Postgres — primary",   role: "PRIMARY",
+      region: "us-east-1", version: "16.2", status: "ONLINE",
+      connectionsUsed: 84, connectionsMax: 200,
+      diskUsedBytes: 412_000_000_000, diskTotalBytes: 800_000_000_000,
+      walPosition: "00/3A2F4180", lastRestartDaysAgo: 8, restartCount24h: 0 },
+    { slug: "seed-pg-replica-us", name: "Neon Postgres — replica (us-east-1)", role: "REPLICA",
+      region: "us-east-1", version: "16.2", status: "ONLINE",
+      connectionsUsed: 24, connectionsMax: 100,
+      diskUsedBytes: 412_000_000_000, diskTotalBytes: 800_000_000_000,
+      replicationLagSec: 2,
+      walPosition: "00/3A2F4180", lastRestartDaysAgo: 8 },
+    { slug: "seed-pg-replica-eu", name: "Neon Postgres — replica (eu-west-1)", role: "REPLICA",
+      region: "eu-west-1", version: "16.2", status: "DEGRADED",
+      connectionsUsed: 38, connectionsMax: 100,
+      diskUsedBytes: 412_000_000_000, diskTotalBytes: 800_000_000_000,
+      replicationLagSec: 64,
+      walPosition: "00/3A2F40A0", lastRestartDaysAgo: 0.4, restartCount24h: 2 },
+    { slug: "seed-pg-standby",   name: "Neon Postgres — standby (us-west-2)", role: "STANDBY",
+      region: "us-west-2", version: "16.2", status: "ONLINE",
+      connectionsUsed: 4, connectionsMax: 50,
+      diskUsedBytes: 412_000_000_000, diskTotalBytes: 800_000_000_000,
+      replicationLagSec: 8,
+      walPosition: "00/3A2F4178", lastRestartDaysAgo: 30 },
+  ];
+  const idBySlug = new Map<string, string>();
+  for (const i of instances) {
+    const saved = await db.dbInstance.upsert({
+      where: { slug: i.slug },
+      create: {
+        slug: i.slug, name: i.name, role: i.role, region: i.region,
+        version: i.version, status: i.status,
+        connectionsUsed: i.connectionsUsed, connectionsMax: i.connectionsMax,
+        diskUsedBytes: BigInt(i.diskUsedBytes), diskTotalBytes: BigInt(i.diskTotalBytes),
+        diskUsedPct: Math.round((i.diskUsedBytes / i.diskTotalBytes) * 1000) / 10,
+        replicationLagSec: i.replicationLagSec ?? null,
+        walPosition: i.walPosition ?? null,
+        lastRestartAt: i.lastRestartDaysAgo != null ? daysAgo(i.lastRestartDaysAgo) : null,
+        restartCount24h: i.restartCount24h ?? 0,
+      },
+      update: {
+        status: i.status,
+        connectionsUsed: i.connectionsUsed,
+        replicationLagSec: i.replicationLagSec ?? null,
+        restartCount24h: i.restartCount24h ?? 0,
+      },
+      select: { id: true, slug: true },
+    });
+    idBySlug.set(saved.slug, saved.id);
+  }
+
+  // 3. Connection samples — last 24h, hourly.
+  const connSamples: Array<{
+    instanceId: string; occurredAt: Date;
+    active: number; idle: number; idleInTransaction: number; waiting: number; totalUsed: number;
+    byApp: unknown;
+  }> = [];
+  for (const i of instances) {
+    const id = idBySlug.get(i.slug);
+    if (!id) continue;
+    for (let h = 23; h >= 0; h--) {
+      const t = new Date(Date.now() - h * 3_600_000);
+      const used = Math.floor(i.connectionsUsed * (0.6 + Math.random() * 0.6));
+      const active = Math.floor(used * 0.4);
+      const idle = Math.floor(used * 0.5);
+      const iit = used - active - idle;
+      connSamples.push({
+        instanceId: id, occurredAt: t,
+        active, idle, idleInTransaction: Math.max(0, iit), waiting: Math.floor(Math.random() * 3),
+        totalUsed: used,
+        byApp: { "flowtora-api": Math.floor(used * 0.7), "flowtora-queue": Math.floor(used * 0.2), "psql": Math.floor(used * 0.1) },
+      });
+    }
+  }
+  for (let i = 0; i < connSamples.length; i += 200) {
+    await db.dbConnectionSample.createMany({
+      data: connSamples.slice(i, i + 200) as never,
+      skipDuplicates: true,
+    });
+  }
+
+  // 4. Replication samples for replicas — hourly last 24h.
+  const repSamples: Array<{
+    instanceId: string; occurredAt: Date;
+    lagSec: number; lagBytes: bigint;
+    syncState: "SYNC" | "ASYNC" | "POTENTIAL" | "PENDING" | "LOST";
+    receiveLsn: string; replayLsn: string;
+  }> = [];
+  for (const i of instances) {
+    if (i.role === "PRIMARY") continue;
+    const id = idBySlug.get(i.slug);
+    if (!id) continue;
+    let baseLag = i.replicationLagSec ?? 0;
+    for (let h = 23; h >= 0; h--) {
+      const t = new Date(Date.now() - h * 3_600_000);
+      // Inject a spike for the EU replica around 6h ago.
+      const isSpike = i.slug === "seed-pg-replica-eu" && h >= 4 && h <= 8;
+      const lag = isSpike ? Math.floor(baseLag + Math.random() * 80 + 20) : Math.max(0, Math.floor(baseLag + (Math.random() - 0.5) * 4));
+      repSamples.push({
+        instanceId: id, occurredAt: t,
+        lagSec: lag,
+        lagBytes: BigInt(lag * 200_000),
+        syncState: i.role === "STANDBY" ? "SYNC" : isSpike ? "POTENTIAL" : "ASYNC",
+        receiveLsn: i.walPosition ?? "00/3A2F4180",
+        replayLsn: i.walPosition ?? "00/3A2F4180",
+      });
+    }
+  }
+  for (let i = 0; i < repSamples.length; i += 200) {
+    await db.dbReplicationSample.createMany({
+      data: repSamples.slice(i, i + 200) as never,
+      skipDuplicates: true,
+    });
+  }
+
+  // 5. Cache ratio samples — hourly last 24h, per instance.
+  const cacheSamples: Array<{
+    instanceId: string; occurredAt: Date;
+    bufferHitPct: number; indexHitPct: number; bufferCacheSize: bigint;
+  }> = [];
+  for (const i of instances) {
+    if (i.role !== "PRIMARY" && i.role !== "REPLICA") continue;
+    const id = idBySlug.get(i.slug);
+    if (!id) continue;
+    for (let h = 23; h >= 0; h--) {
+      const t = new Date(Date.now() - h * 3_600_000);
+      const dip = i.slug === "seed-pg-replica-eu" && h >= 4 && h <= 6;
+      cacheSamples.push({
+        instanceId: id, occurredAt: t,
+        bufferHitPct: dip ? 96.4 + Math.random() * 1 : 99.4 + Math.random() * 0.5,
+        indexHitPct:  dip ? 97.0 + Math.random() * 1 : 99.7 + Math.random() * 0.2,
+        bufferCacheSize: BigInt(16_000_000_000), // 16 GB
+      });
+    }
+  }
+  for (let i = 0; i < cacheSamples.length; i += 200) {
+    await db.dbCacheRatioSample.createMany({
+      data: cacheSamples.slice(i, i + 200) as never,
+      skipDuplicates: true,
+    });
+  }
+
+  // 6. Slow queries.
+  type SQBp = { queryId: string; queryText: string; calls: number; mean: number; max: number; rows: number; reviewed?: boolean; externalRef?: string };
+  const slowQueries: SQBp[] = [
+    { queryId: "stmt-001",
+      queryText: "SELECT o.*, c.* FROM \"Order\" o JOIN \"Customer\" c ON c.id = o.\"customerId\" WHERE o.\"tenantId\" = $1 AND o.\"updatedAt\" > $2 ORDER BY o.\"updatedAt\" DESC LIMIT 200",
+      calls: 8_412, mean: 312, max: 1_840, rows: 200, externalRef: "INF-512" },
+    { queryId: "stmt-002",
+      queryText: "SELECT count(*) FROM \"AuditLog\" WHERE \"tenantId\" = $1 AND \"createdAt\" BETWEEN $2 AND $3",
+      calls: 4_412, mean: 884, max: 4_200, rows: 1 },
+    { queryId: "stmt-003",
+      queryText: "SELECT \"Invoice\".*, jsonb_array_length(\"Invoice\".\"lineItems\") AS items FROM \"Invoice\" WHERE \"tenantId\" = $1 AND \"status\" = 'OVERDUE'",
+      calls: 2_412, mean: 524, max: 2_080, rows: 84,
+      reviewed: true, externalRef: "INF-518" },
+    { queryId: "stmt-004",
+      queryText: "SELECT * FROM \"EmailVolumeSample\" WHERE \"day\" >= $1 ORDER BY \"day\" ASC",
+      calls: 1_812, mean: 412, max: 1_200, rows: 800 },
+    { queryId: "stmt-005",
+      queryText: "SELECT pg_table_size(oid) AS bytes, relname FROM pg_class WHERE relkind = 'r' ORDER BY bytes DESC LIMIT 50",
+      calls: 88, mean: 1_840, max: 4_400, rows: 50 },
+    { queryId: "stmt-006",
+      queryText: "WITH q AS (SELECT * FROM \"PrivacyRequest\" WHERE \"tenantId\" = $1) SELECT q.*, t.\"name\" AS tenant FROM q JOIN \"Tenant\" t ON t.id = q.\"tenantId\"",
+      calls: 412, mean: 884, max: 2_200, rows: 18 },
+    { queryId: "stmt-007",
+      queryText: "SELECT * FROM \"User\" WHERE LOWER(\"email\") LIKE $1",
+      calls: 12_412, mean: 184, max: 612, rows: 5,
+      reviewed: true, externalRef: "INF-520" },
+    { queryId: "stmt-008",
+      queryText: "DELETE FROM \"EmailVolumeSample\" WHERE \"day\" < $1",
+      calls: 24, mean: 4_200, max: 8_400, rows: 18_412 },
+  ];
+  const primaryId = idBySlug.get("seed-pg-primary")!;
+  for (const q of slowQueries) {
+    await db.dbSlowQuery.upsert({
+      where: { instanceId_queryId: { instanceId: primaryId, queryId: q.queryId } },
+      create: {
+        instanceId: primaryId, queryId: q.queryId,
+        queryText: q.queryText,
+        fullQueryUrl: `https://docs.flowtora.com/db/queries/${q.queryId}.html`,
+        calls: q.calls, totalTimeMs: q.calls * q.mean,
+        meanTimeMs: q.mean, maxTimeMs: q.max, rows: q.rows,
+        schemaName: "public",
+        reviewed: q.reviewed ?? false,
+        externalRef: q.externalRef ?? null,
+        firstSeenAt: daysAgo(randInt(2, 30)),
+        lastSeenAt: minutesAgo(randInt(5, 120)),
+      },
+      update: {},
+    });
+  }
+
+  // 7. Index usage.
+  type IXBp = { table: string; index: string; scans: number; tuplesRead: number; tuplesFetched: number; sizeBytes: number; hitRatio: number; unused?: boolean };
+  const indexes: IXBp[] = [
+    { table: "Order",      index: "Order_tenantId_status_idx",      scans: 8_412_122, tuplesRead: 84_412_122, tuplesFetched: 12_412_122, sizeBytes: 240_000_000, hitRatio: 99.8 },
+    { table: "Order",      index: "Order_pkey",                     scans: 14_412_122, tuplesRead: 14_412_122, tuplesFetched: 14_412_122, sizeBytes: 180_000_000, hitRatio: 99.9 },
+    { table: "Customer",   index: "Customer_tenantId_idx",          scans: 6_812_122,  tuplesRead: 38_412_122, tuplesFetched: 4_412_122,  sizeBytes: 120_000_000, hitRatio: 99.5 },
+    { table: "Invoice",    index: "Invoice_tenantId_status_idx",    scans: 2_412_122,  tuplesRead: 4_812_122,  tuplesFetched: 884_122,    sizeBytes:  90_000_000, hitRatio: 99.4 },
+    { table: "AuditLog",   index: "AuditLog_tenantId_createdAt_idx", scans: 12_412_122, tuplesRead: 184_412_122, tuplesFetched: 18_412_122, sizeBytes: 420_000_000, hitRatio: 99.2 },
+    { table: "AuditLog",   index: "AuditLog_severity_createdAt_idx", scans: 184,        tuplesRead: 412,         tuplesFetched: 84,         sizeBytes:  60_000_000, hitRatio: 12.4, unused: true },
+    { table: "EmailVolumeSample", index: "EmailVolumeSample_day_kind_idx", scans: 412_122, tuplesRead: 4_412_122, tuplesFetched: 412_122, sizeBytes: 18_000_000, hitRatio: 99.6 },
+    { table: "Lead",       index: "Lead_tenantId_status_idx",       scans: 1_212_122,  tuplesRead: 2_412_122,  tuplesFetched: 412_122,    sizeBytes:  42_000_000, hitRatio: 99.1 },
+    { table: "PrivacyRequest", index: "PrivacyRequest_status_idx",  scans: 412,        tuplesRead: 412,         tuplesFetched: 412,        sizeBytes:    240_000, hitRatio: 99.0 },
+    { table: "OldFeatureFlag", index: "OldFeatureFlag_legacy_idx",  scans: 12,         tuplesRead: 12,          tuplesFetched: 12,         sizeBytes:  12_000_000, hitRatio: 8.2, unused: true },
+    { table: "Tenant",     index: "Tenant_slug_key",                scans: 8_412_122,  tuplesRead: 8_412_122,  tuplesFetched: 8_412_122,  sizeBytes:   1_400_000, hitRatio: 99.9 },
+    { table: "Notification", index: "Notification_userId_idx",      scans: 2_812_122,  tuplesRead: 38_412_122, tuplesFetched: 4_812_122,  sizeBytes:  84_000_000, hitRatio: 99.3 },
+  ];
+  for (const idx of indexes) {
+    await db.dbIndexUsage.upsert({
+      where: { instanceId_tableName_indexName: { instanceId: primaryId, tableName: idx.table, indexName: idx.index } },
+      create: {
+        instanceId: primaryId, tableName: idx.table, indexName: idx.index,
+        scans: idx.scans, tuplesRead: idx.tuplesRead, tuplesFetched: idx.tuplesFetched,
+        sizeBytes: BigInt(idx.sizeBytes), hitRatio: idx.hitRatio,
+        unused: idx.unused ?? false,
+      },
+      update: {
+        scans: idx.scans, tuplesRead: idx.tuplesRead, tuplesFetched: idx.tuplesFetched,
+        hitRatio: idx.hitRatio,
+        unused: idx.unused ?? false,
+      },
+    });
+  }
+
+  // 8. Table stats.
+  type TBp = { name: string; rowCount: number; sizeBytes: number; bloat: number; seq: number; idx: number; vacDaysAgo: number; anaDaysAgo: number; overdue?: boolean };
+  const tableStats: TBp[] = [
+    { name: "AuditLog",            rowCount: 184_412_122, sizeBytes: 84_000_000_000, bloat: 28.4, seq: 412,    idx: 14_412_122, vacDaysAgo: 0.3, anaDaysAgo: 0.3 },
+    { name: "Order",               rowCount: 24_412_122,  sizeBytes: 28_000_000_000, bloat: 14.2, seq: 142,    idx: 18_412_122, vacDaysAgo: 0.5, anaDaysAgo: 0.5 },
+    { name: "Customer",            rowCount: 8_412_122,   sizeBytes: 12_000_000_000, bloat:  8.4, seq: 84,     idx: 12_412_122, vacDaysAgo: 0.4, anaDaysAgo: 0.4 },
+    { name: "Invoice",             rowCount: 4_412_122,   sizeBytes:  6_400_000_000, bloat:  6.2, seq: 18,     idx:  8_412_122, vacDaysAgo: 0.6, anaDaysAgo: 0.6 },
+    { name: "EmailVolumeSample",   rowCount: 1_812_122,   sizeBytes:    420_000_000, bloat: 42.1, seq: 12,     idx:  4_412_122, vacDaysAgo: 4.2, anaDaysAgo: 4.2, overdue: true },
+    { name: "Lead",                rowCount: 412_122,     sizeBytes:    180_000_000, bloat: 10.2, seq: 12,     idx: 1_212_122,  vacDaysAgo: 0.8, anaDaysAgo: 0.8 },
+    { name: "PrivacyRequest",      rowCount: 12_412,      sizeBytes:    24_000_000,  bloat:  2.4, seq: 4,      idx:    412_122, vacDaysAgo: 1.0, anaDaysAgo: 1.0 },
+    { name: "EmailBounce",         rowCount: 84_412,      sizeBytes:    18_000_000,  bloat: 38.4, seq: 24,     idx:    412_122, vacDaysAgo: 6.0, anaDaysAgo: 6.0, overdue: true },
+    { name: "Notification",        rowCount: 4_412_122,   sizeBytes:    1_400_000_000, bloat: 12.2, seq: 42,   idx: 2_812_122,  vacDaysAgo: 0.4, anaDaysAgo: 0.4 },
+    { name: "ServiceMetricSample", rowCount: 18_412_122,  sizeBytes:  3_200_000_000, bloat:  4.2, seq: 12,     idx: 4_412_122,  vacDaysAgo: 0.2, anaDaysAgo: 0.2 },
+  ];
+  for (const t of tableStats) {
+    await db.dbTableStats.upsert({
+      where: { instanceId_schemaName_tableName: { instanceId: primaryId, schemaName: "public", tableName: t.name } },
+      create: {
+        instanceId: primaryId, schemaName: "public", tableName: t.name,
+        rowCount: BigInt(t.rowCount), sizeBytes: BigInt(t.sizeBytes),
+        bloatPct: t.bloat, seqScans: t.seq, idxScans: t.idx,
+        lastVacuumAt: daysAgo(t.vacDaysAgo), lastAnalyzeAt: daysAgo(t.anaDaysAgo),
+        vacuumOverdue: t.overdue ?? false,
+      },
+      update: {
+        rowCount: BigInt(t.rowCount), sizeBytes: BigInt(t.sizeBytes),
+        bloatPct: t.bloat, seqScans: t.seq, idxScans: t.idx,
+        lastVacuumAt: daysAgo(t.vacDaysAgo), lastAnalyzeAt: daysAgo(t.anaDaysAgo),
+        vacuumOverdue: t.overdue ?? false,
+      },
+    });
+  }
+
+  // 9. Locks.
+  type LBp = { pid: number; blockingPid?: number; granted: boolean; mode: "ACCESS_SHARE" | "ROW_SHARE" | "ROW_EXCLUSIVE" | "SHARE_UPDATE_EXCLUSIVE" | "SHARE" | "SHARE_ROW_EXCLUSIVE" | "EXCLUSIVE" | "ACCESS_EXCLUSIVE"; relation: string; query: string; wait: number; app: string; user: string };
+  const locks: LBp[] = [
+    { pid: 18412, granted: true,  mode: "ROW_EXCLUSIVE", relation: "public.Order", query: "UPDATE \"Order\" SET status = $1 WHERE id = $2", wait: 0, app: "flowtora-api", user: "flowtora_app" },
+    { pid: 18413, blockingPid: 18412, granted: false, mode: "EXCLUSIVE", relation: "public.Order", query: "ALTER TABLE \"Order\" ADD COLUMN \"newField\" TEXT", wait: 42, app: "flowtora-migrations", user: "flowtora_migrator" },
+    { pid: 18414, granted: true,  mode: "ACCESS_SHARE", relation: "public.Invoice", query: "SELECT * FROM \"Invoice\" WHERE \"tenantId\" = $1", wait: 0, app: "flowtora-api", user: "flowtora_app" },
+    { pid: 18415, granted: true,  mode: "ROW_EXCLUSIVE", relation: "public.AuditLog", query: "INSERT INTO \"AuditLog\" (...) VALUES (...)", wait: 0, app: "flowtora-api", user: "flowtora_app" },
+    { pid: 18416, blockingPid: 18415, granted: false, mode: "SHARE_UPDATE_EXCLUSIVE", relation: "public.AuditLog", query: "VACUUM ANALYZE \"AuditLog\"", wait: 18, app: "psql", user: "sre@flowtora.com" },
+    { pid: 18417, granted: true,  mode: "ROW_SHARE",   relation: "public.Customer", query: "SELECT * FROM \"Customer\" FOR UPDATE SKIP LOCKED", wait: 0, app: "flowtora-queue", user: "flowtora_app" },
+  ];
+  for (const l of locks) {
+    await db.dbLock.create({
+      data: {
+        instanceId: primaryId, pid: l.pid,
+        blockingPid: l.blockingPid ?? null,
+        granted: l.granted, mode: l.mode,
+        relation: l.relation, queryText: l.query,
+        waitSeconds: l.wait, appName: l.app, userName: l.user,
+        startedAt: minutesAgo(randInt(1, 10)),
+      },
+    });
+  }
+
+  // 10. Vacuum runs.
+  type VBp = { kind: "AUTO" | "MANUAL" | "FULL" | "ANALYZE_ONLY"; table: string; daysAgo: number; durationSec: number; rowsRemoved: number; triggeredBy: string };
+  const vacuum: VBp[] = [
+    { kind: "AUTO",         table: "AuditLog",            daysAgo: 0.3, durationSec: 124, rowsRemoved: 18_412, triggeredBy: "scheduler" },
+    { kind: "AUTO",         table: "Order",               daysAgo: 0.5, durationSec: 88,  rowsRemoved: 12_412, triggeredBy: "scheduler" },
+    { kind: "AUTO",         table: "Customer",            daysAgo: 0.4, durationSec: 64,  rowsRemoved: 4_412,  triggeredBy: "scheduler" },
+    { kind: "AUTO",         table: "Invoice",             daysAgo: 0.6, durationSec: 42,  rowsRemoved: 1_842,  triggeredBy: "scheduler" },
+    { kind: "MANUAL",       table: "EmailVolumeSample",   daysAgo: 4.2, durationSec: 240, rowsRemoved: 184_412, triggeredBy: "ciso@flowtora.com" },
+    { kind: "ANALYZE_ONLY", table: "Lead",                daysAgo: 0.8, durationSec: 8,   rowsRemoved: 0,       triggeredBy: "scheduler" },
+    { kind: "AUTO",         table: "Notification",        daysAgo: 0.4, durationSec: 48,  rowsRemoved: 8_412,   triggeredBy: "scheduler" },
+    { kind: "FULL",         table: "OldFeatureFlag",      daysAgo: 12,  durationSec: 412, rowsRemoved: 12_412,  triggeredBy: "engineering@flowtora.com" },
+    { kind: "AUTO",         table: "ServiceMetricSample", daysAgo: 0.2, durationSec: 32,  rowsRemoved: 4_412,   triggeredBy: "scheduler" },
+    { kind: "AUTO",         table: "PrivacyRequest",      daysAgo: 1.0, durationSec: 4,   rowsRemoved: 12,      triggeredBy: "scheduler" },
+  ];
+  for (const v of vacuum) {
+    const started = daysAgo(v.daysAgo);
+    await db.dbVacuumRun.create({
+      data: {
+        instanceId: primaryId, kind: v.kind, schemaName: "public", tableName: v.table,
+        startedAt: started,
+        completedAt: new Date(started.getTime() + v.durationSec * 1000),
+        durationSec: v.durationSec, rowsRemoved: v.rowsRemoved,
+        rowsDead: Math.floor(v.rowsRemoved * 1.4),
+        triggeredBy: v.triggeredBy,
+      },
+    });
+  }
+
+  // 11. Sessions.
+  type SBp = { pid: number; app: string; user: string; client: string; state: "ACTIVE" | "IDLE" | "IDLE_IN_TRANSACTION" | "IDLE_IN_TRANSACTION_ABORTED" | "FASTPATH" | "DISABLED"; query: string; stateSec: number; stale?: boolean };
+  const sessions: SBp[] = [
+    { pid: 18412, app: "flowtora-api", user: "flowtora_app", client: "10.0.4.12",  state: "ACTIVE", query: "UPDATE \"Order\" SET status = $1 WHERE id = $2", stateSec: 2 },
+    { pid: 18413, app: "flowtora-migrations", user: "flowtora_migrator", client: "10.0.4.18", state: "ACTIVE", query: "ALTER TABLE \"Order\" ADD COLUMN \"newField\" TEXT", stateSec: 42 },
+    { pid: 18414, app: "flowtora-api", user: "flowtora_app", client: "10.0.4.12",  state: "IDLE", query: null as never, stateSec: 18 },
+    { pid: 18415, app: "flowtora-api", user: "flowtora_app", client: "10.0.4.14",  state: "ACTIVE", query: "INSERT INTO \"AuditLog\" (...) VALUES (...)", stateSec: 1 },
+    { pid: 18416, app: "psql", user: "sre@flowtora.com", client: "203.0.113.42", state: "IDLE_IN_TRANSACTION", query: "BEGIN; SELECT * FROM \"Order\" ORDER BY \"id\" DESC LIMIT 1;", stateSec: 480, stale: true },
+    { pid: 18417, app: "flowtora-queue", user: "flowtora_app", client: "10.0.4.22", state: "ACTIVE", query: "SELECT * FROM \"Customer\" FOR UPDATE SKIP LOCKED LIMIT 10", stateSec: 4 },
+    { pid: 18418, app: "flowtora-api", user: "flowtora_app", client: "10.0.4.12",  state: "IDLE", query: null as never, stateSec: 84 },
+    { pid: 18419, app: "flowtora-cron", user: "flowtora_cron", client: "10.0.4.40", state: "ACTIVE", query: "DELETE FROM \"EmailVolumeSample\" WHERE \"day\" < $1", stateSec: 18 },
+    { pid: 18420, app: "datadog-agent", user: "datadog", client: "10.0.4.99",      state: "ACTIVE", query: "SELECT pg_stat_get_backend_pid(s.backend) FROM pg_stat_activity s", stateSec: 0 },
+    { pid: 18421, app: "psql", user: "engineering@flowtora.com", client: "203.0.113.55", state: "IDLE_IN_TRANSACTION_ABORTED", query: "ROLLBACK", stateSec: 1842, stale: true },
+    { pid: 18422, app: "flowtora-api", user: "flowtora_app", client: "10.0.4.16",  state: "FASTPATH", query: "SELECT pg_advisory_lock(...)", stateSec: 0 },
+    { pid: 18423, app: "flowtora-api", user: "flowtora_app", client: "10.0.4.16",  state: "IDLE", query: null as never, stateSec: 12 },
+  ];
+  for (const s of sessions) {
+    await db.dbSession.upsert({
+      where: { instanceId_pid: { instanceId: primaryId, pid: s.pid } },
+      create: {
+        instanceId: primaryId, pid: s.pid,
+        appName: s.app, userName: s.user, clientAddr: s.client,
+        state: s.state, queryText: s.query, stateSec: s.stateSec,
+        staleIdle: s.stale ?? false,
+        startedAt: minutesAgo(randInt(1, 120)),
+      },
+      update: {
+        state: s.state, queryText: s.query, stateSec: s.stateSec,
+        staleIdle: s.stale ?? false,
+      },
+    });
+  }
+
+  console.log(
+    `  ✓ ${instances.length} instances, ${connSamples.length} conn samples, ${repSamples.length} rep samples, ${cacheSamples.length} cache samples, ${slowQueries.length} slow queries, ${indexes.length} indexes, ${tableStats.length} tables, ${locks.length} locks, ${vacuum.length} vacuum runs, ${sessions.length} sessions`,
   );
 }
 

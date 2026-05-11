@@ -14358,3 +14358,350 @@ model StorageSettings {
   updatedAt   DateTime @updatedAt
   createdAt   DateTime @default(now())
 }
+
+// ────────────────────────────────────────────────────────────
+// Page 60 — Database Health.
+// ────────────────────────────────────────────────────────────
+
+enum DbInstanceRole {
+  PRIMARY
+  REPLICA
+  STANDBY
+  CACHE_REPLICA
+}
+
+enum DbInstanceStatus {
+  ONLINE
+  DEGRADED
+  RECOVERING
+  OFFLINE
+  MAINTENANCE
+}
+
+enum DbReplicationSyncState {
+  SYNC
+  ASYNC
+  POTENTIAL
+  PENDING
+  LOST
+}
+
+enum DbVacuumKind {
+  AUTO
+  MANUAL
+  FULL
+  ANALYZE_ONLY
+}
+
+enum DbSessionState {
+  ACTIVE
+  IDLE
+  IDLE_IN_TRANSACTION
+  IDLE_IN_TRANSACTION_ABORTED
+  FASTPATH
+  DISABLED
+}
+
+enum DbLockMode {
+  ACCESS_SHARE
+  ROW_SHARE
+  ROW_EXCLUSIVE
+  SHARE_UPDATE_EXCLUSIVE
+  SHARE
+  SHARE_ROW_EXCLUSIVE
+  EXCLUSIVE
+  ACCESS_EXCLUSIVE
+}
+
+/** PostgreSQL instance inventory. */
+model DbInstance {
+  id String @id @default(cuid())
+
+  /** Slug like "neon-prod-primary" / "neon-prod-replica-eu". */
+  slug         String   @unique
+  name         String
+  role         DbInstanceRole
+  region       String
+  /** Postgres version, e.g. "16.2". */
+  version      String?
+  status       DbInstanceStatus  @default(ONLINE)
+
+  /** Live counters (refreshed on poll). */
+  connectionsUsed Int @default(0)
+  connectionsMax  Int @default(100)
+  diskUsedBytes   BigInt @default(0)
+  diskTotalBytes  BigInt @default(0)
+  diskUsedPct     Float  @default(0)
+  /** For replicas — current lag in seconds. */
+  replicationLagSec Int?
+
+  /** WAL position (informational). */
+  walPosition String?
+
+  /** Whether failover is allowed from this node. */
+  failoverEligible Boolean @default(true)
+
+  /** Last restart timestamp. */
+  lastRestartAt DateTime?
+  restartCount24h Int @default(0)
+
+  notes        String?
+
+  createdAt DateTime @default(now())
+  updatedAt DateTime @updatedAt
+
+  connectionSamples  DbConnectionSample[]
+  replicationSamples DbReplicationSample[]
+  slowQueries        DbSlowQuery[]
+  indexUsage         DbIndexUsage[]
+  tableStats         DbTableStats[]
+  locks              DbLock[]
+  cacheRatioSamples  DbCacheRatioSample[]
+  vacuumRuns         DbVacuumRun[]
+  sessions           DbSession[]
+}
+
+/** Time-series — connection counts. */
+model DbConnectionSample {
+  id String @id @default(cuid())
+
+  instanceId String
+  instance   DbInstance @relation(fields: [instanceId], references: [id], onDelete: Cascade)
+
+  occurredAt DateTime
+  active     Int @default(0)
+  idle       Int @default(0)
+  idleInTransaction Int @default(0)
+  waiting    Int @default(0)
+  totalUsed  Int @default(0)
+  /** Per-app breakdown (json: {app: count}). */
+  byApp      Json?
+
+  @@unique([instanceId, occurredAt])
+  @@index([instanceId, occurredAt])
+}
+
+/** Time-series — replication lag samples for a replica. */
+model DbReplicationSample {
+  id String @id @default(cuid())
+
+  instanceId String
+  instance   DbInstance @relation(fields: [instanceId], references: [id], onDelete: Cascade)
+
+  occurredAt DateTime
+  /** Lag in seconds + bytes. */
+  lagSec   Int    @default(0)
+  lagBytes BigInt @default(0)
+  syncState DbReplicationSyncState @default(ASYNC)
+  /** WAL receive + replay positions. */
+  receiveLsn String?
+  replayLsn  String?
+
+  @@unique([instanceId, occurredAt])
+  @@index([instanceId, occurredAt])
+}
+
+/** pg_stat_statements row. */
+model DbSlowQuery {
+  id String @id @default(cuid())
+
+  instanceId String
+  instance   DbInstance @relation(fields: [instanceId], references: [id], onDelete: Cascade)
+
+  /** Hashed query identifier (queryid). */
+  queryId      String
+  /** Truncated query text. */
+  queryText    String
+  /** Click-for-full reference. */
+  fullQueryUrl String?
+  calls        Int    @default(0)
+  totalTimeMs  Int    @default(0)
+  meanTimeMs   Int    @default(0)
+  maxTimeMs    Int    @default(0)
+  rows         Int    @default(0)
+  /** Optional schema/table for grouping. */
+  schemaName   String?
+
+  /** Whether DBA has reviewed + planned an action. */
+  reviewed     Boolean @default(false)
+  /** External tracker (Linear/Jira) for the optimization. */
+  externalRef  String?
+
+  firstSeenAt  DateTime  @default(now())
+  lastSeenAt   DateTime  @default(now())
+
+  @@unique([instanceId, queryId])
+  @@index([instanceId, meanTimeMs(sort: Desc)])
+  @@index([instanceId, lastSeenAt])
+}
+
+/** Index usage snapshot. */
+model DbIndexUsage {
+  id String @id @default(cuid())
+
+  instanceId String
+  instance   DbInstance @relation(fields: [instanceId], references: [id], onDelete: Cascade)
+
+  tableName  String
+  indexName  String
+  scans      Int    @default(0)
+  tuplesRead Int    @default(0)
+  tuplesFetched Int @default(0)
+  sizeBytes  BigInt @default(0)
+  hitRatio   Float  @default(0)
+  /** Whether the index is flagged as unused / low-scan. */
+  unused     Boolean @default(false)
+
+  refreshedAt DateTime @default(now())
+
+  @@unique([instanceId, tableName, indexName])
+  @@index([instanceId, unused])
+  @@index([instanceId, scans])
+}
+
+/** Table size + bloat snapshot. */
+model DbTableStats {
+  id String @id @default(cuid())
+
+  instanceId String
+  instance   DbInstance @relation(fields: [instanceId], references: [id], onDelete: Cascade)
+
+  schemaName String  @default("public")
+  tableName  String
+  /** Logical row count estimate. */
+  rowCount   BigInt @default(0)
+  /** Table size in bytes. */
+  sizeBytes  BigInt @default(0)
+  /** Bloat percentage 0..100. */
+  bloatPct   Float  @default(0)
+  /** Sequential scan counters. */
+  seqScans   Int    @default(0)
+  idxScans   Int    @default(0)
+  /** Maintenance timestamps. */
+  lastVacuumAt    DateTime?
+  lastAnalyzeAt   DateTime?
+  /** Whether vacuum is currently overdue. */
+  vacuumOverdue   Boolean @default(false)
+
+  refreshedAt DateTime @default(now())
+
+  @@unique([instanceId, schemaName, tableName])
+  @@index([instanceId, bloatPct(sort: Desc)])
+  @@index([instanceId, vacuumOverdue])
+}
+
+/** Active lock. */
+model DbLock {
+  id String @id @default(cuid())
+
+  instanceId String
+  instance   DbInstance @relation(fields: [instanceId], references: [id], onDelete: Cascade)
+
+  pid          Int
+  blockingPid  Int?
+  /** Granted vs waiting. */
+  granted      Boolean @default(false)
+  mode         DbLockMode
+  /** Relation / object locked. */
+  relation     String?
+  /** Query text holding the lock (truncated). */
+  queryText    String?
+  waitSeconds  Int @default(0)
+  /** App / user that owns the lock. */
+  appName      String?
+  userName     String?
+
+  startedAt DateTime @default(now())
+  updatedAt DateTime @updatedAt
+
+  @@index([instanceId, granted])
+  @@index([instanceId, blockingPid])
+}
+
+/** Cache hit ratio sample (time series). */
+model DbCacheRatioSample {
+  id String @id @default(cuid())
+
+  instanceId String
+  instance   DbInstance @relation(fields: [instanceId], references: [id], onDelete: Cascade)
+
+  occurredAt    DateTime
+  bufferHitPct  Float @default(0)
+  indexHitPct   Float @default(0)
+  /** Shared buffer cache size in bytes. */
+  bufferCacheSize BigInt @default(0)
+
+  @@unique([instanceId, occurredAt])
+  @@index([instanceId, occurredAt])
+}
+
+/** Vacuum / analyze run. */
+model DbVacuumRun {
+  id String @id @default(cuid())
+
+  instanceId String
+  instance   DbInstance @relation(fields: [instanceId], references: [id], onDelete: Cascade)
+
+  kind        DbVacuumKind
+  schemaName  String  @default("public")
+  tableName   String?
+  startedAt   DateTime
+  completedAt DateTime?
+  durationSec Int?
+  rowsRemoved Int?
+  rowsDead    Int?
+  triggeredBy String? // "scheduler" / userId
+
+  createdAt DateTime @default(now())
+
+  @@index([instanceId, startedAt])
+  @@index([instanceId, tableName])
+}
+
+/** Currently-connected session. */
+model DbSession {
+  id String @id @default(cuid())
+
+  instanceId String
+  instance   DbInstance @relation(fields: [instanceId], references: [id], onDelete: Cascade)
+
+  pid          Int
+  appName      String?
+  userName     String?
+  clientAddr   String?
+  state        DbSessionState @default(ACTIVE)
+  /** Truncated query text (active sessions). */
+  queryText    String?
+  /** Time spent in current state (seconds). */
+  stateSec     Int @default(0)
+  /** Whether this is a long-running idle-in-transaction (>60s). */
+  staleIdle    Boolean @default(false)
+
+  startedAt DateTime @default(now())
+  updatedAt DateTime @updatedAt
+
+  @@unique([instanceId, pid])
+  @@index([instanceId, state])
+  @@index([instanceId, staleIdle])
+}
+
+/** Singleton — database health program settings. */
+model DbHealthSettings {
+  id String @id @default("default")
+
+  /** Connection usage threshold (warn at >X%). */
+  connectionWarnPct Int @default(80)
+  /** Replication lag warning threshold (seconds). */
+  replicationLagWarnSec Int @default(30)
+  /** Slow query mean-time threshold (ms). */
+  slowQueryThresholdMs  Int @default(500)
+  /** Buffer hit-rate target (%). */
+  bufferHitTargetPct    Int @default(99)
+  /** Vacuum cadence — days between auto-runs. */
+  autoVacuumCadenceDays Int @default(1)
+  notes String?
+
+  updatedById String?
+  updatedAt   DateTime @updatedAt
+  createdAt   DateTime @default(now())
+}

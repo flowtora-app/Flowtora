@@ -278,6 +278,9 @@ export type PlatformPermission =
   | "storage.read"
   | "storage.manage"
   | "storage.egress.read"
+  // System & Infrastructure — Page 60 Database Health
+  | "database.read"
+  | "database.manage"
 
   // Analytics / BI
   | "analytics.read"
@@ -330,6 +333,7 @@ const PLATFORM_ALL: PlatformPermission[] = [
   "queues.read", "queues.manage",
   "email.deliverability.read", "email.deliverability.manage",
   "storage.read", "storage.manage", "storage.egress.read",
+  "database.read", "database.manage",
   "analytics.read", "analytics.export", "revenue.read", "usage.read",
   "reports.read", "reports.create", "reports.edit", "reports.delete",
   "reports.schedule", "reports.export",
@@ -344,7 +348,7 @@ const PLATFORM_ALL: PlatformPermission[] = [
 const PLATFORM_BASELINE_READ: PlatformPermission[] = [
   "tenant.read", "billing.read", "staff.read", "users.read",
   "support.read", "health.read", "audit.read", "compliance.read",
-  "feature_flag.read", "announcement.read", "leads.read", "referrals.read", "affiliates.read", "seo.read", "integrations.read", "webhooks.read", "docs.read", "marketplace.read", "sso.read", "security.read", "privacy.read", "backups.read", "incidents.read", "network.read", "system.status.read", "queues.read", "email.deliverability.read", "storage.read",
+  "feature_flag.read", "announcement.read", "leads.read", "referrals.read", "affiliates.read", "seo.read", "integrations.read", "webhooks.read", "docs.read", "marketplace.read", "sso.read", "security.read", "privacy.read", "backups.read", "incidents.read", "network.read", "system.status.read", "queues.read", "email.deliverability.read", "storage.read", "database.read",
   "analytics.read", "revenue.read", "usage.read",
   "reports.read", "reports.export", // every staff role reads + can export
   "system.read_settings", "notifications.read",
@@ -410,6 +414,7 @@ export const PLATFORM_ROLE_PERMISSIONS: Record<PlatformRole, PlatformPermission[
     "queues.manage",
     "email.deliverability.manage",
     "storage.manage", "storage.egress.read",
+    "database.manage",
     "analytics.export",
     "reports.create", "reports.edit", "reports.schedule",
     "notifications.manage",
@@ -459,6 +464,7 @@ export const PLATFORM_ROLE_PERMISSIONS: Record<PlatformRole, PlatformPermission[
     "queues.manage", // SRE owns queues + cron
     "email.deliverability.manage", // SRE shares with Marketing Ops
     "storage.manage", "storage.egress.read", // SRE owns object-storage + CDN
+    "database.manage", // SRE owns Postgres ops
   ]),
   // Marketing — leads, announcements, public plan/feature copy.
   MARKETING_MANAGER: dedup([
