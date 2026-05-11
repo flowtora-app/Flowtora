@@ -123,6 +123,9 @@ export const PERMISSION_DESCRIPTIONS: Record<PlatformPermission, string> = {
   "queues.manage": "Pause / resume / drain queues, retry / skip / DLQ jobs, toggle cron schedules.",
   "email.deliverability.read":   "View email volume, bounces, complaints, suppression, domain auth, providers.",
   "email.deliverability.manage": "Suppress/unsuppress recipients, re-verify domains, route providers, suspend templates.",
+  "storage.read":        "View storage buckets, per-tenant usage, CDN POPs, image optimization, lifecycle policies.",
+  "storage.manage":      "Configure buckets, lifecycle policies, CDN purges, hotlink flags, storage settings.",
+  "storage.egress.read": "View egress cost dashboard (finance + SRE).",
   // Analytics
   "analytics.read":        "Read analytics dashboards.",
   "analytics.export":      "Export analytics datasets.",

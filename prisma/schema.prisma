@@ -430,6 +430,9 @@ model Tenant {
   // Page 55 — per-tenant network rules + config.
   networkRules           NetworkRule[]
   networkConfig          TenantNetworkConfig?
+  // Page 59 — per-tenant storage + egress usage.
+  storageUsage           TenantStorageUsage?
+  egressUsage            EgressTenantUsage?
 }
 
 // ────────────────────────────────────────────────────────────
@@ -14065,6 +14068,291 @@ model EmailDeliverabilitySettings {
 
   /** Notes. */
   notes               String?
+
+  updatedById String?
+  updatedAt   DateTime @updatedAt
+  createdAt   DateTime @default(now())
+}
+
+// ────────────────────────────────────────────────────────────
+// Page 59 — Storage & CDN.
+// ────────────────────────────────────────────────────────────
+
+enum StorageBucketProvider {
+  AWS_S3
+  CLOUDFLARE_R2
+  GCS
+  AZURE_BLOB
+  BACKBLAZE_B2
+  OTHER
+}
+
+enum StorageEncryptionMode {
+  NONE
+  SSE_S3
+  SSE_KMS
+  SSE_CMK
+  CSE
+}
+
+enum StoragePublicAccess {
+  PRIVATE
+  PUBLIC_READ
+  PUBLIC_READ_WRITE
+  TENANT_GATED
+}
+
+enum StorageLifecycleAction {
+  ARCHIVE
+  DELETE
+  TRANSITION_IA
+  TRANSITION_GLACIER
+  TRANSITION_DEEP_ARCHIVE
+  EXPIRE_VERSIONS
+}
+
+enum CdnHealth {
+  HEALTHY
+  DEGRADED
+  WARNING
+  OFFLINE
+}
+
+enum ImageFormat {
+  WEBP
+  AVIF
+  JPEG
+  PNG
+  HEIC
+  ORIGINAL
+}
+
+/** Storage bucket inventory — distinct from BackupStorageBucket (Page 53) which is
+ *  scoped to the backup program. These are tenant-facing object-storage buckets. */
+model StorageBucketEntry {
+  id String @id @default(cuid())
+
+  /** Unique name within provider. */
+  name        String  @unique
+  provider    StorageBucketProvider
+  region      String
+  encryption  StorageEncryptionMode @default(SSE_S3)
+  versioning  Boolean @default(true)
+  publicAccess StoragePublicAccess  @default(PRIVATE)
+
+  /** Live counters (refreshed by polling job). */
+  objectCount BigInt @default(0)
+  sizeBytes   BigInt @default(0)
+  /** Hot tier vs archive split (informational). */
+  hotBytes    BigInt @default(0)
+  archiveBytes BigInt @default(0)
+
+  /** Cost (monthly) attributed to this bucket. */
+  monthlyCostCents Int @default(0)
+
+  /** Whether the bucket has a lifecycle policy attached. */
+  lifecyclePolicyId String?
+  lifecyclePolicy   StorageLifecyclePolicy? @relation(fields: [lifecyclePolicyId], references: [id], onDelete: SetNull)
+
+  /** Optional tag for grouping. */
+  tag String?
+  notes String?
+
+  lastRefreshedAt DateTime?
+
+  createdAt DateTime @default(now())
+  updatedAt DateTime @updatedAt
+
+  @@index([provider, region])
+}
+
+/** Per-tenant storage usage roll-up. */
+model TenantStorageUsage {
+  id String @id @default(cuid())
+
+  tenantId   String  @unique
+  tenant     Tenant  @relation(fields: [tenantId], references: [id], onDelete: Cascade)
+
+  /** Total storage in bytes. */
+  storageBytes BigInt @default(0)
+  /** Plan-defined storage limit in bytes (0 = unlimited). */
+  limitBytes   BigInt @default(0)
+  /** Bandwidth used in the last 30 days. */
+  bandwidth30dBytes BigInt @default(0)
+  /** File count. */
+  fileCount    Int    @default(0)
+  /** Largest folder path. */
+  largestFolder String?
+  /** Whether this tenant has been flagged for sudden growth. */
+  anomalyFlag   Boolean @default(false)
+  anomalyReason String?
+
+  refreshedAt DateTime?
+
+  createdAt DateTime @default(now())
+  updatedAt DateTime @updatedAt
+
+  @@index([anomalyFlag])
+  @@index([storageBytes])
+}
+
+/** CDN POP performance snapshot. */
+model CdnPopStats {
+  id String @id @default(cuid())
+
+  /** POP code, e.g. "iad1", "lhr2". */
+  popCode  String  @unique
+  /** Human-readable region. */
+  region   String
+  /** Geographic location for the map. */
+  city     String?
+  /** Latitude / longitude for map placement. */
+  lat      Float?
+  lon      Float?
+
+  health   CdnHealth @default(HEALTHY)
+  /** Cache hit rate as percentage 0..100. */
+  hitRate  Float     @default(0)
+  /** Bandwidth in last 24h (bytes). */
+  bandwidthBytes BigInt @default(0)
+  /** Total requests in last 24h. */
+  requests24h Int     @default(0)
+  /** Avg latency ms. */
+  avgLatencyMs Int    @default(0)
+
+  refreshedAt DateTime?
+
+  createdAt DateTime @default(now())
+  updatedAt DateTime @updatedAt
+
+  @@index([health])
+}
+
+/** Top URL by bandwidth on the CDN. */
+model CdnTopUrl {
+  id String @id @default(cuid())
+
+  url         String
+  bandwidthBytes BigInt @default(0)
+  requests24h Int    @default(0)
+  hitRate     Float  @default(0)
+  contentType String?
+  /** Whether suspected of hotlinking. */
+  suspectedHotlink Boolean @default(false)
+
+  createdAt DateTime @default(now())
+  updatedAt DateTime @updatedAt
+
+  @@index([bandwidthBytes(sort: Desc)])
+}
+
+/** Singleton — image optimization stats snapshot. */
+model ImageOptimizationStats {
+  id String @id @default("default")
+
+  /** Total transforms 24h. */
+  transforms24h Int @default(0)
+  /** Bytes saved (original − served) for 24h. */
+  bytesSaved24h BigInt @default(0)
+  /** Per-format counts. */
+  webpCount24h     Int @default(0)
+  avifCount24h     Int @default(0)
+  jpegCount24h     Int @default(0)
+  pngCount24h      Int @default(0)
+  /** Average optimization ratio (1.0 = no change). */
+  avgRatio         Float @default(1.0)
+
+  /** Top transforms (resize / crop / format / quality). */
+  topTransforms Json?
+
+  refreshedAt DateTime?
+
+  updatedAt DateTime @updatedAt
+  createdAt DateTime @default(now())
+}
+
+/** Lifecycle policy attached to one or more buckets. */
+model StorageLifecyclePolicy {
+  id String @id @default(cuid())
+
+  name        String  @unique
+  description String?
+  /** When this policy applies (e.g. "all", "proofs", "exports"). */
+  scope       String?
+  action      StorageLifecycleAction
+  /** Days threshold for the action. */
+  thresholdDays Int
+  /** Optional second threshold (e.g. expire previous versions after N days). */
+  secondaryThresholdDays Int?
+
+  active      Boolean @default(true)
+  notes       String?
+
+  createdAt DateTime @default(now())
+  updatedAt DateTime @updatedAt
+
+  buckets StorageBucketEntry[]
+
+  @@index([active])
+}
+
+/** Daily egress sample. */
+model EgressDailySample {
+  id String @id @default(cuid())
+
+  /** UTC day. */
+  day        DateTime @unique
+  /** Total egress bytes. */
+  bytes      BigInt   @default(0)
+  /** Cost in cents. */
+  costCents  Int      @default(0)
+  /** Egress by provider (json: {provider: bytes}). */
+  byProvider Json?
+
+  createdAt DateTime @default(now())
+
+  @@index([day])
+}
+
+/** Per-tenant egress + hotlink detection. */
+model EgressTenantUsage {
+  id String @id @default(cuid())
+
+  tenantId  String @unique
+  tenant    Tenant @relation(fields: [tenantId], references: [id], onDelete: Cascade)
+
+  /** Egress bytes in last 30 days. */
+  bytes30d  BigInt @default(0)
+  /** Cost in cents (30d). */
+  cost30dCents Int @default(0)
+  /** Whether hotlinking is suspected. */
+  suspectedHotlink Boolean @default(false)
+  /** Source domain triggering the hotlink flag, if any. */
+  hotlinkSourceDomain String?
+  /** Notes. */
+  notes     String?
+
+  refreshedAt DateTime?
+
+  createdAt DateTime @default(now())
+  updatedAt DateTime @updatedAt
+
+  @@index([bytes30d(sort: Desc)])
+  @@index([suspectedHotlink])
+}
+
+/** Singleton — storage program settings. */
+model StorageSettings {
+  id String @id @default("default")
+
+  /** Monthly cost budget in cents (vs MTD gauge). */
+  monthlyBudgetCents Int @default(0)
+  /** Target CDN hit rate (0..100). */
+  hitRateTargetPct   Int @default(95)
+  /** Default lifecycle policy for new buckets. */
+  defaultLifecyclePolicyId String?
+  /** Notes. */
+  notes              String?
 
   updatedById String?
   updatedAt   DateTime @updatedAt

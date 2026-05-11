@@ -81,6 +81,7 @@ async function main() {
   await seedSystemStatus();                            // Page 56
   await seedQueues(tenants);                           // Page 57
   await seedEmailDeliverability(tenants);              // Page 58
+  await seedStorageCdn(tenants);                       // Page 59
 
   console.log("\n✓ Seed complete.\n");
   await db.$disconnect();
@@ -332,6 +333,11 @@ async function wipeOldSeed() {
   await db.emailSendingDomain.deleteMany({ where: { domain: { contains: "seed-" } } });
   await db.emailTemplateStats.deleteMany({ where: { templateKey: { startsWith: "seed-" } } });
   await db.emailProvider.deleteMany({ where: { key: { startsWith: "seed-" } } });
+  // Page 59 — Storage & CDN wipe.
+  await db.storageBucketEntry.deleteMany({ where: { name: { startsWith: "seed-" } } });
+  await db.storageLifecyclePolicy.deleteMany({ where: { name: { startsWith: "[seed] " } } });
+  await db.cdnPopStats.deleteMany({ where: { popCode: { startsWith: "seed-" } } });
+  await db.cdnTopUrl.deleteMany({ where: { url: { contains: "seed-" } } });
   // Customers tagged seed (after orders are gone).
   await db.customer.deleteMany({ where: { tags: { has: "seed" } } });
   // Products tagged seed (use description marker since Product has no tags array).
@@ -11320,6 +11326,323 @@ async function seedEmailDeliverability(tenants: { id: string; name: string; slug
 
   console.log(
     `  ✓ ${providers.length} providers, ${domains.length} domains, ${templates.length} template stats, ${samples.length} volume samples, ${bounces.length} bounces, 4 complaints, ${suppressions.length} suppressions`,
+  );
+}
+
+/* ── Page 59 — Storage & CDN seed ──────────────────────── */
+
+async function seedStorageCdn(tenants: { id: string; name: string; slug: string }[]) {
+  console.log("── Seeding Storage & CDN (Page 59)…");
+
+  // 1. Settings singleton.
+  await db.storageSettings.upsert({
+    where: { id: "default" },
+    create: {
+      id: "default",
+      monthlyBudgetCents: 1_200_000, // $12,000/mo
+      hitRateTargetPct: 95,
+      notes: "Budget covers S3 + R2 + CDN + egress. Alerts at 75/90/100%.",
+    },
+    update: {},
+  });
+
+  // 2. Lifecycle policies.
+  type LBp = {
+    name: string;
+    description: string;
+    scope: string;
+    action: "ARCHIVE" | "DELETE" | "TRANSITION_IA" | "TRANSITION_GLACIER" | "TRANSITION_DEEP_ARCHIVE" | "EXPIRE_VERSIONS";
+    thresholdDays: number;
+    secondaryThresholdDays?: number;
+    active: boolean;
+  };
+  const policies: LBp[] = [
+    { name: "[seed] Proofs hot→IA 90d", description: "Move proof originals to Infrequent Access after 90 days",
+      scope: "proofs", action: "TRANSITION_IA", thresholdDays: 90, active: true },
+    { name: "[seed] Exports delete 30d", description: "Delete tenant exports after 30 days",
+      scope: "exports", action: "DELETE", thresholdDays: 30, active: true },
+    { name: "[seed] Logs → Glacier 30d", description: "Move CloudTrail/audit logs to Glacier after 30 days",
+      scope: "logs", action: "TRANSITION_GLACIER", thresholdDays: 30, secondaryThresholdDays: 365, active: true },
+    { name: "[seed] Versions expire 90d", description: "Expire previous object versions after 90 days",
+      scope: "all", action: "EXPIRE_VERSIONS", thresholdDays: 90, active: true },
+    { name: "[seed] Trash delete 7d", description: "Hard-delete trashed objects after 7 days",
+      scope: "trash", action: "DELETE", thresholdDays: 7, active: true },
+    { name: "[seed] (paused) Migrate to R2", description: "Old plan — paused while we negotiate egress pricing.",
+      scope: "all", action: "TRANSITION_IA", thresholdDays: 60, active: false },
+  ];
+  const policyIdByName = new Map<string, string>();
+  for (const p of policies) {
+    const saved = await db.storageLifecyclePolicy.upsert({
+      where: { name: p.name },
+      create: {
+        name: p.name, description: p.description, scope: p.scope,
+        action: p.action, thresholdDays: p.thresholdDays,
+        secondaryThresholdDays: p.secondaryThresholdDays ?? null, active: p.active,
+      },
+      update: { active: p.active },
+      select: { id: true, name: true },
+    });
+    policyIdByName.set(saved.name, saved.id);
+  }
+
+  // 3. Buckets.
+  type BBp = {
+    name: string;
+    provider: "AWS_S3" | "CLOUDFLARE_R2" | "GCS" | "AZURE_BLOB" | "BACKBLAZE_B2" | "OTHER";
+    region: string;
+    encryption: "NONE" | "SSE_S3" | "SSE_KMS" | "SSE_CMK" | "CSE";
+    versioning: boolean;
+    publicAccess: "PRIVATE" | "TENANT_GATED" | "PUBLIC_READ" | "PUBLIC_READ_WRITE";
+    objectCount: number;
+    hotBytes: number;
+    archiveBytes: number;
+    monthlyCostCents: number;
+    lifecyclePolicy?: string;
+    tag?: string;
+  };
+  const buckets: BBp[] = [
+    { name: "seed-flowtora-proofs", provider: "AWS_S3", region: "us-east-1",
+      encryption: "SSE_KMS", versioning: true, publicAccess: "TENANT_GATED",
+      objectCount: 1_842_122, hotBytes: 4_200_000_000_000, archiveBytes: 12_400_000_000_000,
+      monthlyCostCents: 280_000, lifecyclePolicy: "[seed] Proofs hot→IA 90d", tag: "proofs" },
+    { name: "seed-flowtora-exports", provider: "AWS_S3", region: "us-east-1",
+      encryption: "SSE_KMS", versioning: false, publicAccess: "TENANT_GATED",
+      objectCount: 12_412, hotBytes: 240_000_000_000, archiveBytes: 0,
+      monthlyCostCents: 24_000, lifecyclePolicy: "[seed] Exports delete 30d", tag: "exports" },
+    { name: "seed-flowtora-assets-prod", provider: "CLOUDFLARE_R2", region: "GLOBAL",
+      encryption: "SSE_S3", versioning: true, publicAccess: "PUBLIC_READ",
+      objectCount: 18_412, hotBytes: 84_000_000_000, archiveBytes: 0,
+      monthlyCostCents: 6_400, lifecyclePolicy: "[seed] Versions expire 90d", tag: "assets" },
+    { name: "seed-flowtora-thumbs", provider: "CLOUDFLARE_R2", region: "GLOBAL",
+      encryption: "SSE_S3", versioning: false, publicAccess: "PUBLIC_READ",
+      objectCount: 38_412_112, hotBytes: 120_000_000_000, archiveBytes: 0,
+      monthlyCostCents: 9_200, lifecyclePolicy: "[seed] Versions expire 90d", tag: "thumbnails" },
+    { name: "seed-flowtora-logs", provider: "AWS_S3", region: "us-east-1",
+      encryption: "SSE_KMS", versioning: false, publicAccess: "PRIVATE",
+      objectCount: 412_412, hotBytes: 320_000_000_000, archiveBytes: 8_400_000_000_000,
+      monthlyCostCents: 18_000, lifecyclePolicy: "[seed] Logs → Glacier 30d", tag: "logs" },
+    { name: "seed-flowtora-staging-proofs", provider: "AWS_S3", region: "us-east-1",
+      encryption: "SSE_S3", versioning: false, publicAccess: "PRIVATE",
+      objectCount: 84_412, hotBytes: 180_000_000_000, archiveBytes: 0,
+      monthlyCostCents: 14_000, lifecyclePolicy: "[seed] Trash delete 7d", tag: "staging" },
+    { name: "seed-flowtora-eu-proofs", provider: "AWS_S3", region: "eu-west-1",
+      encryption: "SSE_KMS", versioning: true, publicAccess: "TENANT_GATED",
+      objectCount: 612_412, hotBytes: 1_800_000_000_000, archiveBytes: 4_200_000_000_000,
+      monthlyCostCents: 124_000, lifecyclePolicy: "[seed] Proofs hot→IA 90d", tag: "proofs-eu" },
+    { name: "seed-flowtora-public-images", provider: "AWS_S3", region: "us-east-1",
+      encryption: "SSE_S3", versioning: false, publicAccess: "PUBLIC_READ",
+      objectCount: 412, hotBytes: 8_400_000_000, archiveBytes: 0,
+      monthlyCostCents: 1_200, tag: "marketing" },
+    { name: "seed-flowtora-backbone-azure", provider: "AZURE_BLOB", region: "eastus2",
+      encryption: "SSE_KMS", versioning: false, publicAccess: "PRIVATE",
+      objectCount: 412, hotBytes: 2_400_000_000, archiveBytes: 0,
+      monthlyCostCents: 800, tag: "internal" },
+  ];
+  for (const b of buckets) {
+    await db.storageBucketEntry.upsert({
+      where: { name: b.name },
+      create: {
+        name: b.name, provider: b.provider, region: b.region,
+        encryption: b.encryption, versioning: b.versioning, publicAccess: b.publicAccess,
+        objectCount: BigInt(b.objectCount),
+        sizeBytes: BigInt(b.hotBytes + b.archiveBytes),
+        hotBytes: BigInt(b.hotBytes), archiveBytes: BigInt(b.archiveBytes),
+        monthlyCostCents: b.monthlyCostCents,
+        lifecyclePolicyId: b.lifecyclePolicy ? policyIdByName.get(b.lifecyclePolicy) ?? null : null,
+        tag: b.tag ?? null,
+        lastRefreshedAt: minutesAgo(randInt(5, 120)),
+      },
+      update: {
+        objectCount: BigInt(b.objectCount),
+        sizeBytes: BigInt(b.hotBytes + b.archiveBytes),
+        hotBytes: BigInt(b.hotBytes), archiveBytes: BigInt(b.archiveBytes),
+        monthlyCostCents: b.monthlyCostCents,
+      },
+    });
+  }
+
+  // 4. Per-tenant usage.
+  for (let i = 0; i < tenants.length; i++) {
+    const t = tenants[i]!;
+    const limitBytes = (i === 0 ? 500 : i === 1 ? 200 : 50) * 1_000_000_000; // GB
+    const usedBytes = Math.floor(limitBytes * (0.3 + Math.random() * 0.6));
+    const anomaly = i === 0 && Math.random() > 0.5;
+    await db.tenantStorageUsage.upsert({
+      where: { tenantId: t.id },
+      create: {
+        tenantId: t.id,
+        storageBytes: BigInt(usedBytes),
+        limitBytes: BigInt(limitBytes),
+        bandwidth30dBytes: BigInt(usedBytes * 4),
+        fileCount: Math.floor(usedBytes / 1_500_000),
+        largestFolder: ["/proofs/2026/04", "/exports/2026", "/customer-uploads"][i % 3]!,
+        anomalyFlag: anomaly,
+        anomalyReason: anomaly ? "Storage grew 220% in last 7 days" : null,
+        refreshedAt: minutesAgo(randInt(10, 60)),
+      },
+      update: {
+        storageBytes: BigInt(usedBytes),
+        bandwidth30dBytes: BigInt(usedBytes * 4),
+        anomalyFlag: anomaly,
+        anomalyReason: anomaly ? "Storage grew 220% in last 7 days" : null,
+      },
+    });
+  }
+
+  // 5. CDN POPs.
+  type PBp = {
+    popCode: string; region: string; city: string;
+    lat: number; lon: number;
+    health: "HEALTHY" | "DEGRADED" | "WARNING" | "OFFLINE";
+    hitRate: number; bandwidthBytes: number; requests24h: number; avgLatencyMs: number;
+  };
+  const pops: PBp[] = [
+    { popCode: "seed-iad1",  region: "us-east",      city: "Ashburn, VA",    lat: 38.9472, lon: -77.6307, health: "HEALTHY",  hitRate: 96.4, bandwidthBytes: 8_400_000_000_000, requests24h: 41_812_122, avgLatencyMs: 38 },
+    { popCode: "seed-pdx1",  region: "us-west",      city: "Portland, OR",   lat: 45.5231, lon: -122.6765, health: "HEALTHY",  hitRate: 95.8, bandwidthBytes: 4_200_000_000_000, requests24h: 18_412_842, avgLatencyMs: 42 },
+    { popCode: "seed-ord1",  region: "us-central",   city: "Chicago, IL",    lat: 41.8781, lon: -87.6298, health: "HEALTHY",  hitRate: 96.1, bandwidthBytes: 3_800_000_000_000, requests24h: 16_412_412, avgLatencyMs: 36 },
+    { popCode: "seed-lhr1",  region: "eu-west",      city: "London, UK",     lat: 51.5074, lon: -0.1278,  health: "HEALTHY",  hitRate: 95.2, bandwidthBytes: 3_400_000_000_000, requests24h: 14_812_412, avgLatencyMs: 28 },
+    { popCode: "seed-fra1",  region: "eu-central",   city: "Frankfurt, DE",  lat: 50.1109, lon: 8.6821,   health: "DEGRADED", hitRate: 88.4, bandwidthBytes: 2_400_000_000_000, requests24h: 9_412_412, avgLatencyMs: 64 },
+    { popCode: "seed-cdg1",  region: "eu-west",      city: "Paris, FR",      lat: 48.8566, lon: 2.3522,   health: "HEALTHY",  hitRate: 95.7, bandwidthBytes: 1_800_000_000_000, requests24h: 7_812_412, avgLatencyMs: 32 },
+    { popCode: "seed-syd1",  region: "ap-southeast", city: "Sydney, AU",     lat: -33.8688, lon: 151.2093, health: "HEALTHY",  hitRate: 94.1, bandwidthBytes: 1_400_000_000_000, requests24h: 5_412_412, avgLatencyMs: 88 },
+    { popCode: "seed-hnd1",  region: "ap-northeast", city: "Tokyo, JP",      lat: 35.6762, lon: 139.6503, health: "HEALTHY",  hitRate: 94.8, bandwidthBytes: 1_200_000_000_000, requests24h: 4_812_412, avgLatencyMs: 78 },
+    { popCode: "seed-gru1",  region: "sa-east",      city: "São Paulo, BR",  lat: -23.5505, lon: -46.6333, health: "WARNING",  hitRate: 84.2, bandwidthBytes: 820_000_000_000,   requests24h: 3_412_412, avgLatencyMs: 142 },
+    { popCode: "seed-bom1",  region: "ap-south",     city: "Mumbai, IN",     lat: 19.0760, lon: 72.8777,  health: "HEALTHY",  hitRate: 93.1, bandwidthBytes: 920_000_000_000,   requests24h: 4_212_412, avgLatencyMs: 96 },
+    { popCode: "seed-yto1",  region: "ca-east",      city: "Toronto, CA",    lat: 43.6532, lon: -79.3832, health: "HEALTHY",  hitRate: 95.9, bandwidthBytes: 1_120_000_000_000, requests24h: 5_012_412, avgLatencyMs: 34 },
+    { popCode: "seed-dxb1",  region: "me-south",     city: "Dubai, AE",      lat: 25.2048, lon: 55.2708,  health: "DEGRADED", hitRate: 86.4, bandwidthBytes: 412_000_000_000,   requests24h: 1_812_412, avgLatencyMs: 110 },
+  ];
+  for (const p of pops) {
+    await db.cdnPopStats.upsert({
+      where: { popCode: p.popCode },
+      create: {
+        popCode: p.popCode, region: p.region, city: p.city, lat: p.lat, lon: p.lon,
+        health: p.health, hitRate: p.hitRate,
+        bandwidthBytes: BigInt(p.bandwidthBytes),
+        requests24h: p.requests24h, avgLatencyMs: p.avgLatencyMs,
+        refreshedAt: minutesAgo(randInt(2, 30)),
+      },
+      update: {
+        health: p.health, hitRate: p.hitRate,
+        bandwidthBytes: BigInt(p.bandwidthBytes),
+        requests24h: p.requests24h, avgLatencyMs: p.avgLatencyMs,
+        refreshedAt: minutesAgo(randInt(2, 30)),
+      },
+    });
+  }
+
+  // 6. Top URLs.
+  type UBp = { url: string; bandwidthBytes: number; requests24h: number; hitRate: number; contentType: string; suspectedHotlink?: boolean };
+  const topUrls: UBp[] = [
+    { url: "https://cdn.flowtora.com/seed-/assets/marketing/hero-v2.webp",  bandwidthBytes: 1_800_000_000_000, requests24h: 4_212_412, hitRate: 98.4, contentType: "image/webp" },
+    { url: "https://cdn.flowtora.com/seed-/assets/js/app-2026.04.js",         bandwidthBytes: 1_200_000_000_000, requests24h: 8_412_412, hitRate: 99.1, contentType: "application/javascript" },
+    { url: "https://cdn.flowtora.com/seed-/assets/marketing/demo.mp4",        bandwidthBytes: 840_000_000_000,   requests24h: 412_412,   hitRate: 96.2, contentType: "video/mp4", suspectedHotlink: true },
+    { url: "https://cdn.flowtora.com/seed-/assets/css/app-2026.04.css",       bandwidthBytes: 412_000_000_000,   requests24h: 8_412_412, hitRate: 99.4, contentType: "text/css" },
+    { url: "https://cdn.flowtora.com/seed-/proofs/preview/abc-thumb.webp",   bandwidthBytes: 380_000_000_000,   requests24h: 1_812_412, hitRate: 92.8, contentType: "image/webp" },
+    { url: "https://cdn.flowtora.com/seed-/assets/fonts/inter-var.woff2",     bandwidthBytes: 220_000_000_000,   requests24h: 8_212_412, hitRate: 99.6, contentType: "font/woff2" },
+    { url: "https://cdn.flowtora.com/seed-/assets/marketing/feature.gif",     bandwidthBytes: 184_000_000_000,   requests24h: 142_412,   hitRate: 88.4, contentType: "image/gif", suspectedHotlink: true },
+    { url: "https://cdn.flowtora.com/seed-/assets/icons/sprite.svg",          bandwidthBytes: 142_000_000_000,   requests24h: 7_412_412, hitRate: 99.4, contentType: "image/svg+xml" },
+    { url: "https://cdn.flowtora.com/seed-/assets/marketing/og-image.jpg",    bandwidthBytes: 142_000_000_000,   requests24h: 1_412_412, hitRate: 97.2, contentType: "image/jpeg" },
+    { url: "https://cdn.flowtora.com/seed-/proofs/preview/xyz-thumb.webp",   bandwidthBytes: 120_000_000_000,   requests24h: 612_412,   hitRate: 92.1, contentType: "image/webp" },
+  ];
+  for (const u of topUrls) {
+    await db.cdnTopUrl.create({
+      data: {
+        url: u.url,
+        bandwidthBytes: BigInt(u.bandwidthBytes),
+        requests24h: u.requests24h,
+        hitRate: u.hitRate,
+        contentType: u.contentType,
+        suspectedHotlink: u.suspectedHotlink ?? false,
+      },
+    });
+  }
+
+  // 7. Image optimization stats.
+  await db.imageOptimizationStats.upsert({
+    where: { id: "default" },
+    create: {
+      id: "default",
+      transforms24h: 4_812_412,
+      bytesSaved24h: BigInt(840_000_000_000),
+      webpCount24h: 2_812_412, avifCount24h: 1_212_412,
+      jpegCount24h: 612_412, pngCount24h: 184_412,
+      avgRatio: 3.4,
+      topTransforms: [
+        { name: "resize:400x400", count: 1_812_412 },
+        { name: "resize:200x200", count: 1_412_412 },
+        { name: "format:webp",    count: 1_212_412 },
+        { name: "format:avif",    count: 612_412 },
+        { name: "crop:focal",     count: 412_412 },
+        { name: "quality:80",     count: 312_412 },
+        { name: "resize:1200x", count: 220_412 },
+        { name: "format:jpeg-progressive", count: 118_412 },
+      ] as never,
+      refreshedAt: minutesAgo(10),
+    },
+    update: {
+      transforms24h: 4_812_412,
+      bytesSaved24h: BigInt(840_000_000_000),
+      refreshedAt: minutesAgo(10),
+    },
+  });
+
+  // 8. Egress daily samples (30 days).
+  let egressCount = 0;
+  for (let i = 29; i >= 0; i--) {
+    const day = new Date(Date.now() - i * 86_400_000);
+    day.setUTCHours(0, 0, 0, 0);
+    const bytes = (1.4 + Math.random() * 0.4) * 1_000_000_000_000; // 1.4-1.8 TB
+    const cost = Math.floor(bytes / 1_000_000_000_000 * 90 * 100); // ~$90/TB in cents
+    const byProvider = {
+      "AWS_S3": Math.floor(bytes * 0.7),
+      "CLOUDFLARE_R2": Math.floor(bytes * 0.25),
+      "AZURE_BLOB": Math.floor(bytes * 0.05),
+    };
+    await db.egressDailySample.upsert({
+      where: { day },
+      create: {
+        day,
+        bytes: BigInt(Math.floor(bytes)),
+        costCents: cost,
+        byProvider: byProvider as never,
+      },
+      update: {
+        bytes: BigInt(Math.floor(bytes)),
+        costCents: cost,
+        byProvider: byProvider as never,
+      },
+    });
+    egressCount++;
+  }
+
+  // 9. Per-tenant egress.
+  for (let i = 0; i < tenants.length; i++) {
+    const t = tenants[i]!;
+    const bytes = (i === 0 ? 8 : i === 1 ? 12 : 4) * 1_000_000_000_000; // 4-12 TB
+    const cost = Math.floor(bytes / 1_000_000_000_000 * 90 * 100);
+    const hotlink = i === 1;
+    await db.egressTenantUsage.upsert({
+      where: { tenantId: t.id },
+      create: {
+        tenantId: t.id,
+        bytes30d: BigInt(bytes),
+        cost30dCents: cost,
+        suspectedHotlink: hotlink,
+        hotlinkSourceDomain: hotlink ? "competitor-site.example" : null,
+        notes: hotlink ? "Spike from referer competitor-site.example — investigating" : null,
+        refreshedAt: minutesAgo(randInt(5, 60)),
+      },
+      update: {
+        bytes30d: BigInt(bytes),
+        cost30dCents: cost,
+        suspectedHotlink: hotlink,
+        hotlinkSourceDomain: hotlink ? "competitor-site.example" : null,
+        notes: hotlink ? "Spike from referer competitor-site.example — investigating" : null,
+      },
+    });
+  }
+
+  console.log(
+    `  ✓ ${buckets.length} buckets, ${policies.length} lifecycle policies, ${pops.length} CDN POPs, ${topUrls.length} top URLs, ${egressCount} egress samples, ${tenants.length} tenant usage + egress rows`,
   );
 }
 
