@@ -292,6 +292,10 @@ export type PlatformPermission =
   | "logs.read"
   | "logs.manage"
   | "logs.resolve"
+  // Configuration — Page 66 Branding & White-Label
+  | "branding.read"
+  | "branding.manage"
+  | "branding.tenant_manage"
 
   // Analytics / BI
   | "analytics.read"
@@ -348,6 +352,7 @@ const PLATFORM_ALL: PlatformPermission[] = [
   "ratelimits.read", "ratelimits.manage",
   "env.read", "env.reveal", "env.manage",
   "logs.read", "logs.manage", "logs.resolve",
+  "branding.read", "branding.manage", "branding.tenant_manage",
   "analytics.read", "analytics.export", "revenue.read", "usage.read",
   "reports.read", "reports.create", "reports.edit", "reports.delete",
   "reports.schedule", "reports.export",
@@ -362,7 +367,7 @@ const PLATFORM_ALL: PlatformPermission[] = [
 const PLATFORM_BASELINE_READ: PlatformPermission[] = [
   "tenant.read", "billing.read", "staff.read", "users.read",
   "support.read", "health.read", "audit.read", "compliance.read",
-  "feature_flag.read", "announcement.read", "leads.read", "referrals.read", "affiliates.read", "seo.read", "integrations.read", "webhooks.read", "docs.read", "marketplace.read", "sso.read", "security.read", "privacy.read", "backups.read", "incidents.read", "network.read", "system.status.read", "queues.read", "email.deliverability.read", "storage.read", "database.read", "ratelimits.read", "env.read", "logs.read",
+  "feature_flag.read", "announcement.read", "leads.read", "referrals.read", "affiliates.read", "seo.read", "integrations.read", "webhooks.read", "docs.read", "marketplace.read", "sso.read", "security.read", "privacy.read", "backups.read", "incidents.read", "network.read", "system.status.read", "queues.read", "email.deliverability.read", "storage.read", "database.read", "ratelimits.read", "env.read", "logs.read", "branding.read",
   "analytics.read", "revenue.read", "usage.read",
   "reports.read", "reports.export", // every staff role reads + can export
   "system.read_settings", "notifications.read",
@@ -431,6 +436,7 @@ export const PLATFORM_ROLE_PERMISSIONS: Record<PlatformRole, PlatformPermission[
     "database.manage",
     "ratelimits.manage",
     "logs.resolve", // ops lead triages errors
+    "branding.tenant_manage", // CSM-style per-tenant brand profile application
     "analytics.export",
     "reports.create", "reports.edit", "reports.schedule",
     "notifications.manage",
@@ -498,6 +504,7 @@ export const PLATFORM_ROLE_PERMISSIONS: Record<PlatformRole, PlatformPermission[
     "analytics.read", "analytics.export",
     "notifications.read", "notifications.manage",
     "email.deliverability.read", "email.deliverability.manage",
+    "branding.read", "branding.manage", // Brand Admin lives in Marketing
   ]),
   // Internal CMS — announcements + transactional templates, nothing else.
   CONTENT_MANAGER: dedup([

@@ -88,6 +88,7 @@ async function main() {
   await seedEnvVars();                                 // Page 63
   await seedLogs();                                    // Page 64
   await seedPlatformSettings();                        // Page 65
+  await seedBranding(tenants);                         // Page 66
 
   console.log("\n✓ Seed complete.\n");
   await db.$disconnect();
@@ -366,6 +367,15 @@ async function wipeOldSeed() {
   await db.platformSettingsChange.deleteMany({ where: { actorEmail: { in: [
     "founder@flowtora.com", "sre@flowtora.com", "growth@flowtora.com",
     "ops@flowtora.com", "security@flowtora.com",
+  ] } } });
+  // Page 66 — Branding & White-Label wipe.
+  await db.whiteLabelProfile.deleteMany({ where: { key: { startsWith: "seed-" } } });
+  await db.tenantBranding.deleteMany({ where: { lastEditByEmail: { in: [
+    "design@flowtora.com", "csm@flowtora.com", "founder@flowtora.com",
+  ] } } });
+  await db.brandingChange.deleteMany({ where: { actorEmail: { in: [
+    "design@flowtora.com", "founder@flowtora.com", "csm@flowtora.com",
+    "growth@flowtora.com", "ops@flowtora.com",
   ] } } });
   // Customers tagged seed (after orders are gone).
   await db.customer.deleteMany({ where: { tags: { has: "seed" } } });
@@ -13788,6 +13798,353 @@ async function seedPlatformSettings() {
 
   console.log(
     `  ✓ Singleton settings + ${changes.length} historical change events (across ${new Set(changes.map((c) => c.section)).size} sections)`,
+  );
+}
+
+/* ── Page 66 — Branding & White-Label seed ─────────────── */
+
+async function seedBranding(tenants: { id: string; name: string; slug: string }[]) {
+  console.log("── Seeding Branding & White-Label (Page 66)…");
+
+  // 1. Flowtora brand singleton — realistic values.
+  await db.brandSettings.upsert({
+    where: { id: "default" },
+    create: {
+      id: "default",
+      logoFullColorUrl:  "https://flowtora.com/brand/logo-full-color.svg",
+      logoMonochromeUrl: "https://flowtora.com/brand/logo-mono.svg",
+      faviconUrl:        "https://flowtora.com/favicon.ico",
+      socialCardUrl:     "https://flowtora.com/brand/og-card.png",
+      appIconUrl:        "https://flowtora.com/brand/app-icon-512.png",
+      primaryColor:      "#5A4FD9",
+      accentColor:       "#22C55E",
+      backgroundColor:   "#FFFFFF",
+      textColor:         "#0F172A",
+      primaryFont:       "Inter",
+      headingFont:       "Plus Jakarta Sans",
+      bodyFont:          "Inter",
+      brandKitZipUrl:    "https://flowtora.com/brand/flowtora-brand-kit.zip",
+      brandGuidelinesUrl: "https://www.notion.so/flowtora/Brand-Guidelines",
+      emailFooterMjml: `<mj-section background-color="#F8FAFC">
+  <mj-column>
+    <mj-text font-size="11px" color="#64748B" align="center">
+      © {{year}} Flowtora Inc. · 2261 Market St #4242, San Francisco, CA 94114<br/>
+      <a href="{{unsubscribe_url}}" style="color:#64748B">Unsubscribe</a> ·
+      <a href="https://flowtora.com/privacy" style="color:#64748B">Privacy</a>
+    </mj-text>
+  </mj-column>
+</mj-section>`,
+      emailFooterHtml: `<table width="100%" style="background:#F8FAFC;font-family:Inter,sans-serif;font-size:11px;color:#64748B;padding:16px;text-align:center;"><tr><td>© 2026 Flowtora Inc. · 2261 Market St #4242, San Francisco, CA 94114<br/><a href="#" style="color:#64748B">Unsubscribe</a> · <a href="https://flowtora.com/privacy" style="color:#64748B">Privacy</a></td></tr></table>`,
+      loginHeroImageUrl:     "https://flowtora.com/brand/login-hero.png",
+      loginHeadline:         "Run your sign or print shop without the spreadsheet sprawl.",
+      loginSubtext:          "Sign in to manage quotes, jobs, vendors, and payments — all in one place.",
+      loginBackgroundColor:  "#F8FAFC",
+      loginCtaText:          "Sign in",
+      loginMarketingCopy:    "Trusted by 1,200+ sign shops and print studios across North America.",
+      loginSocialProofJson: [
+        { name: "Maria Chen",   role: "Owner, Bright Light Signs",
+          quote: "We cut quoting time from 25 minutes to 4. Hard to imagine going back.",
+          avatarUrl: "https://i.pravatar.cc/64?img=12" },
+        { name: "James Park",   role: "Production Manager, Acme Storefronts",
+          quote: "Vendor portals and job tracking in one place finally killed the spreadsheet.",
+          avatarUrl: "https://i.pravatar.cc/64?img=33" },
+        { name: "Aisha Rahman", role: "GM, Castle Signage Co.",
+          quote: "AI quote suggestions paid for the year-1 cost in our first month.",
+          avatarUrl: "https://i.pravatar.cc/64?img=47" },
+      ] as never,
+      poweredByMode:         "BY_PLAN",
+      poweredByEnabledPlans: ["STARTER", "GROWTH"],
+      poweredByBadgeVariant: "default",
+      updatedByEmail:        "design@flowtora.com",
+    },
+    update: {
+      primaryColor: "#5A4FD9", accentColor: "#22C55E",
+      headingFont: "Plus Jakarta Sans",
+      loginHeadline: "Run your sign or print shop without the spreadsheet sprawl.",
+      loginSubtext:  "Sign in to manage quotes, jobs, vendors, and payments — all in one place.",
+      poweredByMode: "BY_PLAN",
+      poweredByEnabledPlans: ["STARTER", "GROWTH"],
+    },
+  });
+
+  // 2. White-label profiles — 5 of them, mix of Flowtora-owned and reseller.
+  type ProfileBp = {
+    key: string; name: string; description: string;
+    reseller?: string; // tenant slug
+    isDefault?: boolean;
+    active?: boolean;
+    primary: string; accent: string; bg: string; text: string;
+    primaryFont: string; headingFont: string;
+    logoLight?: string; logoDark?: string; favicon?: string; emailLogo?: string; pwaFavicon?: string;
+    customDomain?: string; subdomain?: string; loginSlug?: string;
+    emailFromName?: string; emailFromDomain?: string;
+    footerText?: string; social?: Record<string, string>;
+    loginHeadline?: string; loginSubtext?: string; loginBg?: string; loginCta?: string; loginCopy?: string;
+    removeFlowtora?: boolean;
+    smsSender?: string;
+  };
+  const slug0 = tenants[0]?.slug;
+  const slug1 = tenants[1]?.slug;
+  const profiles: ProfileBp[] = [
+    {
+      key: "seed-flowtora-default",
+      name: "Flowtora Default",
+      description: "Flowtora's own brand. Auto-applied unless a tenant has a custom profile.",
+      isDefault: true, active: true,
+      primary: "#5A4FD9", accent: "#22C55E", bg: "#FFFFFF", text: "#0F172A",
+      primaryFont: "Inter", headingFont: "Plus Jakarta Sans",
+      logoLight: "https://flowtora.com/brand/logo-full-color.svg",
+      logoDark:  "https://flowtora.com/brand/logo-mono.svg",
+      favicon:   "https://flowtora.com/favicon.ico",
+      emailLogo: "https://flowtora.com/brand/email-logo.png",
+      loginHeadline: "Run your sign or print shop without the spreadsheet sprawl.",
+      loginCta:      "Sign in",
+      footerText: "Made with ♥ in San Francisco",
+      social: { twitter: "https://twitter.com/flowtora", linkedin: "https://linkedin.com/company/flowtora" },
+    },
+    {
+      key: "seed-printshop-pro",
+      name: "PrintShop Pro (Reseller)",
+      description: "Reseller brand for PrintShop Pro — sold to mid-market print shops.",
+      reseller: slug0, active: true,
+      primary: "#0EA5E9", accent: "#F59E0B", bg: "#FFFFFF", text: "#0F172A",
+      primaryFont: "Inter", headingFont: "Manrope",
+      logoLight: "https://printshop.pro/logo-light.svg",
+      logoDark:  "https://printshop.pro/logo-dark.svg",
+      favicon:   "https://printshop.pro/favicon.ico",
+      emailLogo: "https://printshop.pro/email-logo.png",
+      customDomain: "app.printshop.pro", subdomain: "app", loginSlug: "login",
+      emailFromName: "PrintShop Pro", emailFromDomain: "printshop.pro",
+      footerText: "PrintShop Pro — your back-office. Powered by Flowtora.",
+      loginHeadline: "Your print shop, one screen.",
+      loginSubtext:  "Estimates, jobs, vendors, payments — without the chaos.",
+      loginCta:      "Sign in",
+      social: { twitter: "https://twitter.com/printshoppro" },
+    },
+    {
+      key: "seed-signaire-enterprise",
+      name: "Signaire (White-label)",
+      description: "Enterprise white-label for Signaire Group — Flowtora mentions removed.",
+      reseller: slug1, active: true,
+      primary: "#16A34A", accent: "#A855F7", bg: "#FAFAFA", text: "#171717",
+      primaryFont: "Outfit", headingFont: "Outfit",
+      logoLight: "https://signaire.com/brand/logo.svg",
+      logoDark:  "https://signaire.com/brand/logo-dark.svg",
+      favicon:   "https://signaire.com/favicon.ico",
+      emailLogo: "https://signaire.com/email-logo.png",
+      pwaFavicon: "https://signaire.com/pwa-icon-512.png",
+      customDomain: "app.signaire.com", subdomain: "app", loginSlug: "sign-in",
+      emailFromName: "Signaire", emailFromDomain: "signaire.com",
+      footerText: "© 2026 Signaire Group. All rights reserved.",
+      loginHeadline: "The Signaire operating system.",
+      loginSubtext:  "Sign in to your shop.",
+      loginCta:      "Enter Signaire",
+      removeFlowtora: true,
+      smsSender: "SIGNAIRE",
+      social: { linkedin: "https://linkedin.com/company/signaire" },
+    },
+    {
+      key: "seed-trade-shows-co",
+      name: "Trade Shows Co.",
+      description: "Industry reseller — Trade Shows Co. resells Flowtora at trade fairs.",
+      active: true,
+      primary: "#DC2626", accent: "#FBBF24", bg: "#FFFBEB", text: "#1F2937",
+      primaryFont: "Poppins", headingFont: "Poppins",
+      logoLight: "https://tradeshows.co/logo.svg",
+      favicon:   "https://tradeshows.co/favicon.ico",
+      customDomain: "shows.flowtora.com", subdomain: "shows",
+      emailFromName: "Trade Shows Co.", emailFromDomain: "tradeshows.co",
+      footerText: "Trade Shows Co. · Powered by Flowtora",
+      loginHeadline: "Trade shop access.",
+      loginCta: "Get started",
+    },
+    {
+      key: "seed-legacy-archived",
+      name: "Legacy Reseller (Archived)",
+      description: "Old reseller program from before the 2026 rebrand. Kept for audit.",
+      active: false,
+      primary: "#7C3AED", accent: "#06B6D4", bg: "#FFFFFF", text: "#0F172A",
+      primaryFont: "Inter", headingFont: "Inter",
+      footerText: "Legacy reseller — superseded by PrintShop Pro.",
+    },
+  ];
+  const tenantBySlug = new Map(tenants.map((t) => [t.slug, t.id]));
+  const profileByKey = new Map<string, string>();
+  for (const p of profiles) {
+    const resellerId = p.reseller ? tenantBySlug.get(p.reseller) ?? null : null;
+    const row = await db.whiteLabelProfile.upsert({
+      where: { key: p.key },
+      create: {
+        key: p.key, name: p.name, description: p.description,
+        resellerTenantId: resellerId,
+        isDefault: p.isDefault ?? false,
+        active: p.active ?? true,
+        logoLightUrl: p.logoLight ?? null,
+        logoDarkUrl:  p.logoDark  ?? null,
+        faviconUrl:   p.favicon   ?? null,
+        emailLogoUrl: p.emailLogo ?? null,
+        pwaFaviconUrl: p.pwaFavicon ?? null,
+        primaryColor: p.primary, accentColor: p.accent,
+        backgroundColor: p.bg, textColor: p.text,
+        primaryFont: p.primaryFont, headingFont: p.headingFont,
+        customDomain: p.customDomain ?? null,
+        subdomain:    p.subdomain    ?? null,
+        loginUrlSlug: p.loginSlug    ?? null,
+        emailFromName:   p.emailFromName   ?? null,
+        emailFromDomain: p.emailFromDomain ?? null,
+        footerText: p.footerText ?? null,
+        socialLinksJson: p.social ? (p.social as never) : undefined,
+        loginHeadline: p.loginHeadline ?? null,
+        loginSubtext:  p.loginSubtext  ?? null,
+        loginBackgroundColor: p.loginBg ?? null,
+        loginCtaText:  p.loginCta ?? null,
+        loginMarketingCopy: p.loginCopy ?? null,
+        removeFlowtoraMentions: p.removeFlowtora ?? false,
+        smsSenderName: p.smsSender ?? null,
+      },
+      update: {
+        name: p.name, description: p.description,
+        resellerTenantId: resellerId,
+        isDefault: p.isDefault ?? false,
+        active: p.active ?? true,
+        primaryColor: p.primary, accentColor: p.accent,
+        backgroundColor: p.bg, textColor: p.text,
+        primaryFont: p.primaryFont, headingFont: p.headingFont,
+        removeFlowtoraMentions: p.removeFlowtora ?? false,
+        smsSenderName: p.smsSender ?? null,
+      },
+    });
+    profileByKey.set(p.key, row.id);
+  }
+
+  // 3. Tenant branding applications.
+  type TBp = { slug: string; profileKey: string; overrides?: boolean; primaryOverride?: string; logoOverride?: string; loginHeadlineOverride?: string; poweredBy?: boolean | null; editor: string };
+  const apps: TBp[] = [];
+  if (tenants[0]) apps.push({
+    slug: tenants[0].slug, profileKey: "seed-printshop-pro",
+    primaryOverride: "#0284C7",
+    loginHeadlineOverride: "Acme Storefronts · login",
+    overrides: true,
+    poweredBy: true,
+    editor: "csm@flowtora.com",
+  });
+  if (tenants[1]) apps.push({
+    slug: tenants[1].slug, profileKey: "seed-signaire-enterprise",
+    poweredBy: false, // White-label — no badge.
+    editor: "founder@flowtora.com",
+  });
+  if (tenants[2]) apps.push({
+    slug: tenants[2].slug, profileKey: "seed-trade-shows-co",
+    poweredBy: null, // Follow policy.
+    editor: "csm@flowtora.com",
+  });
+  let appCount = 0;
+  for (const a of apps) {
+    const tenantId = tenantBySlug.get(a.slug);
+    const profileId = profileByKey.get(a.profileKey);
+    if (!tenantId || !profileId) continue;
+    await db.tenantBranding.upsert({
+      where: { tenantId },
+      create: {
+        tenantId, profileId,
+        hasCustomOverrides: !!a.overrides,
+        primaryColorOverride: a.primaryOverride ?? null,
+        logoOverrideUrl: a.logoOverride ?? null,
+        loginHeadlineOverride: a.loginHeadlineOverride ?? null,
+        poweredByEnabled: a.poweredBy ?? null,
+        lastEditByEmail: a.editor,
+        lastEditAt: daysAgo(randInt(1, 30)),
+      },
+      update: {
+        profileId,
+        hasCustomOverrides: !!a.overrides,
+        primaryColorOverride: a.primaryOverride ?? null,
+        logoOverrideUrl: a.logoOverride ?? null,
+        loginHeadlineOverride: a.loginHeadlineOverride ?? null,
+        poweredByEnabled: a.poweredBy ?? null,
+        lastEditByEmail: a.editor,
+        lastEditAt: daysAgo(randInt(1, 30)),
+      },
+    });
+    appCount++;
+  }
+
+  // 4. Change history.
+  type ChBp = { kind: "BRAND_SETTINGS" | "PROFILE_CREATED" | "PROFILE_UPDATED" | "PROFILE_APPLIED" | "TENANT_BRANDING" | "POWERED_BY" | "EMAIL_FOOTER" | "LOGIN_PAGE"; entityLabel?: string; entityId?: string; actor: string; summary: string; hoursAgo: number; fields?: string[] };
+  const changes: ChBp[] = [
+    { kind: "BRAND_SETTINGS",  actor: "design@flowtora.com",
+      entityLabel: "Flowtora Brand",
+      summary: "Initial brand setup — colors, logo, typography",
+      fields: ["primaryColor", "accentColor", "primaryFont", "headingFont"],
+      hoursAgo: 365 * 24 },
+    { kind: "EMAIL_FOOTER", actor: "design@flowtora.com",
+      entityLabel: "Email Footer",
+      summary: "Initial MJML footer template",
+      hoursAgo: 365 * 24 - 4 },
+    { kind: "LOGIN_PAGE", actor: "growth@flowtora.com",
+      entityLabel: "Login Page Default",
+      summary: "Added social proof from 3 customers + new hero copy",
+      hoursAgo: 60 * 24 },
+    { kind: "PROFILE_CREATED", entityLabel: "PrintShop Pro (Reseller)", entityId: profileByKey.get("seed-printshop-pro"),
+      actor: "founder@flowtora.com",
+      summary: "Created PrintShop Pro reseller profile",
+      hoursAgo: 90 * 24 },
+    { kind: "PROFILE_UPDATED", entityLabel: "PrintShop Pro (Reseller)", entityId: profileByKey.get("seed-printshop-pro"),
+      actor: "design@flowtora.com",
+      summary: "Tuned PrintShop Pro accent color to match their refreshed brand",
+      fields: ["accentColor"], hoursAgo: 14 * 24 },
+    { kind: "PROFILE_CREATED", entityLabel: "Signaire (White-label)", entityId: profileByKey.get("seed-signaire-enterprise"),
+      actor: "founder@flowtora.com",
+      summary: "Created Signaire white-label profile — Enterprise contract signed",
+      hoursAgo: 45 * 24 },
+    { kind: "PROFILE_UPDATED", entityLabel: "Signaire (White-label)", entityId: profileByKey.get("seed-signaire-enterprise"),
+      actor: "design@flowtora.com",
+      summary: "Switched Signaire to Outfit font + green primary",
+      fields: ["primaryColor", "primaryFont", "headingFont"],
+      hoursAgo: 30 * 24 },
+    { kind: "PROFILE_APPLIED",
+      entityLabel: tenants[0]?.name ?? "Tenant",
+      entityId: tenants[0]?.id,
+      actor: "csm@flowtora.com",
+      summary: `Applied PrintShop Pro profile to ${tenants[0]?.name ?? "tenant"} with custom primary override`,
+      hoursAgo: 14 * 24 },
+    { kind: "PROFILE_APPLIED",
+      entityLabel: tenants[1]?.name ?? "Tenant",
+      entityId: tenants[1]?.id,
+      actor: "founder@flowtora.com",
+      summary: `Applied Signaire white-label profile to ${tenants[1]?.name ?? "tenant"} — Powered-By forced OFF`,
+      hoursAgo: 25 * 24 },
+    { kind: "POWERED_BY", actor: "growth@flowtora.com",
+      entityLabel: "Powered-By policy",
+      summary: "Switched Powered-By policy from ALWAYS_ON to BY_PLAN (STARTER + GROWTH only)",
+      fields: ["poweredByMode", "poweredByEnabledPlans"],
+      hoursAgo: 7 * 24 },
+    { kind: "TENANT_BRANDING",
+      entityLabel: "Legacy tenant",
+      actor: "ops@flowtora.com",
+      summary: "Reverted legacy tenant to default after reseller contract expired",
+      hoursAgo: 3 * 24 },
+    { kind: "PROFILE_CREATED", entityLabel: "Trade Shows Co.", entityId: profileByKey.get("seed-trade-shows-co"),
+      actor: "founder@flowtora.com",
+      summary: "Created Trade Shows Co. reseller profile after FabTech booth",
+      hoursAgo: 18 * 24 },
+  ];
+  for (const c of changes) {
+    await db.brandingChange.create({
+      data: {
+        kind: c.kind,
+        entityId: c.entityId ?? null,
+        entityLabel: c.entityLabel ?? null,
+        actorEmail: c.actor,
+        summary: c.summary,
+        changedFields: c.fields ?? [],
+        createdAt: new Date(Date.now() - c.hoursAgo * 3600_000),
+      },
+    });
+  }
+
+  console.log(
+    `  ✓ Brand singleton + ${profiles.length} profiles (${profiles.filter(p => p.removeFlowtora).length} white-label), ${appCount} tenant applications, ${changes.length} change events`,
   );
 }
 

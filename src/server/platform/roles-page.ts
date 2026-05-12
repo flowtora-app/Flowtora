@@ -136,6 +136,9 @@ export const PERMISSION_DESCRIPTIONS: Record<PlatformPermission, string> = {
   "logs.read":         "Search platform logs, view error issues, read saved queries + alerts.",
   "logs.manage":       "Edit saved queries, configure alerts, change log settings.",
   "logs.resolve":      "Resolve, ignore, or assign error issues.",
+  "branding.read":     "View Flowtora brand, white-label profiles, per-tenant branding, email footer, login pages, powered-by policy.",
+  "branding.manage":   "Edit Flowtora brand, create/update white-label profiles, edit email footer + login pages + powered-by policy.",
+  "branding.tenant_manage": "Apply white-label profile to a tenant + per-tenant override (CSM scope).",
   // Analytics
   "analytics.read":        "Read analytics dashboards.",
   "analytics.export":      "Export analytics datasets.",

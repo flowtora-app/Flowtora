@@ -437,6 +437,9 @@ model Tenant {
   rateLimitOverrides     TenantRateLimitOverride[]
   rateLimitConsumers     RateLimitConsumer[]
   abuseAlerts            AbuseAlert[]
+  // Page 66 — Branding & White-Label
+  brandingProfiles       WhiteLabelProfile[] @relation("BrandingProfileReseller")
+  tenantBranding         TenantBranding?
 }
 
 // ────────────────────────────────────────────────────────────
@@ -15610,4 +15613,205 @@ model PlatformSettingsChange {
   createdAt DateTime @default(now())
 
   @@index([settingsId, createdAt(sort: Desc)])
+}
+
+// ────────────────────────────────────────────────────────────
+// Page 66 — Branding & White-Label.
+// ────────────────────────────────────────────────────────────
+
+enum PoweredByMode {
+  ALWAYS_ON
+  ALWAYS_OFF
+  BY_PLAN
+  BY_PROFILE
+}
+
+enum BrandingChangeKind {
+  BRAND_SETTINGS
+  PROFILE_CREATED
+  PROFILE_UPDATED
+  PROFILE_DELETED
+  PROFILE_APPLIED
+  TENANT_BRANDING
+  POWERED_BY
+  EMAIL_FOOTER
+  LOGIN_PAGE
+}
+
+/** Singleton — Flowtora's own brand identity + email footer + login
+    page defaults + Powered-By policy. */
+model BrandSettings {
+  id String @id @default("default")
+
+  // ── Logos & icons ────────────────────────────────────────
+  logoFullColorUrl  String?
+  logoMonochromeUrl String?
+  faviconUrl        String?
+  /** OG / Twitter / LinkedIn social card image. */
+  socialCardUrl     String?
+  /** PWA app icon (512×512). */
+  appIconUrl        String?
+
+  // ── Colors ───────────────────────────────────────────────
+  primaryColor      String  @default("#5A4FD9")
+  accentColor       String  @default("#22C55E")
+  backgroundColor   String  @default("#FFFFFF")
+  textColor         String  @default("#0F172A")
+
+  // ── Typography ───────────────────────────────────────────
+  primaryFont       String  @default("Inter")
+  headingFont       String  @default("Inter")
+  bodyFont          String  @default("Inter")
+
+  // ── Marketing assets ────────────────────────────────────
+  brandKitZipUrl    String?
+  /** Optional notes for designers / partner marketing. */
+  brandGuidelinesUrl String?
+
+  // ── Email footer ─────────────────────────────────────────
+  /** Source-of-truth MJML for the email footer. */
+  emailFooterMjml   String?
+  /** Pre-rendered HTML (cached after MJML build). */
+  emailFooterHtml   String?
+
+  // ── Login page defaults ─────────────────────────────────
+  loginHeroImageUrl     String?
+  loginHeadline         String?
+  loginSubtext          String?
+  loginBackgroundColor  String?
+  loginBackgroundImageUrl String?
+  loginCtaText          String?
+  loginMarketingCopy    String?
+  /** JSON array of social-proof items: [{ name, role, quote, avatarUrl }]. */
+  loginSocialProofJson  Json?
+
+  // ── Powered-By policy ───────────────────────────────────
+  poweredByMode         PoweredByMode @default(BY_PLAN)
+  /** Plans where "Powered by Flowtora" badge is shown by default. */
+  poweredByEnabledPlans String[]      @default(["STARTER", "GROWTH"])
+  poweredByBadgeVariant String        @default("default")
+
+  notes              String?
+  updatedByEmail     String?
+  updatedAt          DateTime @updatedAt
+  createdAt          DateTime @default(now())
+}
+
+/** A reusable branding profile — a "skin" a reseller offers. */
+model WhiteLabelProfile {
+  id String @id @default(cuid())
+
+  /** URL-safe slug. */
+  key  String @unique
+  name String
+  description String?
+
+  /** The reseller (Enterprise tenant) that owns this profile, null = Flowtora-owned. */
+  resellerTenantId String?
+  resellerTenant   Tenant? @relation("BrandingProfileReseller", fields: [resellerTenantId], references: [id], onDelete: SetNull)
+
+  // ── Logos ───────────────────────────────────────────────
+  logoLightUrl   String?
+  logoDarkUrl    String?
+  faviconUrl     String?
+  emailLogoUrl   String?
+  /** Custom favicon used in the tenant PWA install. */
+  pwaFaviconUrl  String?
+
+  // ── Color palette / fonts ───────────────────────────────
+  primaryColor    String  @default("#5A4FD9")
+  accentColor     String  @default("#22C55E")
+  backgroundColor String  @default("#FFFFFF")
+  textColor       String  @default("#0F172A")
+  primaryFont     String  @default("Inter")
+  headingFont     String  @default("Inter")
+
+  // ── Domains ─────────────────────────────────────────────
+  customDomain   String?
+  subdomain      String?
+  loginUrlSlug   String?
+
+  // ── Email ───────────────────────────────────────────────
+  emailFromName   String?
+  emailFromDomain String?
+
+  // ── Footer & social ─────────────────────────────────────
+  footerText      String?
+  /** { twitter: "...", linkedin: "...", github: "...", instagram: "..." } */
+  socialLinksJson Json?
+
+  // ── Login page (per-profile overrides for the default template) ──
+  loginHeadline         String?
+  loginSubtext          String?
+  loginBackgroundColor  String?
+  loginBackgroundImageUrl String?
+  loginCtaText          String?
+  loginMarketingCopy    String?
+
+  // ── White-label policy ──────────────────────────────────
+  /** Removes all "Flowtora" mentions — requires Enterprise reseller. */
+  removeFlowtoraMentions Boolean @default(false)
+  /** Alphanumeric SMS sender (max 11 chars where supported). */
+  smsSenderName String?
+
+  /** When true, this profile is the system default (only one row). */
+  isDefault    Boolean @default(false)
+  /** Whether profile is currently applicable; archived = false. */
+  active       Boolean @default(true)
+
+  createdAt DateTime @default(now())
+  updatedAt DateTime @updatedAt
+
+  tenants TenantBranding[]
+
+  @@index([resellerTenantId])
+  @@index([active])
+}
+
+/** Per-tenant branding application — which profile + any overrides. */
+model TenantBranding {
+  id String @id @default(cuid())
+
+  tenantId String @unique
+  tenant   Tenant @relation(fields: [tenantId], references: [id], onDelete: Cascade)
+
+  profileId String?
+  profile   WhiteLabelProfile? @relation(fields: [profileId], references: [id], onDelete: SetNull)
+
+  /** Whether this tenant has custom overrides on top of the profile. */
+  hasCustomOverrides Boolean @default(false)
+
+  // Optional override fields (applied on top of the profile).
+  primaryColorOverride   String?
+  accentColorOverride    String?
+  logoOverrideUrl        String?
+  loginHeadlineOverride  String?
+
+  /** Per-tenant powered-by override (null = follow profile/program default). */
+  poweredByEnabled       Boolean?
+
+  lastEditByEmail String?
+  lastEditAt      DateTime?
+  createdAt       DateTime @default(now())
+  updatedAt       DateTime @updatedAt
+}
+
+/** Append-only audit log for any branding change. */
+model BrandingChange {
+  id String @id @default(cuid())
+
+  kind        BrandingChangeKind
+  /** Entity ID — profile ID, tenant ID, or null for singleton. */
+  entityId    String?
+  /** Display label for the change. */
+  entityLabel String?
+
+  actorEmail  String
+  summary     String
+  changedFields String[] @default([])
+  diffJson    Json?
+
+  createdAt DateTime @default(now())
+
+  @@index([kind, createdAt(sort: Desc)])
 }
