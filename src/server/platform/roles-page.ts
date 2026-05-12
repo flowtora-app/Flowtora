@@ -133,6 +133,9 @@ export const PERMISSION_DESCRIPTIONS: Record<PlatformPermission, string> = {
   "env.read":          "View env-var catalog (names + metadata only; secret values stay redacted).",
   "env.reveal":        "Reveal individual secret values (requires re-auth + reason; logged).",
   "env.manage":        "Edit env-var catalog metadata + rotation settings.",
+  "logs.read":         "Search platform logs, view error issues, read saved queries + alerts.",
+  "logs.manage":       "Edit saved queries, configure alerts, change log settings.",
+  "logs.resolve":      "Resolve, ignore, or assign error issues.",
   // Analytics
   "analytics.read":        "Read analytics dashboards.",
   "analytics.export":      "Export analytics datasets.",

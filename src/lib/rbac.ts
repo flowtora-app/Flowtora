@@ -288,6 +288,10 @@ export type PlatformPermission =
   | "env.read"
   | "env.reveal"
   | "env.manage"
+  // System & Infrastructure — Page 64 Logs & Errors
+  | "logs.read"
+  | "logs.manage"
+  | "logs.resolve"
 
   // Analytics / BI
   | "analytics.read"
@@ -343,6 +347,7 @@ const PLATFORM_ALL: PlatformPermission[] = [
   "database.read", "database.manage",
   "ratelimits.read", "ratelimits.manage",
   "env.read", "env.reveal", "env.manage",
+  "logs.read", "logs.manage", "logs.resolve",
   "analytics.read", "analytics.export", "revenue.read", "usage.read",
   "reports.read", "reports.create", "reports.edit", "reports.delete",
   "reports.schedule", "reports.export",
@@ -357,7 +362,7 @@ const PLATFORM_ALL: PlatformPermission[] = [
 const PLATFORM_BASELINE_READ: PlatformPermission[] = [
   "tenant.read", "billing.read", "staff.read", "users.read",
   "support.read", "health.read", "audit.read", "compliance.read",
-  "feature_flag.read", "announcement.read", "leads.read", "referrals.read", "affiliates.read", "seo.read", "integrations.read", "webhooks.read", "docs.read", "marketplace.read", "sso.read", "security.read", "privacy.read", "backups.read", "incidents.read", "network.read", "system.status.read", "queues.read", "email.deliverability.read", "storage.read", "database.read", "ratelimits.read", "env.read",
+  "feature_flag.read", "announcement.read", "leads.read", "referrals.read", "affiliates.read", "seo.read", "integrations.read", "webhooks.read", "docs.read", "marketplace.read", "sso.read", "security.read", "privacy.read", "backups.read", "incidents.read", "network.read", "system.status.read", "queues.read", "email.deliverability.read", "storage.read", "database.read", "ratelimits.read", "env.read", "logs.read",
   "analytics.read", "revenue.read", "usage.read",
   "reports.read", "reports.export", // every staff role reads + can export
   "system.read_settings", "notifications.read",
@@ -425,6 +430,7 @@ export const PLATFORM_ROLE_PERMISSIONS: Record<PlatformRole, PlatformPermission[
     "storage.manage", "storage.egress.read",
     "database.manage",
     "ratelimits.manage",
+    "logs.resolve", // ops lead triages errors
     "analytics.export",
     "reports.create", "reports.edit", "reports.schedule",
     "notifications.manage",
@@ -438,6 +444,7 @@ export const PLATFORM_ROLE_PERMISSIONS: Record<PlatformRole, PlatformPermission[
     "notifications.read",
     "privacy.read", "privacy.triage",
     "incidents.read",
+    "logs.read", "logs.resolve", // support triages user-reported errors
   ]),
   // Billing team. Can issue refunds, mint coupons, change plans —
   // everything money. No tenant suspension, no staff edits.
@@ -477,6 +484,7 @@ export const PLATFORM_ROLE_PERMISSIONS: Record<PlatformRole, PlatformPermission[
     "database.manage", // SRE owns Postgres ops
     "ratelimits.manage", // SRE owns rate-limit + quota rules
     "env.reveal", "env.manage", // SRE owns env vars + secrets reveal
+    "logs.manage", "logs.resolve", // SRE owns logs + error triage
   ]),
   // Marketing — leads, announcements, public plan/feature copy.
   MARKETING_MANAGER: dedup([

@@ -15286,3 +15286,207 @@ model EnvVarSettings {
   updatedAt   DateTime @updatedAt
   createdAt   DateTime @default(now())
 }
+
+// ────────────────────────────────────────────────────────────
+// Page 64 — Logs & Errors.
+// ────────────────────────────────────────────────────────────
+
+enum LogSeverity {
+  DEBUG
+  INFO
+  WARN
+  ERROR
+  FATAL
+}
+
+enum LogIssueStatus {
+  UNRESOLVED
+  RESOLVED
+  IGNORED
+}
+
+enum LogIssueIgnoreType {
+  NONE
+  UNTIL_VERSION
+  UNTIL_N_EVENTS
+  UNTIL_N_DAYS
+}
+
+enum LogAlertChannel {
+  SLACK
+  PAGERDUTY
+  EMAIL
+  WEBHOOK
+}
+
+enum LogAlertStatus {
+  ACTIVE
+  PAUSED
+  FIRING
+}
+
+model LogEntry {
+  id          String      @id @default(cuid())
+  timestamp   DateTime
+  severity    LogSeverity
+  /** Service / component, e.g. "api", "worker", "web". */
+  service     String
+  /** Optional distributed trace correlation. */
+  traceId     String?
+  spanId      String?
+  /** Tenant the log relates to (denormalized for fast filtering). */
+  tenantId    String?
+  /** User that triggered the action (denormalized). */
+  userId      String?
+  message     String
+  /** Structured fields, JSON: { http: {...}, http_status, latency_ms, ... } */
+  fieldsJson  Json?
+  env         String
+
+  createdAt DateTime @default(now())
+
+  @@index([timestamp(sort: Desc)])
+  @@index([severity, timestamp(sort: Desc)])
+  @@index([service, timestamp(sort: Desc)])
+  @@index([traceId])
+  @@index([tenantId])
+}
+
+model LogIssue {
+  id           String              @id @default(cuid())
+  /** Hash of error type + stack — stable across occurrences. */
+  fingerprint  String              @unique
+  title        String
+  /** Most recent message. */
+  message      String
+  /** Error class / type. */
+  errorType    String
+  /** Project / service / component. */
+  project      String
+  env          String
+
+  firstSeenAt  DateTime
+  lastSeenAt   DateTime
+  eventCount   Int                 @default(1)
+  usersAffected   Int              @default(0)
+  tenantsAffected Int              @default(0)
+
+  status       LogIssueStatus      @default(UNRESOLVED)
+  ignoreType   LogIssueIgnoreType  @default(NONE)
+  ignoreUntilVersion String?
+  ignoreUntilEvents  Int?
+  ignoreUntilDate    DateTime?
+
+  assigneeEmail String?
+  linearUrl     String?
+  release       String?
+  tags          String[]            @default([])
+  /** Full stacktrace text (or JSON-stringified frames). */
+  stacktrace    String?
+
+  resolvedAt    DateTime?
+  resolvedByEmail String?
+  resolvedNote  String?
+
+  createdAt DateTime @default(now())
+  updatedAt DateTime @updatedAt
+
+  occurrences LogIssueOccurrence[]
+
+  @@index([status, lastSeenAt(sort: Desc)])
+  @@index([project, env, status])
+  @@index([assigneeEmail])
+}
+
+model LogIssueOccurrence {
+  id         String   @id @default(cuid())
+  issueId    String
+  issue      LogIssue @relation(fields: [issueId], references: [id], onDelete: Cascade)
+  timestamp  DateTime
+  env        String
+
+  userId     String?
+  tenantId   String?
+  browser    String?
+  device     String?
+  region     String?
+  release    String?
+  /** JSON array of breadcrumb objects { ts, category, message, level }. */
+  breadcrumbsJson Json?
+
+  createdAt DateTime @default(now())
+
+  @@index([issueId, timestamp(sort: Desc)])
+}
+
+model LogSavedQuery {
+  id            String   @id @default(cuid())
+  name          String
+  description   String?
+  /** Lucene-style query text. */
+  query         String
+  /** Filter JSON (severity, service, time range, etc.). */
+  filtersJson   Json?
+  ownerEmail    String?
+  team          String?
+  /** Optional auto-run notification config. */
+  notifyChannel LogAlertChannel?
+  notifyTarget  String?
+  /** Pinned queries surface at the top of the saved list. */
+  pinned        Boolean  @default(false)
+
+  createdAt DateTime @default(now())
+  updatedAt DateTime @updatedAt
+
+  @@unique([name, ownerEmail])
+  @@index([team])
+}
+
+model LogAlert {
+  id              String          @id @default(cuid())
+  name            String          @unique
+  description     String?
+  /** Filter for what counts. */
+  service         String?
+  severity        LogSeverity?
+  /** Optional saved-query reference. */
+  query           String?
+  /** Threshold (event count). */
+  threshold       Int             @default(10)
+  /** Window in minutes. */
+  windowMin       Int             @default(5)
+
+  channel         LogAlertChannel
+  /** Where to send — slack channel / pagerduty service / email / webhook URL. */
+  channelTarget   String
+
+  status          LogAlertStatus  @default(ACTIVE)
+  lastTriggeredAt DateTime?
+  triggerCount24h Int             @default(0)
+
+  ownerEmail      String?
+  createdAt DateTime @default(now())
+  updatedAt DateTime @updatedAt
+
+  @@index([status])
+}
+
+model LogSettings {
+  id String @id @default("default")
+
+  retentionDays      Int     @default(30)
+  /** 0..1 sampling rate for high-volume services. */
+  sampleRate         Float   @default(1.0)
+  defaultEnv         String  @default("PRODUCTION")
+  /** Render source maps for stacktraces. */
+  sourcemapsEnabled  Boolean @default(true)
+  /** Group identical errors automatically. */
+  autoGroupErrors    Boolean @default(true)
+  /** Auto-resolve issues with no occurrences in N days (0 = off). */
+  autoResolveStaleDays Int   @default(14)
+  notes              String?
+
+  updatedById String?
+  updatedAt   DateTime @updatedAt
+  createdAt   DateTime @default(now())
+}

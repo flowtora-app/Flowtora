@@ -86,6 +86,7 @@ async function main() {
   await seedRateLimits(tenants);                       // Page 61
   await seedFeatureFlags(tenants, platformUsers);      // Page 62
   await seedEnvVars();                                 // Page 63
+  await seedLogs();                                    // Page 64
 
   console.log("\n✓ Seed complete.\n");
   await db.$disconnect();
@@ -355,6 +356,11 @@ async function wipeOldSeed() {
   await db.platformFlagSegment.deleteMany({ where: { key: { startsWith: "seed-" } } });
   // Page 63 — Env Vars wipe (cascades changes/codeRefs).
   await db.platformEnvVar.deleteMany({ where: { key: { startsWith: "SEED_" } } });
+  // Page 64 — Logs & Errors wipe.
+  await db.logEntry.deleteMany({ where: { service: { startsWith: "seed-" } } });
+  await db.logIssue.deleteMany({ where: { fingerprint: { startsWith: "seed-" } } });
+  await db.logSavedQuery.deleteMany({ where: { name: { startsWith: "[seed]" } } });
+  await db.logAlert.deleteMany({ where: { name: { startsWith: "[seed]" } } });
   // Customers tagged seed (after orders are gone).
   await db.customer.deleteMany({ where: { tags: { has: "seed" } } });
   // Products tagged seed (use description marker since Product has no tags array).
@@ -13163,6 +13169,465 @@ async function seedEnvVars() {
 
   console.log(
     `  ✓ ${vars.length} variables (${vars.filter(v => v.type === "SECRET").length} secrets, ${vars.filter(v => v.type === "CONFIG").length} configs), ${codeRefs.length} code refs, ${changes.length} change events`,
+  );
+}
+
+/* ── Page 64 — Logs & Errors seed ──────────────────────── */
+
+async function seedLogs() {
+  console.log("── Seeding Logs & Errors (Page 64)…");
+
+  // 1. Settings singleton.
+  await db.logSettings.upsert({
+    where: { id: "default" },
+    create: {
+      id: "default",
+      retentionDays: 30,
+      sampleRate: 1.0,
+      defaultEnv: "PRODUCTION",
+      sourcemapsEnabled: true,
+      autoGroupErrors: true,
+      autoResolveStaleDays: 14,
+      notes: "Logs ship to Datadog and Sentry; this catalog mirrors the platform-facing surface area.",
+    },
+    update: {},
+  });
+
+  // 2. Log entries — synthesize ~600 lines across 24h.
+  const SERVICES = ["seed-api", "seed-worker", "seed-web", "seed-cron", "seed-auth-svc"];
+  const SEVS: Array<{ s: "DEBUG"|"INFO"|"WARN"|"ERROR"|"FATAL"; weight: number }> = [
+    { s: "DEBUG", weight: 5  },
+    { s: "INFO",  weight: 55 },
+    { s: "WARN",  weight: 22 },
+    { s: "ERROR", weight: 15 },
+    { s: "FATAL", weight: 3  },
+  ];
+  const TOTAL_WEIGHT = SEVS.reduce((s, x) => s + x.weight, 0);
+  const pickSeverity = () => {
+    let r = Math.random() * TOTAL_WEIGHT;
+    for (const x of SEVS) {
+      r -= x.weight;
+      if (r < 0) return x.s;
+    }
+    return "INFO" as const;
+  };
+  const messages: Record<string, string[]> = {
+    DEBUG: [
+      "Cache miss for tenant.profile",
+      "Connection pool acquired (latency 4ms)",
+      "Job scheduled: invoice-reminder",
+      "Skipped no-op migration step",
+    ],
+    INFO: [
+      "Created order ord_8af2",
+      "Sent invoice INV-2026-001234",
+      "Webhook delivered to https://example.com",
+      "User signed in",
+      "Background job completed: nightly-rollup",
+      "Tenant settings updated",
+      "File uploaded: 4.2MB",
+      "Search query returned 12 results",
+    ],
+    WARN: [
+      "Slow query (1.8s): SELECT * FROM Order WHERE …",
+      "Rate limit threshold approaching (84%)",
+      "Webhook retry #2 after 503",
+      "Stripe API returned deprecated field",
+      "Memory usage 82% — soft threshold",
+      "Replica lag 14s — degraded reads",
+    ],
+    ERROR: [
+      "TypeError: Cannot read properties of undefined (reading 'name')",
+      "PrismaClientKnownRequestError: Unique constraint failed",
+      "Webhook delivery failed: connect ETIMEDOUT",
+      "S3 PutObject failed: AccessDenied",
+      "Stripe charge declined: card_declined",
+      "Email send failed: domain not verified",
+    ],
+    FATAL: [
+      "OOM: process killed (heap 4.0G / 4.0G)",
+      "Database connection pool exhausted",
+      "Unhandled promise rejection — process exited",
+    ],
+  };
+  const trace = () => `tr_${randomBytes(8).toString("hex")}`;
+  const tenantIds = ["tn_acme8a2", "tn_brightf3", "tn_castled1", null, null];
+
+  const HOUR = 3_600_000;
+  const entries: Array<Parameters<typeof db.logEntry.create>[0]["data"]> = [];
+  for (let hour = 0; hour < 24; hour++) {
+    // Recent hours have more activity
+    const base = 18 + Math.floor((24 - hour) / 24 * 12);
+    const count = base + randInt(-4, 8);
+    for (let i = 0; i < count; i++) {
+      const sev = pickSeverity();
+      const svc = rand(SERVICES);
+      const ts = new Date(Date.now() - hour * HOUR - randInt(0, HOUR));
+      const message = rand(messages[sev]!);
+      entries.push({
+        timestamp: ts,
+        severity: sev,
+        service: svc,
+        traceId: Math.random() > 0.3 ? trace() : null,
+        tenantId: rand(tenantIds),
+        userId: Math.random() > 0.7 ? `u_${randomBytes(4).toString("hex")}` : null,
+        message,
+        ...(sev === "ERROR" || sev === "FATAL"
+          ? { fieldsJson: { stack: "at handleRequest (./src/api/handler.ts:84)", req_id: trace() } as never }
+          : {}),
+        env: "PRODUCTION",
+      });
+    }
+  }
+  // Inject a recent spike pattern (3x ERROR in the last 30min)
+  for (let i = 0; i < 20; i++) {
+    entries.push({
+      timestamp: new Date(Date.now() - randInt(0, 30 * 60_000)),
+      severity: "ERROR",
+      service: "seed-api",
+      traceId: trace(),
+      tenantId: rand(tenantIds),
+      userId: null,
+      message: "PrismaClientKnownRequestError: Unique constraint failed on `Order.externalRef`",
+      fieldsJson: { errorCode: "P2002", model: "Order" } as never,
+      env: "PRODUCTION",
+    });
+  }
+  // Use createMany in chunks
+  for (let i = 0; i < entries.length; i += 200) {
+    await db.logEntry.createMany({ data: entries.slice(i, i + 200) });
+  }
+
+  // 3. Log issues (Sentry-like grouped errors).
+  type IssueBp = {
+    fp: string; title: string; message: string; errorType: string;
+    project: "seed-api" | "seed-worker" | "seed-web" | "seed-auth-svc";
+    env: "PRODUCTION" | "STAGING";
+    firstDaysAgo: number; lastHoursAgo: number;
+    events: number; users: number; tenants: number;
+    status: "UNRESOLVED" | "RESOLVED" | "IGNORED";
+    assignee?: string; linear?: string; release?: string;
+    tags: string[];
+    stacktrace?: string;
+    ignoreType?: "NONE" | "UNTIL_VERSION" | "UNTIL_N_EVENTS" | "UNTIL_N_DAYS";
+    ignoreUntilVersion?: string;
+    ignoreUntilEvents?: number;
+    ignoreUntilDate?: Date;
+    resolvedDaysAgo?: number;
+    resolvedByEmail?: string;
+    resolvedNote?: string;
+  };
+  const issues: IssueBp[] = [
+    {
+      fp: "seed-fp-prisma-unique-order",
+      title: "Unique constraint failed on Order.externalRef",
+      message: "PrismaClientKnownRequestError: Unique constraint failed on `Order.externalRef`",
+      errorType: "PrismaClientKnownRequestError",
+      project: "seed-api", env: "PRODUCTION",
+      firstDaysAgo: 18, lastHoursAgo: 0,
+      events: 842, users: 124, tenants: 8,
+      status: "UNRESOLVED", assignee: "engineering@flowtora.com",
+      release: "v2.18.4",
+      tags: ["critical", "p2002", "release-2026.04"],
+      stacktrace:
+`PrismaClientKnownRequestError:
+Invalid \`prisma.order.create()\` invocation
+  Unique constraint failed on the fields: (\`externalRef\`)
+
+  at handleOrderCreate (./src/server/orders/create.ts:62:5)
+  at POST (./src/app/api/orders/route.ts:34:18)
+  at ServerCallback (./node_modules/next/dist/server/web/adapter.ts:84:9)`,
+    },
+    {
+      fp: "seed-fp-typeerror-customer-name",
+      title: "TypeError: Cannot read properties of undefined (reading 'name')",
+      message: "Customer.name accessed on undefined record",
+      errorType: "TypeError",
+      project: "seed-web", env: "PRODUCTION",
+      firstDaysAgo: 4, lastHoursAgo: 2,
+      events: 142, users: 28, tenants: 5,
+      status: "UNRESOLVED", assignee: "frontend@flowtora.com",
+      tags: ["frontend", "p1"],
+      stacktrace:
+`TypeError: Cannot read properties of undefined (reading 'name')
+  at CustomerCard (./src/components/customers/Card.tsx:18:22)
+  at OrderDetail (./src/app/t/[slug]/orders/[id]/page.tsx:142:14)`,
+    },
+    {
+      fp: "seed-fp-s3-access-denied",
+      title: "S3 PutObject failed: AccessDenied",
+      message: "AccessDenied: User: arn:aws:iam::123:flowtora-app is not authorized to perform: s3:PutObject",
+      errorType: "S3ServiceException",
+      project: "seed-api", env: "PRODUCTION",
+      firstDaysAgo: 1, lastHoursAgo: 1,
+      events: 56, users: 12, tenants: 3,
+      status: "UNRESOLVED",
+      tags: ["critical", "infrastructure", "aws"],
+      stacktrace:
+`S3ServiceException: AccessDenied
+  at deserializeAws_restXmlPutObjectCommandError (./node_modules/@aws-sdk/client-s3/...)
+  at sign (./src/server/storage/sign.ts:48:12)`,
+    },
+    {
+      fp: "seed-fp-stripe-card-declined",
+      title: "Stripe charge declined: card_declined",
+      message: "Your card was declined.",
+      errorType: "StripeCardError",
+      project: "seed-api", env: "PRODUCTION",
+      firstDaysAgo: 30, lastHoursAgo: 3,
+      events: 1842, users: 624, tenants: 14,
+      status: "IGNORED",
+      ignoreType: "UNTIL_N_EVENTS", ignoreUntilEvents: 5000,
+      tags: ["billing", "expected"],
+      stacktrace:
+`StripeCardError: Your card was declined.
+  at /node_modules/stripe/lib/StripeResource.js:218:16`,
+    },
+    {
+      fp: "seed-fp-webhook-timeout",
+      title: "Webhook delivery failed: connect ETIMEDOUT",
+      message: "Outbound webhook to tenant-defined URL timed out after 10s",
+      errorType: "TimeoutError",
+      project: "seed-worker", env: "PRODUCTION",
+      firstDaysAgo: 6, lastHoursAgo: 5,
+      events: 318, users: 0, tenants: 4,
+      status: "UNRESOLVED", assignee: "sre@flowtora.com",
+      tags: ["webhook", "network"],
+      stacktrace:
+`TimeoutError: connect ETIMEDOUT 203.0.113.42:443
+  at Socket._onTimeout (node:net:550:25)`,
+    },
+    {
+      fp: "seed-fp-oom",
+      title: "OOM: process killed (heap 4.0G / 4.0G)",
+      message: "FATAL — worker pod killed by OOM killer during invoice export",
+      errorType: "OutOfMemoryError",
+      project: "seed-worker", env: "PRODUCTION",
+      firstDaysAgo: 8, lastHoursAgo: 38,
+      events: 4, users: 0, tenants: 1,
+      status: "RESOLVED",
+      resolvedDaysAgo: 1, resolvedByEmail: "sre@flowtora.com",
+      resolvedNote: "Increased worker mem-limit to 8G and disabled bulk-invoice-export in prod (see Feature Flag).",
+      tags: ["fatal", "oom", "infrastructure"],
+      release: "v2.18.0",
+      stacktrace:
+`FATAL: javascript heap out of memory
+  at processInvoiceBatch (./src/worker/invoiceExport.ts:104:18)`,
+    },
+    {
+      fp: "seed-fp-email-domain-not-verified",
+      title: "Email send failed: domain not verified",
+      message: "Resend: The from address domain is not verified",
+      errorType: "ResendApiError",
+      project: "seed-worker", env: "PRODUCTION",
+      firstDaysAgo: 12, lastHoursAgo: 4,
+      events: 78, users: 0, tenants: 2,
+      status: "UNRESOLVED",
+      tags: ["email", "config"],
+    },
+    {
+      fp: "seed-fp-jwt-malformed",
+      title: "JsonWebTokenError: invalid signature",
+      message: "JWT verification failed — likely clock skew or rotated key",
+      errorType: "JsonWebTokenError",
+      project: "seed-auth-svc", env: "PRODUCTION",
+      firstDaysAgo: 2, lastHoursAgo: 6,
+      events: 22, users: 14, tenants: 4,
+      status: "UNRESOLVED", assignee: "security@flowtora.com",
+      tags: ["auth", "jwt"],
+      stacktrace:
+`JsonWebTokenError: invalid signature
+  at verify (./node_modules/jsonwebtoken/verify.js:155:14)
+  at requireSession (./src/lib/auth.ts:48:22)`,
+    },
+    {
+      fp: "seed-fp-deprecation-stripe",
+      title: "Stripe API returned deprecated field 'sources'",
+      message: "Stripe-Deprecation-Warning header on customer.retrieve()",
+      errorType: "StripeDeprecationWarning",
+      project: "seed-api", env: "PRODUCTION",
+      firstDaysAgo: 90, lastHoursAgo: 12,
+      events: 612, users: 0, tenants: 0,
+      status: "IGNORED",
+      ignoreType: "UNTIL_VERSION", ignoreUntilVersion: "v3.0.0",
+      tags: ["deprecation", "stripe"],
+    },
+    {
+      fp: "seed-fp-replica-lag",
+      title: "Replica lag exceeded threshold (60s)",
+      message: "Read replica fell behind primary — failover may have occurred",
+      errorType: "ReplicationLagError",
+      project: "seed-api", env: "PRODUCTION",
+      firstDaysAgo: 3, lastHoursAgo: 0.5,
+      events: 12, users: 0, tenants: 0,
+      status: "UNRESOLVED", assignee: "sre@flowtora.com",
+      tags: ["database", "infrastructure", "critical"],
+    },
+  ];
+  const issueByFp = new Map<string, string>();
+  for (const i of issues) {
+    const row = await db.logIssue.create({
+      data: {
+        fingerprint: i.fp,
+        title: i.title,
+        message: i.message,
+        errorType: i.errorType,
+        project: i.project,
+        env: i.env,
+        firstSeenAt: daysAgo(i.firstDaysAgo),
+        lastSeenAt: new Date(Date.now() - i.lastHoursAgo * 3600_000),
+        eventCount: i.events,
+        usersAffected: i.users,
+        tenantsAffected: i.tenants,
+        status: i.status,
+        assigneeEmail: i.assignee ?? null,
+        linearUrl: i.linear ?? null,
+        release: i.release ?? null,
+        tags: i.tags,
+        stacktrace: i.stacktrace ?? null,
+        ignoreType: i.ignoreType ?? "NONE",
+        ignoreUntilVersion: i.ignoreUntilVersion ?? null,
+        ignoreUntilEvents:  i.ignoreUntilEvents ?? null,
+        ignoreUntilDate:    i.ignoreUntilDate ?? null,
+        resolvedAt:         i.resolvedDaysAgo != null ? daysAgo(i.resolvedDaysAgo) : null,
+        resolvedByEmail:    i.resolvedByEmail ?? null,
+        resolvedNote:       i.resolvedNote ?? null,
+      },
+    });
+    issueByFp.set(i.fp, row.id);
+  }
+
+  // 4. Issue occurrences — recent samples per top issue.
+  const BROWSERS = ["Chrome 122", "Safari 17.4", "Firefox 124", "Edge 122", null];
+  const DEVICES  = ["Mac · macOS 14", "Windows 11 · Desktop", "iPhone 15", "Android · Samsung S23", null];
+  const REGIONS  = ["us-east", "us-west", "eu-west", "ap-southeast", "eu-central", null];
+  let occCount = 0;
+  for (const i of issues) {
+    const flagId = issueByFp.get(i.fp);
+    if (!flagId) continue;
+    const occN = Math.min(20, Math.max(3, Math.floor(i.events / 20)));
+    for (let n = 0; n < occN; n++) {
+      const hoursOff = randInt(0, Math.max(1, i.lastHoursAgo + n));
+      await db.logIssueOccurrence.create({
+        data: {
+          issueId: flagId,
+          timestamp: new Date(Date.now() - hoursOff * 3600_000),
+          env: i.env,
+          tenantId: rand(tenantIds),
+          browser: rand(BROWSERS),
+          device:  rand(DEVICES),
+          region:  rand(REGIONS),
+          release: i.release ?? "v2.18.4",
+          breadcrumbsJson: [
+            { ts: "T-3s", category: "http", message: "GET /api/v1/orders/123", level: "info" },
+            { ts: "T-2s", category: "db",   message: "SELECT * FROM Order WHERE id = ?", level: "info" },
+            { ts: "T-1s", category: "ui",   message: "Clicked 'Save'", level: "info" },
+          ] as never,
+        },
+      });
+      occCount++;
+    }
+  }
+
+  // 5. Saved queries.
+  type QBp = { name: string; description: string; query: string; team?: string; owner: string; pinned?: boolean; notifyChannel?: "SLACK" | "PAGERDUTY" | "EMAIL" | "WEBHOOK"; notifyTarget?: string };
+  const queries: QBp[] = [
+    { name: "[seed] Errors last 24h", description: "All ERROR + FATAL across all services",
+      query: "severity:(ERROR OR FATAL)", team: "sre", owner: "sre@flowtora.com", pinned: true },
+    { name: "[seed] Webhook failures", description: "Outbound webhook timeouts and 5xx",
+      query: 'service:"seed-worker" AND message:("ETIMEDOUT" OR "5xx")', team: "platform", owner: "engineering@flowtora.com" },
+    { name: "[seed] Payment declines", description: "Stripe card_declined occurrences for billing review",
+      query: 'message:"card_declined"', team: "billing", owner: "billing@flowtora.com", pinned: true,
+      notifyChannel: "SLACK", notifyTarget: "#billing-ops" },
+    { name: "[seed] Slow queries >1s", description: "DB queries with latency > 1000ms",
+      query: 'message:"Slow query" AND fields.latency_ms:>1000', team: "sre", owner: "sre@flowtora.com" },
+    { name: "[seed] Auth anomalies", description: "Failed JWT verifications and login retries",
+      query: 'service:"seed-auth-svc" AND severity:(WARN OR ERROR)', team: "security", owner: "security@flowtora.com", pinned: true },
+    { name: "[seed] Tenant onboarding flow", description: "Track new-tenant journey through prod logs",
+      query: 'message:("tenant created" OR "tenant verified" OR "first order")', team: "growth", owner: "growth@flowtora.com" },
+  ];
+  for (const q of queries) {
+    await db.logSavedQuery.upsert({
+      where: { name_ownerEmail: { name: q.name, ownerEmail: q.owner } },
+      create: {
+        name: q.name, description: q.description, query: q.query,
+        team: q.team ?? null, ownerEmail: q.owner,
+        pinned: q.pinned ?? false,
+        notifyChannel: q.notifyChannel ?? null,
+        notifyTarget: q.notifyTarget ?? null,
+      },
+      update: {
+        description: q.description, query: q.query,
+        team: q.team ?? null, pinned: q.pinned ?? false,
+        notifyChannel: q.notifyChannel ?? null,
+        notifyTarget: q.notifyTarget ?? null,
+      },
+    });
+  }
+
+  // 6. Alerts.
+  type ABp = { name: string; description: string; service?: string; severity?: "DEBUG"|"INFO"|"WARN"|"ERROR"|"FATAL"; query?: string; threshold: number; windowMin: number; channel: "SLACK"|"PAGERDUTY"|"EMAIL"|"WEBHOOK"; target: string; status: "ACTIVE"|"PAUSED"|"FIRING"; lastFiredHoursAgo?: number; triggers24h?: number; owner: string };
+  const alerts: ABp[] = [
+    { name: "[seed] FATAL anywhere",   description: "Any FATAL log line",
+      severity: "FATAL", threshold: 1, windowMin: 5,
+      channel: "PAGERDUTY", target: "platform-oncall",
+      status: "ACTIVE", owner: "sre@flowtora.com" },
+    { name: "[seed] API error spike",   description: "Spike in 5xx + Prisma errors on /api",
+      service: "seed-api", severity: "ERROR", threshold: 50, windowMin: 5,
+      channel: "SLACK", target: "#alerts-platform",
+      status: "FIRING", lastFiredHoursAgo: 0.5, triggers24h: 3,
+      owner: "engineering@flowtora.com" },
+    { name: "[seed] Webhook delivery failures", description: "Outbound webhook timeouts",
+      service: "seed-worker",
+      query: "ETIMEDOUT", threshold: 20, windowMin: 10,
+      channel: "SLACK", target: "#webhook-alerts",
+      status: "ACTIVE", lastFiredHoursAgo: 6, triggers24h: 1,
+      owner: "engineering@flowtora.com" },
+    { name: "[seed] Auth anomaly",     description: "JWT signature failures (potential key drift)",
+      service: "seed-auth-svc", severity: "ERROR", threshold: 5, windowMin: 5,
+      channel: "EMAIL", target: "security@flowtora.com",
+      status: "ACTIVE", lastFiredHoursAgo: 18,
+      owner: "security@flowtora.com" },
+    { name: "[seed] Slow queries",     description: "DB queries > 2s",
+      query: "Slow query", threshold: 10, windowMin: 15,
+      channel: "WEBHOOK", target: "https://hooks.flowtora.com/dbreport",
+      status: "PAUSED", owner: "sre@flowtora.com" },
+    { name: "[seed] Payment failures", description: "card_declined > threshold",
+      service: "seed-api", query: "card_declined", threshold: 30, windowMin: 30,
+      channel: "SLACK", target: "#billing-ops",
+      status: "ACTIVE", lastFiredHoursAgo: 12,
+      owner: "billing@flowtora.com" },
+  ];
+  for (const a of alerts) {
+    await db.logAlert.upsert({
+      where: { name: a.name },
+      create: {
+        name: a.name, description: a.description,
+        service: a.service ?? null, severity: a.severity ?? null,
+        query: a.query ?? null,
+        threshold: a.threshold, windowMin: a.windowMin,
+        channel: a.channel, channelTarget: a.target,
+        status: a.status,
+        lastTriggeredAt: a.lastFiredHoursAgo != null ? new Date(Date.now() - a.lastFiredHoursAgo * 3600_000) : null,
+        triggerCount24h: a.triggers24h ?? 0,
+        ownerEmail: a.owner,
+      },
+      update: {
+        description: a.description,
+        service: a.service ?? null, severity: a.severity ?? null,
+        query: a.query ?? null,
+        threshold: a.threshold, windowMin: a.windowMin,
+        channel: a.channel, channelTarget: a.target,
+        status: a.status,
+        lastTriggeredAt: a.lastFiredHoursAgo != null ? new Date(Date.now() - a.lastFiredHoursAgo * 3600_000) : null,
+        triggerCount24h: a.triggers24h ?? 0,
+        ownerEmail: a.owner,
+      },
+    });
+  }
+
+  console.log(
+    `  ✓ ${entries.length} log entries, ${issues.length} issues, ${occCount} occurrences, ${queries.length} saved queries, ${alerts.length} alerts`,
   );
 }
 
