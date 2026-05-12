@@ -15490,3 +15490,124 @@ model LogSettings {
   updatedAt   DateTime @updatedAt
   createdAt   DateTime @default(now())
 }
+
+// ────────────────────────────────────────────────────────────
+// Page 65 — Platform Settings (global configuration singleton).
+// ────────────────────────────────────────────────────────────
+
+enum SystemBannerVariant {
+  INFO
+  SUCCESS
+  WARNING
+  DANGER
+}
+
+enum FirstDayOfWeek {
+  SUNDAY
+  MONDAY
+}
+
+enum TimeFormat {
+  TWELVE_HOUR
+  TWENTY_FOUR_HOUR
+}
+
+enum MeasurementSystem {
+  IMPERIAL
+  METRIC
+}
+
+model PlatformSettings {
+  id String @id @default("default")
+
+  // ── Identity ─────────────────────────────────────────────
+  platformName       String @default("Flowtora")
+  platformShortName  String @default("Flowtora")
+  tagline            String?
+  supportEmail       String?
+  noreplyEmail       String?
+  salesEmail         String?
+  pressEmail         String?
+  mailingAddress     String?
+  phoneNumber        String?
+
+  // ── Defaults ─────────────────────────────────────────────
+  defaultTimezone        String           @default("America/Los_Angeles")
+  defaultLanguage        String           @default("en-US")
+  defaultCurrency        String           @default("USD")
+  defaultDateFormat      String           @default("MM/DD/YYYY")
+  defaultTimeFormat      TimeFormat       @default(TWELVE_HOUR)
+  defaultFirstDayOfWeek  FirstDayOfWeek   @default(SUNDAY)
+  defaultMeasurement     MeasurementSystem @default(IMPERIAL)
+
+  // ── Business hours (per-weekday JSON) ───────────────────
+  /** Shape: { mon: { open: "09:00", close: "17:00" }, tue: {...}, ... } */
+  businessHoursJson Json?
+  /** Shape: [{ date: "YYYY-MM-DD", name: "Independence Day" }, ...] */
+  holidaysJson      Json?
+
+  // ── Maintenance ─────────────────────────────────────────
+  maintenanceMode        Boolean   @default(false)
+  /** Markdown-rendered banner shown to tenants when mode is ON. */
+  maintenanceMessage     String?
+  maintenanceEta         DateTime?
+  /** CIDR / single-IP list permitted during maintenance window. */
+  maintenanceAllowedIps  String[]  @default([])
+
+  // ── Signup & Trial ──────────────────────────────────────
+  publicSignupEnabled    Boolean @default(true)
+  defaultTrialLengthDays Int     @default(14)
+  requireCardForTrial    Boolean @default(false)
+  defaultSignupPlan      String  @default("STARTER")
+  blockDisposableEmails  Boolean @default(true)
+
+  // ── Session & Security ──────────────────────────────────
+  adminSessionLifetimeMin Int     @default(480) // 8h
+  idleTimeoutMin          Int     @default(30)
+  concurrentAdminSessions Int     @default(3)
+  forceMfaForAdmins       Boolean @default(true)
+
+  // ── Communication preferences ───────────────────────────
+  defaultSenderName       String  @default("Flowtora")
+  defaultReplyTo          String?
+  systemBannerText        String?
+  systemBannerVariant     SystemBannerVariant @default(INFO)
+  systemBannerDismissable Boolean @default(true)
+  systemBannerExpiresAt   DateTime?
+
+  // ── Audit & Compliance ──────────────────────────────────
+  auditRetentionDays      Int  @default(365)
+  /** Days after which to anonymize PII in audit log (null = never). */
+  anonymizePiiAfterDays   Int?
+
+  // ── Feature defaults (per-plan toggle list, JSON) ───────
+  /** Shape: { advanced_reports: true, ai_quotes: false, ... } */
+  featureDefaultsJson     Json?
+
+  // ── Metadata ────────────────────────────────────────────
+  updatedByEmail String?
+  updatedAt      DateTime @updatedAt
+  createdAt      DateTime @default(now())
+
+  changes PlatformSettingsChange[]
+}
+
+model PlatformSettingsChange {
+  id          String           @id @default(cuid())
+  settingsId  String
+  settings    PlatformSettings @relation(fields: [settingsId], references: [id], onDelete: Cascade)
+
+  actorEmail  String
+  /** Section that was edited: "identity", "defaults", "maintenance", etc. */
+  section     String
+  /** Names of fields that changed. */
+  changedFields String[]   @default([])
+  beforeJson  Json?
+  afterJson   Json?
+  /** Optional summary written by the actor. */
+  note        String?
+
+  createdAt DateTime @default(now())
+
+  @@index([settingsId, createdAt(sort: Desc)])
+}

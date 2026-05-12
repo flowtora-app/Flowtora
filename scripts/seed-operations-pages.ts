@@ -87,6 +87,7 @@ async function main() {
   await seedFeatureFlags(tenants, platformUsers);      // Page 62
   await seedEnvVars();                                 // Page 63
   await seedLogs();                                    // Page 64
+  await seedPlatformSettings();                        // Page 65
 
   console.log("\n✓ Seed complete.\n");
   await db.$disconnect();
@@ -361,6 +362,11 @@ async function wipeOldSeed() {
   await db.logIssue.deleteMany({ where: { fingerprint: { startsWith: "seed-" } } });
   await db.logSavedQuery.deleteMany({ where: { name: { startsWith: "[seed]" } } });
   await db.logAlert.deleteMany({ where: { name: { startsWith: "[seed]" } } });
+  // Page 65 — Platform Settings change history wipe (settings singleton stays).
+  await db.platformSettingsChange.deleteMany({ where: { actorEmail: { in: [
+    "founder@flowtora.com", "sre@flowtora.com", "growth@flowtora.com",
+    "ops@flowtora.com", "security@flowtora.com",
+  ] } } });
   // Customers tagged seed (after orders are gone).
   await db.customer.deleteMany({ where: { tags: { has: "seed" } } });
   // Products tagged seed (use description marker since Product has no tags array).
@@ -13628,6 +13634,160 @@ Invalid \`prisma.order.create()\` invocation
 
   console.log(
     `  ✓ ${entries.length} log entries, ${issues.length} issues, ${occCount} occurrences, ${queries.length} saved queries, ${alerts.length} alerts`,
+  );
+}
+
+/* ── Page 65 — Platform Settings seed ──────────────────── */
+
+async function seedPlatformSettings() {
+  console.log("── Seeding Platform Settings (Page 65)…");
+
+  // 1. Singleton — upsert with realistic Flowtora values.
+  const businessHours = {
+    mon: { open: "09:00", close: "18:00", closed: false },
+    tue: { open: "09:00", close: "18:00", closed: false },
+    wed: { open: "09:00", close: "18:00", closed: false },
+    thu: { open: "09:00", close: "18:00", closed: false },
+    fri: { open: "09:00", close: "17:00", closed: false },
+    sat: { open: "10:00", close: "14:00", closed: false },
+    sun: { open: "00:00", close: "00:00", closed: true  },
+  };
+  const holidays = [
+    { date: "2026-01-01", name: "New Year's Day" },
+    { date: "2026-01-19", name: "MLK Day" },
+    { date: "2026-02-16", name: "Presidents' Day" },
+    { date: "2026-05-25", name: "Memorial Day" },
+    { date: "2026-07-04", name: "Independence Day" },
+    { date: "2026-09-07", name: "Labor Day" },
+    { date: "2026-11-26", name: "Thanksgiving" },
+    { date: "2026-11-27", name: "Day After Thanksgiving" },
+    { date: "2026-12-24", name: "Christmas Eve" },
+    { date: "2026-12-25", name: "Christmas Day" },
+    { date: "2026-12-31", name: "New Year's Eve" },
+  ];
+  const featureDefaults = {
+    advanced_reports:    true,
+    ai_quotes:           false,
+    realtime_collab:     false,
+    vendor_portal:       false,
+    bulk_invoice_export: false,
+    branded_emails:      true,
+    two_factor_required: false,
+    sso:                 false,
+  };
+
+  await db.platformSettings.upsert({
+    where: { id: "default" },
+    create: {
+      id: "default",
+      platformName:      "Flowtora",
+      platformShortName: "Flowtora",
+      tagline:           "Run a sign or print shop without the spreadsheet sprawl.",
+      supportEmail:      "support@flowtora.com",
+      noreplyEmail:      "noreply@flowtora.com",
+      salesEmail:        "sales@flowtora.com",
+      pressEmail:        "press@flowtora.com",
+      mailingAddress:    "Flowtora Inc.\n2261 Market St #4242\nSan Francisco, CA 94114",
+      phoneNumber:       "+1 (415) 555-0123",
+      defaultTimezone:        "America/Los_Angeles",
+      defaultLanguage:        "en-US",
+      defaultCurrency:        "USD",
+      defaultDateFormat:      "MM/DD/YYYY",
+      defaultTimeFormat:      "TWELVE_HOUR",
+      defaultFirstDayOfWeek:  "SUNDAY",
+      defaultMeasurement:     "IMPERIAL",
+      businessHoursJson:      businessHours as never,
+      holidaysJson:           holidays as never,
+      maintenanceMode:        false,
+      maintenanceMessage:     "We're upgrading the order pipeline. Tenants will be back online by the ETA below.",
+      maintenanceEta:         null,
+      maintenanceAllowedIps:  ["203.0.113.10", "198.51.100.0/24"],
+      publicSignupEnabled:    true,
+      defaultTrialLengthDays: 14,
+      requireCardForTrial:    false,
+      defaultSignupPlan:      "STARTER",
+      blockDisposableEmails:  true,
+      adminSessionLifetimeMin: 480,
+      idleTimeoutMin:          30,
+      concurrentAdminSessions: 3,
+      forceMfaForAdmins:       true,
+      defaultSenderName:       "Flowtora",
+      defaultReplyTo:          "support@flowtora.com",
+      systemBannerText:        "Scheduled maintenance — Saturday 2:00 AM PT (~30 min). Tenants will be in read-only mode.",
+      systemBannerVariant:     "WARNING",
+      systemBannerDismissable: true,
+      systemBannerExpiresAt:   daysAgo(-2), // 2 days from now
+      auditRetentionDays:      365,
+      anonymizePiiAfterDays:   180,
+      featureDefaultsJson:     featureDefaults as never,
+      updatedByEmail:          "founder@flowtora.com",
+    },
+    update: {
+      tagline:           "Run a sign or print shop without the spreadsheet sprawl.",
+      supportEmail:      "support@flowtora.com",
+      noreplyEmail:      "noreply@flowtora.com",
+      salesEmail:        "sales@flowtora.com",
+      pressEmail:        "press@flowtora.com",
+      mailingAddress:    "Flowtora Inc.\n2261 Market St #4242\nSan Francisco, CA 94114",
+      phoneNumber:       "+1 (415) 555-0123",
+      businessHoursJson: businessHours as never,
+      holidaysJson:      holidays as never,
+      maintenanceAllowedIps: ["203.0.113.10", "198.51.100.0/24"],
+      defaultReplyTo:    "support@flowtora.com",
+      systemBannerText:  "Scheduled maintenance — Saturday 2:00 AM PT (~30 min). Tenants will be in read-only mode.",
+      systemBannerVariant: "WARNING",
+      systemBannerDismissable: true,
+      systemBannerExpiresAt:   daysAgo(-2),
+      featureDefaultsJson: featureDefaults as never,
+    },
+  });
+
+  // 2. Change history.
+  type ChBp = { actor: string; section: string; fields: string[]; note?: string; hoursAgo: number };
+  const changes: ChBp[] = [
+    { actor: "founder@flowtora.com", section: "identity",
+      fields: ["platformName", "tagline", "supportEmail", "salesEmail"],
+      note: "Initial platform settings written during Phase 23 launch.", hoursAgo: 240 * 24 },
+    { actor: "founder@flowtora.com", section: "defaults",
+      fields: ["defaultTimezone", "defaultCurrency", "defaultLanguage"],
+      note: "Set US defaults — most early customers are SF Bay sign shops.", hoursAgo: 240 * 24 - 4 },
+    { actor: "ops@flowtora.com", section: "business_hours",
+      fields: ["businessHours", "holidays"], hoursAgo: 90 * 24,
+      note: "Loaded 2026 US federal holidays + adjusted Saturday hours." },
+    { actor: "sre@flowtora.com", section: "session",
+      fields: ["forceMfaForAdmins", "idleTimeoutMin"],
+      note: "Enforced 2FA after Phase 21 security audit.", hoursAgo: 45 * 24 },
+    { actor: "growth@flowtora.com", section: "signup",
+      fields: ["defaultTrialLengthDays", "requireCardForTrial"],
+      note: "Bumped trial 7 → 14 days, removed card requirement for funnel A/B.", hoursAgo: 21 * 24 },
+    { actor: "growth@flowtora.com", section: "communication",
+      fields: ["systemBannerText", "systemBannerVariant"],
+      note: "Posted maintenance banner ahead of Saturday window.", hoursAgo: 6 },
+    { actor: "security@flowtora.com", section: "audit",
+      fields: ["auditRetentionDays", "anonymizePiiAfterDays"],
+      note: "Tightened PII anonymization to 180 days (was 365) per legal review.", hoursAgo: 14 * 24 },
+    { actor: "founder@flowtora.com", section: "feature_defaults",
+      fields: ["features"],
+      note: "Enabled branded emails by default for new tenants after positive beta feedback.", hoursAgo: 30 * 24 },
+    { actor: "sre@flowtora.com", section: "maintenance",
+      fields: ["maintenanceAllowedIps"],
+      note: "Added office VPN range to maintenance allowlist.", hoursAgo: 60 * 24 },
+  ];
+  for (const c of changes) {
+    await db.platformSettingsChange.create({
+      data: {
+        settingsId: "default",
+        actorEmail: c.actor,
+        section: c.section,
+        changedFields: c.fields,
+        note: c.note ?? null,
+        createdAt: new Date(Date.now() - c.hoursAgo * 3600_000),
+      },
+    });
+  }
+
+  console.log(
+    `  ✓ Singleton settings + ${changes.length} historical change events (across ${new Set(changes.map((c) => c.section)).size} sections)`,
   );
 }
 

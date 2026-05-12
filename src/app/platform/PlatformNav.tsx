@@ -106,6 +106,8 @@ const NAV_ITEMS: NavItem[] = [
   { href: "/platform/system/feature-flags",         label: "Feature Flags",        icon: "Sparkles" },
   { href: "/platform/system/env",                   label: "Environment Vars",     icon: "Shield" },
   { href: "/platform/system/logs",                  label: "Logs & Errors",        icon: "FileText" },
+  // Pages 65+ — configuration
+  { href: "/platform/settings/general",             label: "Platform Settings",    icon: "Settings" },
 ];
 
 const COLLAPSE_KEY = "flowtora.platform-nav.collapsed";
