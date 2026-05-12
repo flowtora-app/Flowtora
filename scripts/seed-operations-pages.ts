@@ -85,6 +85,7 @@ async function main() {
   await seedDatabaseHealth();                          // Page 60
   await seedRateLimits(tenants);                       // Page 61
   await seedFeatureFlags(tenants, platformUsers);      // Page 62
+  await seedEnvVars();                                 // Page 63
 
   console.log("\n✓ Seed complete.\n");
   await db.$disconnect();
@@ -352,6 +353,8 @@ async function wipeOldSeed() {
   // Page 62 — Platform Feature Flags wipe (cascades variants/rules/etc).
   await db.platformFlag.deleteMany({ where: { key: { startsWith: "seed-" } } });
   await db.platformFlagSegment.deleteMany({ where: { key: { startsWith: "seed-" } } });
+  // Page 63 — Env Vars wipe (cascades changes/codeRefs).
+  await db.platformEnvVar.deleteMany({ where: { key: { startsWith: "SEED_" } } });
   // Customers tagged seed (after orders are gone).
   await db.customer.deleteMany({ where: { tags: { has: "seed" } } });
   // Products tagged seed (use description marker since Product has no tags array).
@@ -12862,6 +12865,304 @@ async function seedFeatureFlags(
 
   console.log(
     `  ✓ ${flags.length} flags, ${segments.length} segments, ${deps.length} dependencies, ${scheduleCount} scheduled steps, ${codeRefs.length} code refs, ${evalRows} eval samples, ${changes.length} change events`,
+  );
+}
+
+/* ── Page 63 — Environment Variables seed ───────────────── */
+
+async function seedEnvVars() {
+  console.log("── Seeding Environment Variables (Page 63)…");
+
+  // 1. Settings singleton.
+  await db.envVarSettings.upsert({
+    where: { id: "default" },
+    create: {
+      id: "default",
+      rotationReminderDays: 7,
+      defaultSyncProvider: "VAULT",
+      requireReauthOnReveal: true,
+      reauthValiditySec: 300,
+      autoRedactDiff: true,
+      notes: "Secrets live in Vault; CI/CD pulls them at deploy time. Reveal requires platform staff + 2FA + reason.",
+    },
+    update: {},
+  });
+
+  // 2. Variables. Stored values are the *masked* versions we display
+  //    until a privileged user reveals (real values never leave Vault).
+  type VarBp = {
+    key: string;
+    service: string;
+    type: "SECRET" | "CONFIG";
+    source: "VAULT" | "DOPPLER" | "AWS_SECRETS_MANAGER" | "ENV_FILE" | "VERCEL" | "KUBERNETES" | "OTHER";
+    description: string;
+    owner: string;
+    tags: string[];
+    /** Per-env values; null = not set in that env. */
+    prod?: string | null;
+    staging?: string | null;
+    sandbox?: string | null;
+    preview?: string | null;
+    /** Per-env sync state; defaults to SYNCED. */
+    prodSync?: "SYNCED" | "OUT_OF_SYNC" | "PENDING" | "FAILED" | "NOT_SET";
+    stagingSync?: "SYNCED" | "OUT_OF_SYNC" | "PENDING" | "FAILED" | "NOT_SET";
+    sandboxSync?: "SYNCED" | "OUT_OF_SYNC" | "PENDING" | "FAILED" | "NOT_SET";
+    previewSync?: "SYNCED" | "OUT_OF_SYNC" | "PENDING" | "FAILED" | "NOT_SET";
+    rotationPolicyDays?: number;
+    lastRotatedDaysAgo?: number;
+  };
+  const SECRET_MASK = "••••••••••••••••";
+  const vars: VarBp[] = [
+    // Database
+    { key: "SEED_DATABASE_URL",  service: "api",     type: "SECRET", source: "VAULT",
+      description: "Primary PostgreSQL connection string (Neon).",
+      owner: "sre@flowtora.com", tags: ["db", "neon", "critical"],
+      prod: SECRET_MASK, staging: SECRET_MASK, sandbox: SECRET_MASK, preview: SECRET_MASK,
+      rotationPolicyDays: 90, lastRotatedDaysAgo: 21 },
+    { key: "SEED_DATABASE_REPLICA_URL", service: "api", type: "SECRET", source: "VAULT",
+      description: "Read replica connection (EU region) — fallbacks to primary on failure.",
+      owner: "sre@flowtora.com", tags: ["db", "replica"],
+      prod: SECRET_MASK, staging: SECRET_MASK, sandbox: null, preview: null,
+      rotationPolicyDays: 90, lastRotatedDaysAgo: 18 },
+    { key: "SEED_REDIS_URL", service: "api", type: "SECRET", source: "VAULT",
+      description: "Redis connection for sessions + rate-limit token buckets.",
+      owner: "sre@flowtora.com", tags: ["cache", "redis"],
+      prod: SECRET_MASK, staging: SECRET_MASK, sandbox: SECRET_MASK, preview: SECRET_MASK,
+      rotationPolicyDays: 180, lastRotatedDaysAgo: 60, stagingSync: "OUT_OF_SYNC" },
+
+    // Auth
+    { key: "SEED_NEXTAUTH_SECRET", service: "web", type: "SECRET", source: "VAULT",
+      description: "Signing secret for NextAuth session JWTs.",
+      owner: "security@flowtora.com", tags: ["auth", "jwt", "critical"],
+      prod: SECRET_MASK, staging: SECRET_MASK, sandbox: SECRET_MASK, preview: SECRET_MASK,
+      rotationPolicyDays: 180, lastRotatedDaysAgo: 200 }, // overdue
+    { key: "SEED_JWT_PUBLIC_KEY", service: "api", type: "SECRET", source: "VAULT",
+      description: "Public key for JWT signature verification.",
+      owner: "security@flowtora.com", tags: ["auth", "jwt"],
+      prod: SECRET_MASK, staging: SECRET_MASK, sandbox: SECRET_MASK, preview: SECRET_MASK,
+      rotationPolicyDays: 365, lastRotatedDaysAgo: 90 },
+
+    // Payments
+    { key: "SEED_STRIPE_SECRET_KEY", service: "api", type: "SECRET", source: "VAULT",
+      description: "Stripe live secret key (sk_live_…) for production charges.",
+      owner: "billing@flowtora.com", tags: ["payments", "stripe", "critical"],
+      prod: SECRET_MASK, staging: SECRET_MASK, sandbox: SECRET_MASK, preview: SECRET_MASK,
+      rotationPolicyDays: 365, lastRotatedDaysAgo: 110 },
+    { key: "SEED_STRIPE_WEBHOOK_SECRET", service: "api", type: "SECRET", source: "VAULT",
+      description: "Stripe webhook signing secret (whsec_…) — must match dashboard config.",
+      owner: "billing@flowtora.com", tags: ["payments", "stripe", "webhook"],
+      prod: SECRET_MASK, staging: SECRET_MASK, sandbox: SECRET_MASK, preview: SECRET_MASK,
+      rotationPolicyDays: 365, lastRotatedDaysAgo: 5,
+      prodSync: "PENDING" },
+
+    // Email
+    { key: "SEED_RESEND_API_KEY", service: "worker", type: "SECRET", source: "DOPPLER",
+      description: "Resend API key for transactional emails.",
+      owner: "growth@flowtora.com", tags: ["email", "resend", "transactional"],
+      prod: SECRET_MASK, staging: SECRET_MASK, sandbox: SECRET_MASK, preview: null,
+      rotationPolicyDays: 180, lastRotatedDaysAgo: 30 },
+    { key: "SEED_POSTMARK_API_KEY", service: "worker", type: "SECRET", source: "DOPPLER",
+      description: "Postmark fallback for transactional email.",
+      owner: "growth@flowtora.com", tags: ["email", "postmark", "fallback"],
+      prod: SECRET_MASK, staging: SECRET_MASK, sandbox: null, preview: null,
+      rotationPolicyDays: 180, lastRotatedDaysAgo: 220 }, // overdue
+
+    // Storage
+    { key: "SEED_S3_ACCESS_KEY_ID", service: "api", type: "SECRET", source: "AWS_SECRETS_MANAGER",
+      description: "AWS IAM access key for S3 uploads bucket.",
+      owner: "sre@flowtora.com", tags: ["aws", "s3", "storage"],
+      prod: SECRET_MASK, staging: SECRET_MASK, sandbox: SECRET_MASK, preview: SECRET_MASK,
+      rotationPolicyDays: 90, lastRotatedDaysAgo: 12 },
+    { key: "SEED_S3_SECRET_ACCESS_KEY", service: "api", type: "SECRET", source: "AWS_SECRETS_MANAGER",
+      description: "AWS IAM secret access key paired with SEED_S3_ACCESS_KEY_ID.",
+      owner: "sre@flowtora.com", tags: ["aws", "s3", "storage", "critical"],
+      prod: SECRET_MASK, staging: SECRET_MASK, sandbox: SECRET_MASK, preview: SECRET_MASK,
+      rotationPolicyDays: 90, lastRotatedDaysAgo: 12 },
+    { key: "SEED_S3_BUCKET", service: "api", type: "CONFIG", source: "ENV_FILE",
+      description: "Name of the primary S3 bucket for tenant uploads.",
+      owner: "sre@flowtora.com", tags: ["aws", "s3", "config"],
+      prod: "flowtora-uploads-prod", staging: "flowtora-uploads-staging",
+      sandbox: "flowtora-uploads-sandbox", preview: "flowtora-uploads-preview" },
+    { key: "SEED_CDN_URL", service: "web", type: "CONFIG", source: "VERCEL",
+      description: "Public CDN base URL — used by image components.",
+      owner: "engineering@flowtora.com", tags: ["cdn", "frontend"],
+      prod: "https://cdn.flowtora.com", staging: "https://cdn-staging.flowtora.com",
+      sandbox: "https://cdn-sandbox.flowtora.com", preview: "https://cdn-preview.flowtora.com" },
+
+    // Integrations
+    { key: "SEED_OPENAI_API_KEY", service: "worker", type: "SECRET", source: "VAULT",
+      description: "OpenAI API key — powers AI quote suggestions + summarization.",
+      owner: "engineering@flowtora.com", tags: ["ai", "openai"],
+      prod: SECRET_MASK, staging: SECRET_MASK, sandbox: null, preview: null,
+      rotationPolicyDays: 180, lastRotatedDaysAgo: 14 },
+    { key: "SEED_SLACK_WEBHOOK_URL", service: "worker", type: "SECRET", source: "VAULT",
+      description: "Incoming webhook for #ops alerts in Slack.",
+      owner: "sre@flowtora.com", tags: ["slack", "alerts"],
+      prod: SECRET_MASK, staging: null, sandbox: null, preview: null,
+      rotationPolicyDays: 365, lastRotatedDaysAgo: 200 },
+    { key: "SEED_SENTRY_DSN", service: "web", type: "CONFIG", source: "VERCEL",
+      description: "Public Sentry DSN — safe to expose to the browser.",
+      owner: "engineering@flowtora.com", tags: ["sentry", "monitoring"],
+      prod: "https://abc123@o9999.ingest.sentry.io/1",
+      staging: "https://def456@o9999.ingest.sentry.io/2",
+      sandbox: "https://ghi789@o9999.ingest.sentry.io/3",
+      preview: "https://ghi789@o9999.ingest.sentry.io/3" },
+
+    // Feature toggles & general config
+    { key: "SEED_NODE_ENV", service: "api", type: "CONFIG", source: "ENV_FILE",
+      description: "Standard Node.js environment marker.",
+      owner: "engineering@flowtora.com", tags: ["node", "config"],
+      prod: "production", staging: "staging", sandbox: "sandbox", preview: "preview" },
+    { key: "SEED_LOG_LEVEL", service: "api", type: "CONFIG", source: "ENV_FILE",
+      description: "Application log verbosity (debug/info/warn/error).",
+      owner: "sre@flowtora.com", tags: ["logging", "config"],
+      prod: "info", staging: "info", sandbox: "debug", preview: "debug" },
+    { key: "SEED_FEATURE_AI_QUOTES", service: "api", type: "CONFIG", source: "ENV_FILE",
+      description: "Legacy boolean override for AI quotes (use Feature Flags page instead).",
+      owner: "product@flowtora.com", tags: ["legacy", "feature"],
+      prod: "false", staging: "true", sandbox: "true", preview: "true" },
+    { key: "SEED_RATE_LIMIT_RPS_DEFAULT", service: "api", type: "CONFIG", source: "ENV_FILE",
+      description: "Fallback RPS when no rate-limit rule matches.",
+      owner: "sre@flowtora.com", tags: ["rate-limit", "config"],
+      prod: "10", staging: "100", sandbox: "1000", preview: "1000" },
+
+    // Worker-specific
+    { key: "SEED_QUEUE_REDIS_URL", service: "worker", type: "SECRET", source: "VAULT",
+      description: "Queue (BullMQ) Redis URL — separate from session Redis.",
+      owner: "sre@flowtora.com", tags: ["queue", "redis"],
+      prod: SECRET_MASK, staging: SECRET_MASK, sandbox: SECRET_MASK, preview: null,
+      rotationPolicyDays: 180, lastRotatedDaysAgo: 35 },
+    { key: "SEED_WORKER_CONCURRENCY", service: "worker", type: "CONFIG", source: "KUBERNETES",
+      description: "Maximum concurrent jobs per worker pod.",
+      owner: "sre@flowtora.com", tags: ["worker", "config"],
+      prod: "20", staging: "10", sandbox: "5", preview: "5" },
+
+    // Web-specific
+    { key: "SEED_NEXT_PUBLIC_API_URL", service: "web", type: "CONFIG", source: "VERCEL",
+      description: "Public API endpoint consumed by the browser.",
+      owner: "engineering@flowtora.com", tags: ["frontend", "config"],
+      prod: "https://api.flowtora.com", staging: "https://api-staging.flowtora.com",
+      sandbox: "https://api-sandbox.flowtora.com", preview: "https://api-preview.flowtora.com" },
+    { key: "SEED_NEXT_PUBLIC_POSTHOG_KEY", service: "web", type: "CONFIG", source: "VERCEL",
+      description: "PostHog product analytics public key.",
+      owner: "growth@flowtora.com", tags: ["analytics", "posthog"],
+      prod: "phc_abc123public", staging: "phc_abc123staging",
+      sandbox: "phc_abc123sandbox", preview: "phc_abc123preview" },
+
+    // Deprecated / out-of-sync
+    { key: "SEED_LEGACY_MIGRATION_TOKEN", service: "worker", type: "SECRET", source: "ENV_FILE",
+      description: "Legacy migration token — scheduled for removal after 2026-06-01.",
+      owner: "engineering@flowtora.com", tags: ["legacy", "deprecate"],
+      prod: SECRET_MASK, staging: SECRET_MASK, sandbox: null, preview: null,
+      rotationPolicyDays: 0, prodSync: "FAILED", stagingSync: "FAILED" },
+  ];
+
+  const varByKey = new Map<string, { id: string; key: string; service: string; type: "SECRET" | "CONFIG" }>();
+  for (const v of vars) {
+    const row = await db.platformEnvVar.upsert({
+      where: { key_service: { key: v.key, service: v.service } },
+      create: {
+        key: v.key, service: v.service, type: v.type, source: v.source,
+        description: v.description, ownerEmail: v.owner, tags: v.tags,
+        prodValue: v.prod ?? null,
+        stagingValue: v.staging ?? null,
+        sandboxValue: v.sandbox ?? null,
+        previewValue: v.preview ?? null,
+        prodSyncStatus:    v.prod    == null ? "NOT_SET" : (v.prodSync    ?? "SYNCED"),
+        stagingSyncStatus: v.staging == null ? "NOT_SET" : (v.stagingSync ?? "SYNCED"),
+        sandboxSyncStatus: v.sandbox == null ? "NOT_SET" : (v.sandboxSync ?? "SYNCED"),
+        previewSyncStatus: v.preview == null ? "NOT_SET" : (v.previewSync ?? "SYNCED"),
+        rotationPolicyDays: v.rotationPolicyDays && v.rotationPolicyDays > 0 ? v.rotationPolicyDays : null,
+        lastRotatedAt: v.lastRotatedDaysAgo != null ? daysAgo(v.lastRotatedDaysAgo) : null,
+        updatedByEmail: v.owner,
+      },
+      update: {
+        type: v.type, source: v.source,
+        description: v.description, ownerEmail: v.owner, tags: v.tags,
+        prodValue: v.prod ?? null,
+        stagingValue: v.staging ?? null,
+        sandboxValue: v.sandbox ?? null,
+        previewValue: v.preview ?? null,
+        prodSyncStatus:    v.prod    == null ? "NOT_SET" : (v.prodSync    ?? "SYNCED"),
+        stagingSyncStatus: v.staging == null ? "NOT_SET" : (v.stagingSync ?? "SYNCED"),
+        sandboxSyncStatus: v.sandbox == null ? "NOT_SET" : (v.sandboxSync ?? "SYNCED"),
+        previewSyncStatus: v.preview == null ? "NOT_SET" : (v.previewSync ?? "SYNCED"),
+        rotationPolicyDays: v.rotationPolicyDays && v.rotationPolicyDays > 0 ? v.rotationPolicyDays : null,
+        lastRotatedAt: v.lastRotatedDaysAgo != null ? daysAgo(v.lastRotatedDaysAgo) : null,
+      },
+    });
+    varByKey.set(v.key, { id: row.id, key: v.key, service: v.service, type: v.type });
+  }
+
+  // 3. Code refs — real-ish paths into the codebase.
+  type CodeRefBp = { key: string; filePath: string; lineNumber: number; commitSha: string; daysAgo: number };
+  const codeRefs: CodeRefBp[] = [
+    { key: "SEED_DATABASE_URL", filePath: "src/lib/db.ts", lineNumber: 8, commitSha: "a82f4d1c", daysAgo: 1 },
+    { key: "SEED_DATABASE_URL", filePath: "prisma/schema.prisma", lineNumber: 14, commitSha: "9c4be12a", daysAgo: 3 },
+    { key: "SEED_DATABASE_REPLICA_URL", filePath: "src/lib/db-readonly.ts", lineNumber: 6, commitSha: "55ea2918", daysAgo: 4 },
+    { key: "SEED_REDIS_URL", filePath: "src/lib/cache.ts", lineNumber: 12, commitSha: "31fbe7a8", daysAgo: 7 },
+    { key: "SEED_NEXTAUTH_SECRET", filePath: "src/lib/auth.ts", lineNumber: 24, commitSha: "fe2491a8", daysAgo: 2 },
+    { key: "SEED_STRIPE_SECRET_KEY", filePath: "src/server/billing/stripe.ts", lineNumber: 4, commitSha: "ca1f7d20", daysAgo: 9 },
+    { key: "SEED_STRIPE_WEBHOOK_SECRET", filePath: "src/app/api/webhooks/stripe/route.ts", lineNumber: 14, commitSha: "ca1f7d20", daysAgo: 9 },
+    { key: "SEED_RESEND_API_KEY", filePath: "src/lib/email.ts", lineNumber: 11, commitSha: "4f9a02b1", daysAgo: 14 },
+    { key: "SEED_POSTMARK_API_KEY", filePath: "src/lib/email-fallback.ts", lineNumber: 5, commitSha: "7d8c9b13", daysAgo: 220 },
+    { key: "SEED_S3_BUCKET", filePath: "src/lib/storage.ts", lineNumber: 28, commitSha: "21ca80b9", daysAgo: 11 },
+    { key: "SEED_S3_ACCESS_KEY_ID", filePath: "src/lib/storage.ts", lineNumber: 22, commitSha: "21ca80b9", daysAgo: 11 },
+    { key: "SEED_S3_SECRET_ACCESS_KEY", filePath: "src/lib/storage.ts", lineNumber: 24, commitSha: "21ca80b9", daysAgo: 11 },
+    { key: "SEED_OPENAI_API_KEY", filePath: "src/server/quotes/aiHelper.ts", lineNumber: 9, commitSha: "8b1c4e72", daysAgo: 4 },
+    { key: "SEED_CDN_URL", filePath: "src/components/Image.tsx", lineNumber: 18, commitSha: "f4a18db2", daysAgo: 22 },
+    { key: "SEED_NEXT_PUBLIC_API_URL", filePath: "src/lib/api-client.ts", lineNumber: 4, commitSha: "0e7b3c41", daysAgo: 35 },
+    { key: "SEED_LOG_LEVEL", filePath: "src/lib/logger.ts", lineNumber: 6, commitSha: "f4a18db2", daysAgo: 22 },
+    { key: "SEED_WORKER_CONCURRENCY", filePath: "src/worker/index.ts", lineNumber: 20, commitSha: "55ea2918", daysAgo: 4 },
+    { key: "SEED_QUEUE_REDIS_URL", filePath: "src/worker/queue.ts", lineNumber: 14, commitSha: "55ea2918", daysAgo: 4 },
+  ];
+  for (const r of codeRefs) {
+    const v = varByKey.get(r.key);
+    if (!v) continue;
+    await db.envVarCodeRef.create({
+      data: {
+        envVarId: v.id, filePath: r.filePath, lineNumber: r.lineNumber,
+        commitSha: r.commitSha, branchName: "main",
+        lastSeenAt: daysAgo(r.daysAgo),
+      },
+    });
+  }
+
+  // 4. Change history.
+  type ChangeBp = { key: string; kind: "CREATED" | "UPDATED" | "ROTATED" | "REVEALED" | "SYNC_TRIGGERED"; reason: string; actor: string; env?: string; hoursAgo: number };
+  const changes: ChangeBp[] = [
+    { key: "SEED_DATABASE_URL", kind: "CREATED", actor: "sre@flowtora.com", reason: "Initial setup", hoursAgo: 365 * 24 },
+    { key: "SEED_DATABASE_URL", kind: "ROTATED", actor: "sre@flowtora.com", reason: "Scheduled 90-day rotation", hoursAgo: 21 * 24 },
+    { key: "SEED_STRIPE_WEBHOOK_SECRET", kind: "ROTATED", actor: "billing@flowtora.com", reason: "Webhook re-registered after API key reset", env: "PRODUCTION", hoursAgo: 5 * 24 },
+    { key: "SEED_STRIPE_WEBHOOK_SECRET", kind: "SYNC_TRIGGERED", actor: "billing@flowtora.com", reason: "Vault sync queued post-rotation", env: "PRODUCTION", hoursAgo: 5 * 24 },
+    { key: "SEED_STRIPE_SECRET_KEY", kind: "REVEALED", actor: "billing@flowtora.com", reason: "Investigating failed charge #ch_4ab2c — needed to test direct API call", env: "PRODUCTION", hoursAgo: 6 },
+    { key: "SEED_NEXTAUTH_SECRET", kind: "CREATED", actor: "security@flowtora.com", reason: "Initial deployment", hoursAgo: 200 * 24 },
+    { key: "SEED_REDIS_URL", kind: "UPDATED", actor: "sre@flowtora.com", reason: "Migrated staging to new Redis cluster — sync pending", env: "STAGING", hoursAgo: 12 },
+    { key: "SEED_OPENAI_API_KEY", kind: "ROTATED", actor: "engineering@flowtora.com", reason: "Quarterly rotation", hoursAgo: 14 * 24 },
+    { key: "SEED_OPENAI_API_KEY", kind: "REVEALED", actor: "engineering@flowtora.com", reason: "Debugging rate-limit error — verifying key prefix matches", env: "PRODUCTION", hoursAgo: 22 },
+    { key: "SEED_POSTMARK_API_KEY", kind: "CREATED", actor: "growth@flowtora.com", reason: "Added Postmark as Resend fallback", hoursAgo: 220 * 24 },
+    { key: "SEED_RESEND_API_KEY", kind: "ROTATED", actor: "growth@flowtora.com", reason: "Compromised key in old branch — rotated immediately", hoursAgo: 30 * 24 },
+    { key: "SEED_LEGACY_MIGRATION_TOKEN", kind: "UPDATED", actor: "engineering@flowtora.com", reason: "Deprecation marker added — scheduled for removal", hoursAgo: 60 * 24 },
+    { key: "SEED_LEGACY_MIGRATION_TOKEN", kind: "SYNC_TRIGGERED", actor: "sre@flowtora.com", reason: "Reconciliation attempt failed — value drift in Vault", env: "PRODUCTION", hoursAgo: 36 },
+    { key: "SEED_CDN_URL", kind: "UPDATED", actor: "engineering@flowtora.com", reason: "Pointed prod to new edge zone (LAX)", env: "PRODUCTION", hoursAgo: 14 * 24 },
+    { key: "SEED_S3_SECRET_ACCESS_KEY", kind: "ROTATED", actor: "sre@flowtora.com", reason: "90-day rotation completed", hoursAgo: 12 * 24 },
+    { key: "SEED_S3_SECRET_ACCESS_KEY", kind: "REVEALED", actor: "sre@flowtora.com", reason: "Issue #4291 — needed to update Terraform state", env: "PRODUCTION", hoursAgo: 18 },
+  ];
+  for (const c of changes) {
+    const v = varByKey.get(c.key);
+    if (!v) continue;
+    await db.envVarChange.create({
+      data: {
+        envVarId: v.id, kind: c.kind, actorEmail: c.actor,
+        reason: c.reason, env: c.env ?? null,
+        reauthConfirmed: c.kind === "REVEALED",
+        createdAt: new Date(Date.now() - c.hoursAgo * 3600_000),
+      },
+    });
+  }
+
+  console.log(
+    `  ✓ ${vars.length} variables (${vars.filter(v => v.type === "SECRET").length} secrets, ${vars.filter(v => v.type === "CONFIG").length} configs), ${codeRefs.length} code refs, ${changes.length} change events`,
   );
 }
 

@@ -15159,3 +15159,130 @@ model PlatformFlagSettings {
   updatedAt   DateTime @updatedAt
   createdAt   DateTime @default(now())
 }
+
+// ────────────────────────────────────────────────────────────
+// Page 63 — Environment Variables.
+// ────────────────────────────────────────────────────────────
+
+enum EnvVarType {
+  SECRET
+  CONFIG
+}
+
+enum EnvVarSource {
+  VAULT
+  DOPPLER
+  AWS_SECRETS_MANAGER
+  GCP_SECRET_MANAGER
+  AZURE_KEY_VAULT
+  ENV_FILE
+  KUBERNETES
+  VERCEL
+  OTHER
+}
+
+enum EnvVarSyncStatus {
+  SYNCED
+  OUT_OF_SYNC
+  PENDING
+  FAILED
+  NOT_SET
+}
+
+enum EnvVarChangeKind {
+  CREATED
+  UPDATED
+  ROTATED
+  REVEALED
+  DELETED
+  SYNC_TRIGGERED
+}
+
+model PlatformEnvVar {
+  id          String        @id @default(cuid())
+  key         String
+  /** Service the var applies to: "api", "worker", "web", etc. */
+  service     String
+  type        EnvVarType    @default(CONFIG)
+  source      EnvVarSource  @default(VAULT)
+
+  /** Stored values per env. For SECRET type, store fingerprint only —
+      actual value lives in the secret store referenced by `source`. */
+  prodValue        String?
+  stagingValue     String?
+  sandboxValue     String?
+  previewValue     String?
+
+  /** Sync status per env (mirrors whether the secret store matches the
+      expected value). */
+  prodSyncStatus     EnvVarSyncStatus @default(NOT_SET)
+  stagingSyncStatus  EnvVarSyncStatus @default(NOT_SET)
+  sandboxSyncStatus  EnvVarSyncStatus @default(NOT_SET)
+  previewSyncStatus  EnvVarSyncStatus @default(NOT_SET)
+
+  description       String?
+  /** Days between scheduled rotations (null = no policy). */
+  rotationPolicyDays Int?
+  lastRotatedAt     DateTime?
+
+  ownerEmail        String?
+  tags              String[]  @default([])
+
+  updatedByEmail    String?
+  createdAt DateTime @default(now())
+  updatedAt DateTime @updatedAt
+
+  changes   EnvVarChange[]
+  codeRefs  EnvVarCodeRef[]
+
+  @@unique([key, service])
+  @@index([service, type])
+  @@index([ownerEmail])
+}
+
+model EnvVarChange {
+  id          String              @id @default(cuid())
+  envVarId    String
+  envVar      PlatformEnvVar      @relation(fields: [envVarId], references: [id], onDelete: Cascade)
+  kind        EnvVarChangeKind
+  /** Which environment was changed (null for cross-env actions). */
+  env         String?
+  actorEmail  String
+  reason      String?
+  /** For REVEALED kind — whether 2FA / re-auth was confirmed. */
+  reauthConfirmed Boolean @default(false)
+  createdAt   DateTime @default(now())
+
+  @@index([envVarId, createdAt(sort: Desc)])
+}
+
+model EnvVarCodeRef {
+  id         String          @id @default(cuid())
+  envVarId   String
+  envVar     PlatformEnvVar  @relation(fields: [envVarId], references: [id], onDelete: Cascade)
+  filePath   String
+  lineNumber Int
+  commitSha  String
+  branchName String   @default("main")
+  lastSeenAt DateTime @default(now())
+
+  @@index([envVarId, lastSeenAt(sort: Desc)])
+}
+
+model EnvVarSettings {
+  id String @id @default("default")
+
+  rotationReminderDays   Int          @default(7)
+  defaultSyncProvider    EnvVarSource @default(VAULT)
+  /** Require re-auth before revealing secrets. */
+  requireReauthOnReveal  Boolean      @default(true)
+  /** Days a reveal token stays valid before re-auth is needed again. */
+  reauthValiditySec      Int          @default(300)
+  /** Auto-redact diff output (replace differing secret values with ●). */
+  autoRedactDiff         Boolean      @default(true)
+  notes                  String?
+
+  updatedById String?
+  updatedAt   DateTime @updatedAt
+  createdAt   DateTime @default(now())
+}

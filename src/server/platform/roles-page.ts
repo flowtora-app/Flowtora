@@ -130,6 +130,9 @@ export const PERMISSION_DESCRIPTIONS: Record<PlatformPermission, string> = {
   "database.manage": "Kill sessions, run vacuum/analyze, mark slow queries reviewed, save DB settings.",
   "ratelimits.read":   "View rate-limit rules, plan quotas, tenant overrides, top consumers, throttled requests, abuse alerts.",
   "ratelimits.manage": "Edit rules, plan quotas, tenant overrides; acknowledge/resolve abuse alerts.",
+  "env.read":          "View env-var catalog (names + metadata only; secret values stay redacted).",
+  "env.reveal":        "Reveal individual secret values (requires re-auth + reason; logged).",
+  "env.manage":        "Edit env-var catalog metadata + rotation settings.",
   // Analytics
   "analytics.read":        "Read analytics dashboards.",
   "analytics.export":      "Export analytics datasets.",

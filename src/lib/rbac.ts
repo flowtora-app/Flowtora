@@ -284,6 +284,10 @@ export type PlatformPermission =
   // System & Infrastructure — Page 61 Rate Limits & Quotas
   | "ratelimits.read"
   | "ratelimits.manage"
+  // System & Infrastructure — Page 63 Environment Variables
+  | "env.read"
+  | "env.reveal"
+  | "env.manage"
 
   // Analytics / BI
   | "analytics.read"
@@ -338,6 +342,7 @@ const PLATFORM_ALL: PlatformPermission[] = [
   "storage.read", "storage.manage", "storage.egress.read",
   "database.read", "database.manage",
   "ratelimits.read", "ratelimits.manage",
+  "env.read", "env.reveal", "env.manage",
   "analytics.read", "analytics.export", "revenue.read", "usage.read",
   "reports.read", "reports.create", "reports.edit", "reports.delete",
   "reports.schedule", "reports.export",
@@ -352,7 +357,7 @@ const PLATFORM_ALL: PlatformPermission[] = [
 const PLATFORM_BASELINE_READ: PlatformPermission[] = [
   "tenant.read", "billing.read", "staff.read", "users.read",
   "support.read", "health.read", "audit.read", "compliance.read",
-  "feature_flag.read", "announcement.read", "leads.read", "referrals.read", "affiliates.read", "seo.read", "integrations.read", "webhooks.read", "docs.read", "marketplace.read", "sso.read", "security.read", "privacy.read", "backups.read", "incidents.read", "network.read", "system.status.read", "queues.read", "email.deliverability.read", "storage.read", "database.read", "ratelimits.read",
+  "feature_flag.read", "announcement.read", "leads.read", "referrals.read", "affiliates.read", "seo.read", "integrations.read", "webhooks.read", "docs.read", "marketplace.read", "sso.read", "security.read", "privacy.read", "backups.read", "incidents.read", "network.read", "system.status.read", "queues.read", "email.deliverability.read", "storage.read", "database.read", "ratelimits.read", "env.read",
   "analytics.read", "revenue.read", "usage.read",
   "reports.read", "reports.export", // every staff role reads + can export
   "system.read_settings", "notifications.read",
@@ -471,6 +476,7 @@ export const PLATFORM_ROLE_PERMISSIONS: Record<PlatformRole, PlatformPermission[
     "storage.manage", "storage.egress.read", // SRE owns object-storage + CDN
     "database.manage", // SRE owns Postgres ops
     "ratelimits.manage", // SRE owns rate-limit + quota rules
+    "env.reveal", "env.manage", // SRE owns env vars + secrets reveal
   ]),
   // Marketing — leads, announcements, public plan/feature copy.
   MARKETING_MANAGER: dedup([
