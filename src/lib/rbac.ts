@@ -321,7 +321,8 @@ export type PlatformPermission =
   | "system.maintenance_mode"
   | "system.feature_freeze"
   | "notifications.read"
-  | "notifications.manage";   // edit transactional templates
+  | "notifications.manage"    // edit transactional templates
+  | "notifications.review";   // approve / reject template changes (Page 68)
 
 const PLATFORM_ALL: PlatformPermission[] = [
   "tenant.read", "tenant.suspend", "tenant.archive", "tenant.delete",
@@ -363,7 +364,7 @@ const PLATFORM_ALL: PlatformPermission[] = [
   "reports.schedule", "reports.export",
   "system.read_settings", "system.write_settings",
   "system.maintenance_mode", "system.feature_freeze",
-  "notifications.read", "notifications.manage",
+  "notifications.read", "notifications.manage", "notifications.review",
 ];
 
 // Canonical "everyone with any platform role can read these" baseline.
@@ -444,7 +445,7 @@ export const PLATFORM_ROLE_PERMISSIONS: Record<PlatformRole, PlatformPermission[
     "branding.tenant_manage", // CSM-style per-tenant brand profile application
     "analytics.export",
     "reports.create", "reports.edit", "reports.schedule",
-    "notifications.manage",
+    "notifications.manage", "notifications.review",
   ]),
   // Owns the support queue; can manage macros & triage feedback but
   // can't change plans or staff.
@@ -508,7 +509,7 @@ export const PLATFORM_ROLE_PERMISSIONS: Record<PlatformRole, PlatformPermission[
     "affiliates.read", "affiliates.manage",
     "seo.read", "seo.manage",
     "analytics.read", "analytics.export",
-    "notifications.read", "notifications.manage",
+    "notifications.read", "notifications.manage", "notifications.review", // Marketing Ops + Lifecycle Manager
     "email.deliverability.read", "email.deliverability.manage",
     "branding.read", "branding.manage", // Brand Admin lives in Marketing
     "localization.read", "localization.manage", "localization.translate", // Localization Manager

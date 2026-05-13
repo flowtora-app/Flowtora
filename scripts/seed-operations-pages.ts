@@ -90,6 +90,7 @@ async function main() {
   await seedPlatformSettings();                        // Page 65
   await seedBranding(tenants);                         // Page 66
   await seedLocalization();                            // Page 67
+  await seedNotificationCatalog();                     // Page 68
 
   console.log("\n✓ Seed complete.\n");
   await db.$disconnect();
@@ -389,6 +390,18 @@ async function wipeOldSeed() {
     "USD", "EUR", "GBP", "CAD", "AUD", "MXN", "BRL", "JPY",
     "CNY", "INR", "AED", "CHF", "SEK", "NOK", "HKD",
   ] } } });
+  // Page 68 — Notification Catalog wipe. We don't delete templates (they
+  // map to real send-time kinds) — we only clean variants / metrics /
+  // reviews that were generated for the seed. Identified by actor email
+  // prefixes + variant label prefixes that this seed creates.
+  await db.notificationTemplateVariant.deleteMany({ where: { label: { startsWith: "B-seed" } } });
+  await db.notificationTemplateReview.deleteMany({ where: { actorEmail: { in: [
+    "lifecycle@flowtora.com", "marketing-ops@flowtora.com", "founder@flowtora.com",
+    "design@flowtora.com",
+  ] } } });
+  await db.notificationTemplateMetric.deleteMany({ where: {
+    day: { gte: new Date(Date.now() - 60 * DAY) }
+  } });
   // Customers tagged seed (after orders are gone).
   await db.customer.deleteMany({ where: { tags: { has: "seed" } } });
   // Products tagged seed (use description marker since Product has no tags array).
@@ -14802,6 +14815,296 @@ async function seedLocalization() {
 
   console.log(
     `  ✓ Settings singleton, ${localeBps.length} locales (${localeBps.filter(l => l.rtl).length} RTL), ${currBps.length} currencies, ${keyBps.length} keys, translations + 30d snapshots per locale, ${glossBps.length} glossary entries`,
+  );
+}
+
+/* ── Page 68 — Notification Catalog seed ───────────────── */
+
+async function seedNotificationCatalog() {
+  console.log("── Seeding Notification Catalog (Page 68)…");
+
+  // Bootstrap NotificationTemplate rows from the compile-time registry —
+  // same behavior as the "Seed missing" button on /platform/notifications,
+  // but inline so the seed is fully self-contained.
+  const { listRegistrations } = await import("../src/lib/notifications/registry");
+  const regs = listRegistrations();
+  const haveRows = await db.notificationTemplate.findMany({
+    where: { channel: "EMAIL", locale: "en" },
+    select: { kind: true },
+  });
+  const have = new Set(haveRows.map((r) => r.kind));
+  let bootstrapped = 0;
+  for (const reg of regs) {
+    if (have.has(reg.kind)) continue;
+    const def = reg.defaultContent.EMAIL;
+    if (!def) continue;
+    await db.notificationTemplate.create({
+      data: {
+        kind: reg.kind,
+        channel: "EMAIL",
+        locale: "en",
+        status: "DRAFT",
+        category: reg.category,
+        sortOrder: reg.sortOrder ?? 0,
+        subject: def.subject,
+        preheader: def.preheader,
+        headline: def.headline,
+        subheading: def.subheading,
+        body: def.body,
+        ctaLabel: def.ctaLabel,
+        ctaUrlToken: def.ctaUrlToken,
+        footerNote: def.footerNote,
+        enabled: true,
+        isCritical: reg.isCritical ?? false,
+        tokenSchema: reg.tokens as never,
+      },
+    });
+    bootstrapped += 1;
+  }
+  // Flip a realistic fraction to PUBLISHED so the table view has real
+  // live rows + 30 days of metrics — every other template stays DRAFT.
+  const allRows = await db.notificationTemplate.findMany({
+    where: { channel: "EMAIL", locale: "en" },
+    select: { id: true, status: true, isCritical: true },
+  });
+  let publishedFlipped = 0;
+  for (const r of allRows) {
+    if (r.status === "PUBLISHED") continue;
+    // Critical kinds + ~60% of the rest go live.
+    if (r.isCritical || Math.random() < 0.6) {
+      await db.notificationTemplate.update({
+        where: { id: r.id },
+        data: { status: "PUBLISHED", publishedAt: daysAgo(randInt(30, 180)) },
+      });
+      publishedFlipped++;
+    }
+  }
+
+  const templates = await db.notificationTemplate.findMany({
+    select: { id: true, kind: true, channel: true, locale: true, isCritical: true, status: true },
+  });
+  if (templates.length === 0) {
+    console.log("  (no NotificationTemplate registrations available — skipping catalog enrichment)");
+    return;
+  }
+  console.log(`  bootstrapped ${bootstrapped} new templates, flipped ${publishedFlipped} to PUBLISHED`);
+
+  // Map kind → trigger via prefix.
+  const triggerFor = (kind: string): "TENANT_LIFECYCLE" | "SUBSCRIPTION" | "INVOICE" | "PAYMENT" | "USER" | "JOB" | "MARKETING" | "SYSTEM" | "SECURITY" | "SUPPORT" => {
+    if (kind.startsWith("auth."))          return "SECURITY";
+    if (kind.startsWith("security."))      return "SECURITY";
+    if (kind.startsWith("billing.invoice")) return "INVOICE";
+    if (kind.startsWith("billing.payment")) return "PAYMENT";
+    if (kind.startsWith("billing.trial"))   return "SUBSCRIPTION";
+    if (kind.startsWith("billing."))        return "SUBSCRIPTION";
+    if (kind.startsWith("team."))           return "USER";
+    if (kind.startsWith("support."))        return "SUPPORT";
+    if (kind.startsWith("system."))         return "SYSTEM";
+    if (kind.startsWith("tenant."))         return "TENANT_LIFECYCLE";
+    if (kind.startsWith("activity."))       return "MARKETING";
+    if (kind.startsWith("order.")
+     || kind.startsWith("job.")
+     || kind.startsWith("proof."))          return "JOB";
+    return "MARKETING";
+  };
+  const ownerFor = (trigger: string): string => {
+    if (trigger === "SECURITY")  return "security@flowtora.com";
+    if (trigger === "INVOICE" || trigger === "PAYMENT" || trigger === "SUBSCRIPTION") return "billing@flowtora.com";
+    if (trigger === "SUPPORT")   return "support-lead@flowtora.com";
+    if (trigger === "SYSTEM")    return "sre@flowtora.com";
+    if (trigger === "JOB")       return "operations@flowtora.com";
+    return "lifecycle@flowtora.com";
+  };
+  const tagsFor = (trigger: string, isCritical: boolean): string[] => {
+    const tags: string[] = [trigger.toLowerCase().replace("_", "-")];
+    if (isCritical) tags.push("critical");
+    if (trigger === "MARKETING") tags.push("opt-out-ok");
+    return tags;
+  };
+
+  // Backfill metadata + approval state on every template.
+  let approvedCount = 0, reviewCount = 0, draftCount = 0, liveCount = 0;
+  for (const t of templates) {
+    const trigger = triggerFor(t.kind);
+    const owner   = ownerFor(trigger);
+    const tags    = tagsFor(trigger, t.isCritical);
+    // Approval state correlates with publish state:
+    //   PUBLISHED → LIVE (already serving)
+    //   DRAFT     → distribute across DRAFT/IN_REVIEW/APPROVED to look real
+    //   DISABLED  → DRAFT (in-progress edits)
+    let approvalState: "DRAFT" | "IN_REVIEW" | "APPROVED" | "LIVE";
+    let submittedAt: Date | null = null;
+    let reviewedAt: Date | null = null;
+    let reviewerEmail: string | null = null;
+    let reviewerNote: string | null = null;
+    if (t.status === "PUBLISHED") {
+      approvalState = "LIVE";
+      submittedAt   = daysAgo(randInt(30, 180));
+      reviewedAt    = daysAgo(randInt(7, 60));
+      reviewerEmail = "marketing-ops@flowtora.com";
+      reviewerNote  = "Approved after Litmus pass + spam-score check.";
+      liveCount++;
+    } else if (t.status === "DRAFT") {
+      const r = Math.random();
+      if (r < 0.33) {
+        approvalState = "IN_REVIEW";
+        submittedAt   = daysAgo(randInt(1, 7));
+        reviewCount++;
+      } else if (r < 0.5) {
+        approvalState = "APPROVED";
+        submittedAt   = daysAgo(randInt(2, 10));
+        reviewedAt    = daysAgo(randInt(0, 2));
+        reviewerEmail = "marketing-ops@flowtora.com";
+        reviewerNote  = "Sign-off granted. Promote when ready.";
+        approvedCount++;
+      } else {
+        approvalState = "DRAFT";
+        draftCount++;
+      }
+    } else {
+      approvalState = "DRAFT";
+      draftCount++;
+    }
+    await db.notificationTemplate.update({
+      where: { id: t.id },
+      data: {
+        trigger,
+        ownerEmail: owner,
+        tags,
+        fromName: trigger === "MARKETING" ? "Flowtora Marketing" : "Flowtora",
+        replyTo:  trigger === "SUPPORT" ? "support@flowtora.com" : null,
+        approvalState,
+        submittedForReviewAt: submittedAt,
+        reviewedAt,
+        reviewerEmail,
+        reviewerNote,
+      },
+    });
+  }
+
+  // ── Review timeline rows ────────────────────────────────────────
+  // For every non-DRAFT template, generate a short approval history.
+  const enriched = await db.notificationTemplate.findMany({
+    select: { id: true, kind: true, status: true, approvalState: true, isCritical: true, submittedForReviewAt: true, reviewedAt: true },
+  });
+  let reviewEvents = 0;
+  for (const t of enriched) {
+    if (t.approvalState === "DRAFT") continue;
+    const states: { from: "DRAFT" | "IN_REVIEW" | "APPROVED" | "LIVE"; to: "DRAFT" | "IN_REVIEW" | "APPROVED" | "LIVE"; ts: Date; actor: string; note?: string }[] = [];
+    // DRAFT → IN_REVIEW
+    if (t.submittedForReviewAt) {
+      states.push({
+        from: "DRAFT", to: "IN_REVIEW",
+        ts: t.submittedForReviewAt,
+        actor: "lifecycle@flowtora.com",
+        note: "Submitted for editorial review — fresh copy.",
+      });
+    }
+    // IN_REVIEW → APPROVED (or DRAFT if rejected somewhere along the way)
+    if (t.approvalState === "APPROVED" || t.approvalState === "LIVE") {
+      if (t.reviewedAt) {
+        states.push({
+          from: "IN_REVIEW", to: "APPROVED",
+          ts: t.reviewedAt,
+          actor: "marketing-ops@flowtora.com",
+          note: t.isCritical ? "Approved — extra scrutiny on critical kind." : "Approved.",
+        });
+      }
+    }
+    // APPROVED → LIVE
+    if (t.approvalState === "LIVE") {
+      states.push({
+        from: "APPROVED", to: "LIVE",
+        ts: daysAgo(randInt(0, 7)),
+        actor: "marketing-ops@flowtora.com",
+        note: "Promoted to live serving.",
+      });
+    }
+    for (const s of states) {
+      await db.notificationTemplateReview.create({
+        data: {
+          templateId: t.id,
+          fromState: s.from, toState: s.to,
+          actorEmail: s.actor, note: s.note ?? null,
+          createdAt: s.ts,
+        },
+      });
+      reviewEvents++;
+    }
+  }
+
+  // ── A/B variants ────────────────────────────────────────────────
+  // Add a "B-seed" variant to ~20% of LIVE templates that are marketing
+  // or trial-related — those are the high-volume optimization targets.
+  const liveMarketing = enriched.filter(
+    (t) => t.approvalState === "LIVE" && (t.kind.startsWith("activity.") || t.kind.startsWith("billing.trial")),
+  );
+  let variantCount = 0;
+  for (const t of liveMarketing.slice(0, Math.max(2, Math.floor(liveMarketing.length * 0.4)))) {
+    const sent = randInt(800, 12000);
+    const opens = Math.floor(sent * (0.18 + Math.random() * 0.20));
+    const clicks = Math.floor(opens * (0.04 + Math.random() * 0.10));
+    await db.notificationTemplateVariant.create({
+      data: {
+        templateId: t.id,
+        label: "B-seed",
+        weight: 30,
+        active: true,
+        subject:    "An alternate take on this — let us know what lands better",
+        preheader:  "Shorter, more direct version of the same notification.",
+        headline:   "Quick heads-up",
+        subheading: null,
+        body:       "We're testing two versions of this email side-by-side. If the copy feels off, ping marketing-ops@flowtora.com.\n\nThanks for being part of the experiment.",
+        ctaLabel:   "Take a look",
+        ctaUrlToken: "{{cta_url}}",
+        footerNote: null,
+        sentCount:    sent,
+        openCount:    opens,
+        clickCount:   clicks,
+        bounceCount:  Math.floor(sent * 0.008),
+      },
+    });
+    variantCount++;
+  }
+
+  // ── 30 days of metrics for every LIVE template ──────────────────
+  const liveTemplates = enriched.filter((t) => t.approvalState === "LIVE");
+  let metricRows = 0;
+  for (const t of liveTemplates) {
+    // Base daily send volume varies by trigger. Marketing emails are
+    // the high-volume ones; security/auth are lower volume but high open.
+    const trigger = triggerFor(t.kind);
+    const baseDaily =
+      trigger === "MARKETING" || trigger === "SUBSCRIPTION" ? randInt(180, 1200) :
+      trigger === "INVOICE" || trigger === "PAYMENT"        ? randInt(60, 400)   :
+      trigger === "SECURITY"                                ? randInt(40, 250)   :
+      trigger === "JOB"                                     ? randInt(120, 600)  :
+                                                              randInt(20, 180);
+    // Open/click rates by trigger.
+    const openRate  = trigger === "SECURITY" ? 0.70 : trigger === "INVOICE" ? 0.55 : 0.32;
+    const clickRate = trigger === "SECURITY" ? 0.32 : trigger === "INVOICE" ? 0.18 : 0.08;
+    for (let d = 30; d >= 0; d--) {
+      const wobble = 0.7 + Math.random() * 0.6; // 70%–130%
+      const sent = Math.max(0, Math.round(baseDaily * wobble));
+      const delivered = Math.round(sent * (0.96 + Math.random() * 0.03));
+      const bounced   = sent - delivered;
+      const opened    = Math.round(delivered * (openRate  * (0.7 + Math.random() * 0.6)));
+      const clicked   = Math.round(delivered * (clickRate * (0.6 + Math.random() * 0.8)));
+      const failed    = Math.round(sent * Math.random() * 0.005);
+      const unsubscribed = trigger === "MARKETING" ? Math.round(sent * 0.001) : 0;
+      await db.notificationTemplateMetric.create({
+        data: {
+          templateId: t.id,
+          day: daysAgo(d),
+          sent, delivered, opened, clicked, bounced, failed, unsubscribed,
+        },
+      });
+      metricRows++;
+    }
+  }
+
+  console.log(
+    `  ✓ Enriched ${templates.length} templates (${liveCount} LIVE / ${approvedCount} APPROVED / ${reviewCount} IN_REVIEW / ${draftCount} DRAFT), ${reviewEvents} review events, ${variantCount} A/B variants, ${metricRows} metric rows`,
   );
 }
 

@@ -6,6 +6,21 @@ import type { NotificationCategory, NotificationRegistration } from "@/lib/notif
 import { seedAllTemplatesFromDefaults } from "@/app/actions/notifications-admin";
 import { NotificationsKPIBand, type NotificationsKpi } from "@/components/platform/NotificationsKPIBand";
 import { NotificationsFilterBar } from "@/components/platform/NotificationsFilterBar";
+import {
+  loadCatalogPage,
+  APPROVAL_TONE,
+  CHANNEL_ICON,
+  CHANNEL_LABEL,
+  TRIGGER_LABEL,
+  TRIGGER_ORDER,
+  formatRate,
+  formatThousands,
+  relativeFromNow,
+} from "@/server/platform/notifications-catalog";
+import type {
+  NotificationApprovalState,
+  NotificationTrigger,
+} from "@prisma/client";
 
 // /platform/notifications — transactional notification catalog
 // (transformation rewrite).
@@ -19,7 +34,10 @@ import { NotificationsFilterBar } from "@/components/platform/NotificationsFilte
 
 export const dynamic = "force-dynamic";
 
-type SP = { ok?: string; error?: string };
+type SP = { ok?: string; error?: string; view?: string; trigger?: string };
+
+const VIEWS = ["categories", "table", "tree"] as const;
+type View = typeof VIEWS[number];
 
 const CATEGORY_LABEL: Record<NotificationCategory, string> = {
   auth:     "Auth & security",
@@ -53,6 +71,16 @@ export default async function PlatformNotificationsPage({
   const ctx = await requirePlatformStaff();
   const sp = await searchParams;
   const canWrite = ctx.canWrite;
+
+  const view: View = (VIEWS as readonly string[]).includes(sp.view ?? "")
+    ? (sp.view as View)
+    : "categories";
+  const triggerFilter = sp.trigger && (TRIGGER_ORDER as readonly string[]).includes(sp.trigger)
+    ? (sp.trigger as NotificationTrigger)
+    : undefined;
+
+  // Page 68 catalog payload — rich rows with metrics, channels, locales.
+  const catalogPage = await loadCatalogPage({ trigger: triggerFilter });
 
   const rows = await db.notificationTemplate.findMany({
     where: { channel: "EMAIL", locale: "en" },
@@ -194,11 +222,242 @@ export default async function PlatformNotificationsPage({
       {/* ── KPI band ───────────────────────────────────── */}
       <NotificationsKPIBand kpis={kpis} />
 
+      {/* ── View switcher (Page 68) ────────────────────── */}
+      <div className="flex flex-wrap items-center gap-2 text-xs">
+        <span style={{ color: "var(--text-muted)" }}>View:</span>
+        {(["categories", "table", "tree"] as const).map((v) => (
+          <Link
+            key={v}
+            href={`/platform/notifications?view=${v}`}
+            className="rounded-md px-3 py-1.5"
+            style={{
+              background: view === v ? "var(--accent-primary)" : "var(--surface-1)",
+              color: view === v ? "var(--accent-fg)" : "var(--text-default)",
+              border: "1px solid var(--border-default)",
+            }}
+          >
+            {v === "categories" ? "Categories (legacy)" : v === "table" ? "Table (Page 68)" : "Tree by trigger"}
+          </Link>
+        ))}
+      </div>
+
+      {/* ── Page 68 KPI strip (approval states + metrics) ──── */}
+      <div className="grid grid-cols-2 gap-3 md:grid-cols-4 lg:grid-cols-7">
+        <MiniKpi label="Total kinds"   value={catalogPage.kpis.totalKinds.toString()} />
+        <MiniKpi label="Drafts"        value={catalogPage.kpis.draftCount.toString()}    tone={catalogPage.kpis.draftCount > 0 ? "warning" : "default"} />
+        <MiniKpi label="In review"     value={catalogPage.kpis.reviewCount.toString()}   tone={catalogPage.kpis.reviewCount > 0 ? "warning" : "default"} />
+        <MiniKpi label="Approved"      value={catalogPage.kpis.approvedCount.toString()} tone="accent" />
+        <MiniKpi label="Live"          value={catalogPage.kpis.liveCount.toString()}     tone={catalogPage.kpis.liveCount > 0 ? "success" : "default"} />
+        <MiniKpi label="Sent 24h"      value={formatThousands(catalogPage.kpis.sentLast24h)} />
+        <MiniKpi label="Avg open"      value={formatRate(catalogPage.kpis.avgOpenRate)} hint={`CTR ${formatRate(catalogPage.kpis.avgClickRate)}`} />
+      </div>
+
       {/* ── Filter bar ─────────────────────────────────── */}
       <NotificationsFilterBar totalKinds={totalKinds} />
 
-      {/* ── Grouped category sections ──────────────────── */}
-      {CATEGORY_ORDER.map((cat) => {
+      {/* ── Page 68 — Table view ───────────────────────── */}
+      {view === "table" && (
+        <section
+          className="overflow-x-auto rounded-xl"
+          style={{ background: "var(--surface-1)", border: "1px solid var(--border-subtle)", boxShadow: "var(--shadow-sm)" }}
+        >
+          <table className="w-full text-sm">
+            <thead style={{ background: "var(--surface-2)" }}>
+              <tr>
+                <Th>Template</Th>
+                <Th>Trigger</Th>
+                <Th>Channels</Th>
+                <Th>Locales</Th>
+                <Th>Approval</Th>
+                <Th>Active</Th>
+                <Th className="text-right">Sent 24h</Th>
+                <Th className="text-right">Open</Th>
+                <Th className="text-right">Click</Th>
+                <Th>Last edit</Th>
+                <Th aria-label="actions" />
+              </tr>
+            </thead>
+            <tbody>
+              {catalogPage.rows.length === 0 && (
+                <tr>
+                  <td colSpan={11} className="px-4 py-6 text-center text-sm" style={{ color: "var(--text-muted)" }}>
+                    No templates match your filter.
+                  </td>
+                </tr>
+              )}
+              {catalogPage.rows.map((r) => (
+                <tr
+                  key={r.id}
+                  style={{ borderTop: "1px solid var(--border-subtle)" }}
+                >
+                  <td className="px-3 py-2 align-top">
+                    <div className="flex items-center gap-2">
+                      <Link
+                        href={`/platform/notifications/${encodeURIComponent(r.kind)}`}
+                        className="truncate text-sm font-medium hover:underline"
+                        style={{ color: "var(--text-default)" }}
+                      >
+                        {r.kind.split(".").pop()}
+                      </Link>
+                      {r.isCritical && (
+                        <span className="rounded-full px-1.5 py-0.5 text-[9px] font-medium uppercase tracking-wider"
+                          style={{ background: "var(--accent-surface)", color: "var(--accent-primary)" }}>
+                          critical
+                        </span>
+                      )}
+                    </div>
+                    <div className="mt-0.5 text-xs" style={{ color: "var(--text-muted)" }}>
+                      <span className="font-mono">{r.kind}</span>
+                    </div>
+                    <div className="mt-0.5 text-xs" style={{ color: "var(--text-faint)" }}>
+                      {r.subject}
+                    </div>
+                  </td>
+                  <td className="px-3 py-2 align-top">
+                    {r.trigger ? (
+                      <span className="text-xs" style={{ color: "var(--text-default)" }}>
+                        {TRIGGER_LABEL[r.trigger]}
+                      </span>
+                    ) : (
+                      <span className="text-xs" style={{ color: "var(--text-faint)" }}>—</span>
+                    )}
+                  </td>
+                  <td className="px-3 py-2 align-top">
+                    <div className="flex gap-1">
+                      {r.channels.map((c) => (
+                        <span
+                          key={c}
+                          className="rounded px-1.5 py-0.5 text-[10px] font-medium"
+                          style={{ background: "var(--surface-2)", color: "var(--text-default)", border: "1px solid var(--border-subtle)" }}
+                          title={CHANNEL_LABEL[c]}
+                        >
+                          {CHANNEL_ICON[c]} {CHANNEL_LABEL[c]}
+                        </span>
+                      ))}
+                    </div>
+                  </td>
+                  <td className="px-3 py-2 align-top">
+                    <div className="flex flex-wrap gap-1">
+                      {r.locales.map((l) => (
+                        <span
+                          key={l}
+                          className="rounded px-1.5 py-0.5 font-mono text-[10px]"
+                          style={{ background: "var(--surface-2)", color: "var(--text-muted)", border: "1px solid var(--border-subtle)" }}
+                        >
+                          {l}
+                        </span>
+                      ))}
+                    </div>
+                  </td>
+                  <td className="px-3 py-2 align-top">
+                    <ApprovalPillSmall state={r.approvalState} />
+                  </td>
+                  <td className="px-3 py-2 align-top">
+                    <span
+                      className="rounded-full px-2 py-0.5 text-[10px] font-medium uppercase tracking-wider"
+                      style={
+                        r.enabled
+                          ? { background: "var(--emerald-100)", color: "var(--emerald-700)" }
+                          : { background: "var(--surface-2)", color: "var(--text-muted)" }
+                      }
+                    >
+                      {r.enabled ? "on" : "off"}
+                    </span>
+                  </td>
+                  <td className="px-3 py-2 align-top text-right tabular-nums">
+                    {formatThousands(r.sentLast24h)}
+                  </td>
+                  <td className="px-3 py-2 align-top text-right tabular-nums">
+                    {r.sentLast24h > 0 ? formatRate(r.openRate) : "—"}
+                  </td>
+                  <td className="px-3 py-2 align-top text-right tabular-nums">
+                    {r.sentLast24h > 0 ? formatRate(r.clickRate) : "—"}
+                  </td>
+                  <td className="px-3 py-2 align-top text-xs" style={{ color: "var(--text-muted)" }}>
+                    {relativeFromNow(r.updatedAt)}
+                  </td>
+                  <td className="px-3 py-2 align-top text-right">
+                    <Link
+                      href={`/platform/notifications/${encodeURIComponent(r.kind)}`}
+                      className="text-xs"
+                      style={{ color: "var(--accent-primary)" }}
+                    >
+                      Edit →
+                    </Link>
+                  </td>
+                </tr>
+              ))}
+            </tbody>
+          </table>
+        </section>
+      )}
+
+      {/* ── Page 68 — Tree by trigger view ─────────────── */}
+      {view === "tree" && (
+        <div className="space-y-3">
+          {TRIGGER_ORDER.map((t) => {
+            const rowsInGroup = catalogPage.rows.filter((r) => r.trigger === t);
+            if (rowsInGroup.length === 0) return null;
+            return (
+              <section
+                key={t}
+                className="overflow-hidden rounded-xl"
+                style={{ background: "var(--surface-1)", border: "1px solid var(--border-subtle)", boxShadow: "var(--shadow-sm)" }}
+              >
+                <header
+                  className="flex items-baseline justify-between gap-3 px-5 py-4"
+                  style={{ borderBottom: "1px solid var(--border-subtle)" }}
+                >
+                  <div>
+                    <h3 className="text-sm font-semibold" style={{ color: "var(--text-default)" }}>
+                      {TRIGGER_LABEL[t]}
+                    </h3>
+                    <p className="mt-0.5 text-xs" style={{ color: "var(--text-muted)" }}>
+                      {rowsInGroup.length} template{rowsInGroup.length === 1 ? "" : "s"}
+                    </p>
+                  </div>
+                </header>
+                <ul>
+                  {rowsInGroup.map((r) => (
+                    <li
+                      key={r.id}
+                      className="border-t px-5 py-3 text-sm"
+                      style={{ borderColor: "var(--border-subtle)" }}
+                    >
+                      <Link
+                        href={`/platform/notifications/${encodeURIComponent(r.kind)}`}
+                        className="flex flex-wrap items-center justify-between gap-3 hover:opacity-90"
+                      >
+                        <div className="min-w-0">
+                          <div className="flex items-center gap-2">
+                            <span className="truncate font-medium" style={{ color: "var(--text-default)" }}>{r.subject}</span>
+                            {r.isCritical && <span className="text-[10px] uppercase" style={{ color: "var(--accent-primary)" }}>critical</span>}
+                          </div>
+                          <div className="mt-0.5 truncate text-xs font-mono" style={{ color: "var(--text-muted)" }}>
+                            {r.kind}
+                          </div>
+                        </div>
+                        <div className="flex items-center gap-3">
+                          <ApprovalPillSmall state={r.approvalState} />
+                          <span className="text-xs" style={{ color: "var(--text-muted)" }}>
+                            {r.channels.map((c) => CHANNEL_ICON[c]).join(" ")}
+                          </span>
+                          <span className="text-xs tabular-nums" style={{ color: "var(--text-muted)" }}>
+                            {formatThousands(r.sentLast24h)} sent / 24h
+                          </span>
+                        </div>
+                      </Link>
+                    </li>
+                  ))}
+                </ul>
+              </section>
+            );
+          })}
+        </div>
+      )}
+
+      {/* ── Legacy grouped category sections ───────────── */}
+      {view === "categories" && CATEGORY_ORDER.map((cat) => {
         const list = grouped.get(cat) ?? [];
         if (list.length === 0) return null;
         const publishedInCat = list.filter((reg) => byKind.get(reg.kind)?.status === "PUBLISHED").length;
@@ -472,4 +731,62 @@ function formatRel(d: Date | string): string {
   const days = Math.round(hours / 24);
   if (days < 30) return `${days}d ago`;
   return date.toLocaleDateString();
+}
+
+/* ── Page 68 — additional UI components ──────────────────────── */
+
+function MiniKpi({
+  label, value, hint, tone = "default",
+}: {
+  label: string;
+  value: string;
+  hint?: string;
+  tone?: "default" | "success" | "warning" | "danger" | "accent";
+}) {
+  const palette =
+    tone === "success" ? { bg: "var(--emerald-100)", fg: "var(--emerald-700)" } :
+    tone === "warning" ? { bg: "var(--amber-100)",   fg: "var(--amber-700)"   } :
+    tone === "danger"  ? { bg: "var(--rose-100)",    fg: "var(--rose-700)"    } :
+    tone === "accent"  ? { bg: "var(--violet-100)",  fg: "var(--violet-700)"  } :
+                          { bg: "var(--surface-1)",   fg: "var(--text-default)" };
+  return (
+    <div
+      className="rounded-md px-3 py-2.5"
+      style={{ background: palette.bg, border: "1px solid var(--border-subtle)", boxShadow: "var(--shadow-sm)" }}
+    >
+      <div className="text-[10px] uppercase tracking-wide" style={{ color: "var(--text-faint)" }}>
+        {label}
+      </div>
+      <div className="mt-0.5 text-lg font-semibold tabular-nums" style={{ color: palette.fg }}>
+        {value}
+      </div>
+      {hint && <div className="mt-0.5 text-[11px]" style={{ color: "var(--text-muted)" }}>{hint}</div>}
+    </div>
+  );
+}
+
+function Th({
+  children, className = "", ...rest
+}: React.ThHTMLAttributes<HTMLTableCellElement> & { className?: string }) {
+  return (
+    <th
+      className={`px-3 py-2 text-left text-[10px] font-semibold uppercase tracking-wide ${className}`}
+      style={{ color: "var(--text-muted)" }}
+      {...rest}
+    >
+      {children}
+    </th>
+  );
+}
+
+function ApprovalPillSmall({ state }: { state: NotificationApprovalState }) {
+  const t = APPROVAL_TONE[state];
+  return (
+    <span
+      className="inline-block rounded-full px-2 py-0.5 text-[10px] font-medium uppercase tracking-wider"
+      style={{ background: t.bg, color: t.fg }}
+    >
+      {t.label}
+    </span>
+  );
 }

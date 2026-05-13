@@ -7857,6 +7857,35 @@ enum NotificationStatus {
   DISABLED // non-critical kill-switch; renderer returns early
 }
 
+// Approval workflow state per Page 68 spec. Sits beside NotificationStatus —
+// `status` tracks publish lifecycle (does the dispatcher serve DB content?)
+// while `approvalState` tracks editorial governance (has a reviewer signed
+// off?). LIVE corresponds to publication; APPROVED means a reviewer green-
+// lit the content but it hasn't been promoted yet.
+enum NotificationApprovalState {
+  DRAFT
+  IN_REVIEW
+  APPROVED
+  LIVE
+}
+
+// Page 68 — trigger taxonomy for the sidebar tree. The existing `category`
+// string is freeform; this enum is the spec's canonical bucketing, used
+// by the table view + tree navigation. We keep `category` as a denorm
+// label and `trigger` as the structured group.
+enum NotificationTrigger {
+  TENANT_LIFECYCLE
+  SUBSCRIPTION
+  INVOICE
+  PAYMENT
+  USER
+  JOB
+  MARKETING
+  SYSTEM
+  SECURITY
+  SUPPORT
+}
+
 // A platform-level template that shapes a single outbound notification
 // kind. The `kind` string is the programmatic identity used by code
 // (`sendNotification({ kind: "auth.email_verification", ... })`) — it
@@ -7914,16 +7943,124 @@ model NotificationTemplate {
   updatedById   String?
   publishedById String?
 
+  // ── Page 68 — approval workflow ────────────────────────────
+  approvalState         NotificationApprovalState @default(DRAFT)
+  submittedForReviewAt  DateTime?
+  submittedById         String?
+  reviewedAt            DateTime?
+  reviewedById          String?
+  reviewerEmail         String?
+  reviewerNote          String?
+
+  // ── Page 68 — editorial metadata ───────────────────────────
+  /** Structured trigger taxonomy for the sidebar tree. */
+  trigger     NotificationTrigger?
+  /** Free-form tags for grouping (e.g. "high-volume", "trial"). */
+  tags        String[] @default([])
+  /** Email/lifecycle manager responsible for this template. */
+  ownerEmail  String?
+  /** Per-template envelope overrides; null falls back to NotificationBrand. */
+  fromName    String?
+  fromEmail   String?
+  replyTo     String?
+
   createdAt DateTime @default(now())
   updatedAt DateTime @updatedAt
 
   versions NotificationTemplateVersion[]
+  variants NotificationTemplateVariant[]
+  metrics  NotificationTemplateMetric[]
+  reviews  NotificationTemplateReview[]
 
   // Identity is (kind, channel, locale) — one English email template
   // per kind, one English in-app per kind, room for ("…", EMAIL, "fr").
   @@unique([kind, channel, locale])
   @@index([category, sortOrder])
   @@index([status])
+  @@index([trigger])
+  @@index([approvalState])
+}
+
+// ── Page 68 — A/B variant for a template ────────────────────
+//
+// Each variant carries the same content fields as the parent template;
+// at send time the dispatcher samples a variant by weight. Variant "A"
+// is implied by the template's own content row — additional rows here
+// are B/C/D experiments. Setting active=false freezes the experiment.
+model NotificationTemplateVariant {
+  id         String @id @default(cuid())
+  templateId String
+  template   NotificationTemplate @relation(fields: [templateId], references: [id], onDelete: Cascade)
+
+  /** Short label: "A", "B", "Control", "Holiday". */
+  label String
+  /** Sampling weight (0–100). Variants are normalized to sum to 100. */
+  weight Int @default(50)
+  active Boolean @default(true)
+
+  subject     String
+  preheader   String?
+  headline    String
+  subheading  String?
+  body        String
+  ctaLabel    String?
+  ctaUrlToken String?
+  footerNote  String?
+
+  /** Per-variant aggregate counts cached for the editor. */
+  sentCount    Int @default(0)
+  openCount    Int @default(0)
+  clickCount   Int @default(0)
+  bounceCount  Int @default(0)
+
+  createdAt DateTime @default(now())
+  updatedAt DateTime @updatedAt
+
+  @@unique([templateId, label])
+  @@index([templateId, active])
+}
+
+// ── Page 68 — daily metrics roll-up ─────────────────────────
+//
+// One row per template per day. Powers the table-view send-rate /
+// open-rate / click-rate columns and the right-rail sparkline.
+model NotificationTemplateMetric {
+  id         String @id @default(cuid())
+  templateId String
+  template   NotificationTemplate @relation(fields: [templateId], references: [id], onDelete: Cascade)
+
+  day DateTime
+
+  sent      Int @default(0)
+  delivered Int @default(0)
+  opened    Int @default(0)
+  clicked   Int @default(0)
+  bounced   Int @default(0)
+  failed    Int @default(0)
+  unsubscribed Int @default(0)
+
+  @@unique([templateId, day])
+  @@index([day])
+}
+
+// ── Page 68 — approval-state audit log ──────────────────────
+//
+// Append-only — every state transition (or comment) lands here. Powers
+// the right-rail timeline + the diff-vs-prior-version display.
+model NotificationTemplateReview {
+  id         String @id @default(cuid())
+  templateId String
+  template   NotificationTemplate @relation(fields: [templateId], references: [id], onDelete: Cascade)
+
+  fromState NotificationApprovalState
+  toState   NotificationApprovalState
+
+  actorEmail String
+  note       String?
+
+  createdAt DateTime @default(now())
+
+  @@index([templateId, createdAt])
 }
 
 // Immutable snapshot of a template at publish time. Same relationship

@@ -17,6 +17,27 @@ import {
   initializeTemplateFromDefault,
   testSendTemplate,
 } from "@/app/actions/notifications-admin";
+import {
+  saveTemplateMetadata,
+  submitForReview,
+  approveTemplate,
+  rejectTemplate,
+  promoteToLive,
+  saveVariant,
+  deleteVariant,
+  provisionLocale,
+} from "@/app/actions/platform-notifications-catalog";
+import {
+  APPROVAL_TONE,
+  TRIGGER_LABEL,
+  TRIGGER_ORDER,
+  formatRate,
+  formatThousands,
+  relativeFromNow,
+} from "@/server/platform/notifications-catalog";
+import type {
+  NotificationApprovalState,
+} from "@prisma/client";
 
 // /platform/notifications/[kind] — template editor.
 //
@@ -61,6 +82,45 @@ export default async function NotificationEditorPage({
         take: 10,
       })
     : [];
+
+  // Page 68 — variants, review timeline, locale tabs, 30d metrics.
+  const variants = row
+    ? await db.notificationTemplateVariant.findMany({
+        where: { templateId: row.id },
+        orderBy: { label: "asc" },
+      })
+    : [];
+  const reviews = row
+    ? await db.notificationTemplateReview.findMany({
+        where: { templateId: row.id },
+        orderBy: { createdAt: "desc" },
+        take: 25,
+      })
+    : [];
+  const localeRows = await db.notificationTemplate.findMany({
+    where: { kind, channel: "EMAIL" },
+    orderBy: { locale: "asc" },
+    select: {
+      id: true, locale: true, status: true, approvalState: true,
+      subject: true, updatedAt: true,
+    },
+  });
+  const metricRows = row
+    ? await db.notificationTemplateMetric.findMany({
+        where: { templateId: row.id, day: { gte: new Date(Date.now() - 30 * 86_400_000) } },
+        orderBy: { day: "asc" },
+      })
+    : [];
+  const totals = metricRows.reduce(
+    (acc, m) => ({
+      sent:    acc.sent    + m.sent,
+      opened:  acc.opened  + m.opened,
+      clicked: acc.clicked + m.clicked,
+      bounced: acc.bounced + m.bounced,
+    }),
+    { sent: 0, opened: 0, clicked: 0, bounced: 0 },
+  );
+  const approvalState: NotificationApprovalState = row?.approvalState ?? "DRAFT";
 
   // Effective content for the form + preview. DB row wins; otherwise
   // the compile-time default. An admin staring at "Content" should
@@ -469,11 +529,397 @@ export default async function NotificationEditorPage({
           </Card>
         </div>
       </div>
+
+      {/* ── Page 68 — Approval workflow / variants / metadata / locales / reviews ── */}
+      {row && (
+        <div className="space-y-6">
+          {/* Approval workflow */}
+          <Card>
+            <CardHeader
+              title="Approval workflow"
+              description="Draft → In review → Approved → Live. Reviewer sign-off is required before high-volume templates can go live."
+            />
+            <div className="space-y-4 px-5 py-5">
+              <div className="flex flex-wrap items-center gap-3">
+                <span className="text-xs uppercase tracking-wide" style={{ color: "var(--text-faint)" }}>
+                  Current state
+                </span>
+                <ApprovalPill state={approvalState} />
+                {row.submittedForReviewAt && (
+                  <span className="text-xs" style={{ color: "var(--text-muted)" }}>
+                    Submitted {relativeFromNow(row.submittedForReviewAt)}
+                  </span>
+                )}
+                {row.reviewedAt && (
+                  <span className="text-xs" style={{ color: "var(--text-muted)" }}>
+                    Reviewed {relativeFromNow(row.reviewedAt)} by {row.reviewerEmail ?? "—"}
+                  </span>
+                )}
+              </div>
+
+              <p className="text-xs" style={{ color: "var(--text-muted)" }}>
+                {APPROVAL_TONE[approvalState].description}
+              </p>
+
+              <div className="flex flex-wrap items-end gap-3 pt-2" style={{ borderTop: "1px solid var(--border-subtle)" }}>
+                {canWrite && approvalState === "DRAFT" && (
+                  <form action={submitForReview} className="flex flex-wrap items-end gap-3">
+                    <input type="hidden" name="templateId" value={row.id} />
+                    <FormField
+                      label="Submission note"
+                      name="note"
+                      placeholder="Summarize what changed"
+                      maxLength={2000}
+                    />
+                    <button
+                      type="submit"
+                      className="rounded-md px-3 py-2 text-xs font-medium"
+                      style={{ background: "var(--accent-primary)", color: "var(--accent-fg)" }}
+                    >
+                      Submit for review
+                    </button>
+                  </form>
+                )}
+                {ctx.can("notifications.review") && approvalState === "IN_REVIEW" && (
+                  <>
+                    <form action={approveTemplate} className="flex flex-wrap items-end gap-3">
+                      <input type="hidden" name="templateId" value={row.id} />
+                      <FormField label="Approval note" name="note" placeholder="Optional" maxLength={2000} />
+                      <button
+                        type="submit"
+                        className="rounded-md px-3 py-2 text-xs font-medium"
+                        style={{ background: "var(--success-fg)", color: "var(--accent-fg)" }}
+                      >
+                        Approve
+                      </button>
+                    </form>
+                    <form action={rejectTemplate} className="flex flex-wrap items-end gap-3">
+                      <input type="hidden" name="templateId" value={row.id} />
+                      <FormField label="Rejection reason" name="note" placeholder="Required" maxLength={2000} required />
+                      <button
+                        type="submit"
+                        className="rounded-md px-3 py-2 text-xs font-medium"
+                        style={{ background: "var(--danger-surface)", color: "var(--danger-fg)", border: "1px solid var(--danger-fg)" }}
+                      >
+                        Reject — send back to draft
+                      </button>
+                    </form>
+                  </>
+                )}
+                {ctx.can("notifications.review") && approvalState === "APPROVED" && (
+                  <form action={promoteToLive} className="flex flex-wrap items-end gap-3">
+                    <input type="hidden" name="templateId" value={row.id} />
+                    <FormField label="Release note" name="note" placeholder="What this rollout fixes" maxLength={2000} />
+                    <button
+                      type="submit"
+                      className="rounded-md px-3 py-2 text-xs font-medium"
+                      style={{ background: "var(--accent-primary)", color: "var(--accent-fg)" }}
+                    >
+                      Promote to live
+                    </button>
+                  </form>
+                )}
+                {approvalState === "LIVE" && (
+                  <span className="text-xs" style={{ color: "var(--text-muted)" }}>
+                    Currently live — save changes to start a new draft cycle.
+                  </span>
+                )}
+              </div>
+            </div>
+          </Card>
+
+          {/* Metadata */}
+          {canWrite && (
+            <Card>
+              <CardHeader
+                title="Metadata"
+                description="Trigger taxonomy, owner, tags, and per-template envelope overrides. Reply-To and From-Name fall back to brand settings when blank."
+              />
+              <form action={saveTemplateMetadata} className="space-y-4 px-5 py-5">
+                <input type="hidden" name="templateId" value={row.id} />
+                <div className="grid gap-4 md:grid-cols-2">
+                  <label className="block">
+                    <span className="mb-1 block text-sm">Trigger</span>
+                    <select
+                      name="trigger"
+                      defaultValue={row.trigger ?? ""}
+                      className="w-full rounded-md px-3 py-2 text-sm outline-none"
+                      style={{ background: "var(--panel)", border: "1px solid var(--border)", color: "var(--text)" }}
+                    >
+                      <option value="">—</option>
+                      {TRIGGER_ORDER.map((t) => (
+                        <option key={t} value={t}>{TRIGGER_LABEL[t]}</option>
+                      ))}
+                    </select>
+                    <span className="mt-1 block text-xs" style={{ color: "var(--text-muted)" }}>
+                      Buckets this template into the sidebar tree.
+                    </span>
+                  </label>
+                  <FormField
+                    label="Owner email"
+                    name="ownerEmail"
+                    type="email"
+                    defaultValue={row.ownerEmail ?? ""}
+                    maxLength={120}
+                    hint="Lifecycle manager responsible for this template."
+                  />
+                </div>
+                <FormField
+                  label="Tags (comma-separated)"
+                  name="tags"
+                  defaultValue={row.tags.join(", ")}
+                  maxLength={500}
+                  hint='e.g. "high-volume, trial, weekly". Used to filter the catalog.'
+                />
+                <div className="grid gap-4 md:grid-cols-3">
+                  <FormField label="From name"  name="fromName"  defaultValue={row.fromName  ?? ""} maxLength={120} hint="Display name on outbound. Blank = brand default." />
+                  <FormField label="From email" name="fromEmail" defaultValue={row.fromEmail ?? ""} maxLength={200} hint="DKIM-signed domain only. Blank = brand default." />
+                  <FormField label="Reply-to"   name="replyTo"   defaultValue={row.replyTo   ?? ""} maxLength={200} hint="Where customer replies go. Blank = brand default." />
+                </div>
+                <div className="flex justify-end pt-3" style={{ borderTop: "1px solid var(--border-subtle)" }}>
+                  <button
+                    type="submit"
+                    className="rounded-md px-3 py-2 text-xs font-medium"
+                    style={{ background: "var(--accent-primary)", color: "var(--accent-fg)" }}
+                  >
+                    Save metadata
+                  </button>
+                </div>
+              </form>
+            </Card>
+          )}
+
+          {/* 30-day metrics */}
+          <Card>
+            <CardHeader
+              title="30-day metrics"
+              description={`Rolled up from NotificationTemplateMetric. Last 30 days of send / delivery / engagement.`}
+            />
+            <div className="grid grid-cols-2 gap-4 px-5 py-5 md:grid-cols-4">
+              <MetricTile label="Sent"      value={formatThousands(totals.sent)}      hint="Total messages enqueued" />
+              <MetricTile label="Opened"    value={formatThousands(totals.opened)}    hint={`${formatRate(totals.sent > 0 ? totals.opened / totals.sent : 0)} open rate`} />
+              <MetricTile label="Clicked"   value={formatThousands(totals.clicked)}   hint={`${formatRate(totals.sent > 0 ? totals.clicked / totals.sent : 0)} CTR`} />
+              <MetricTile label="Bounced"   value={formatThousands(totals.bounced)}   hint={totals.sent > 0 ? `${formatRate(totals.bounced / totals.sent)} bounce rate` : "—"} tone={totals.bounced > 0 ? "danger" : "default"} />
+            </div>
+            {metricRows.length > 0 && (
+              <div className="px-5 pb-5">
+                <Sparkline points={metricRows.map((m) => m.sent)} label="Daily send volume" />
+              </div>
+            )}
+          </Card>
+
+          {/* A/B variants */}
+          {canWrite && (
+            <Card>
+              <CardHeader
+                title="A/B variants"
+                description="The template's own content row is implicit variant A. Add B/C variants to test alternates — dispatcher samples by weight at send time."
+              />
+              <div id="variants" className="px-5 py-5">
+                {variants.length === 0 ? (
+                  <p className="text-xs" style={{ color: "var(--text-muted)" }}>
+                    No experiment variants. Add one below to start an A/B test.
+                  </p>
+                ) : (
+                  <ul className="space-y-2">
+                    {variants.map((v) => (
+                      <li
+                        key={v.id}
+                        className="grid grid-cols-1 gap-3 rounded-md px-3 py-3 md:grid-cols-[100px_1fr_120px_100px_auto]"
+                        style={{ background: "var(--surface-2)", border: "1px solid var(--border-subtle)" }}
+                      >
+                        <div className="text-sm font-semibold">{v.label}</div>
+                        <div className="min-w-0">
+                          <div className="truncate text-sm">{v.subject}</div>
+                          <div className="truncate text-xs" style={{ color: "var(--text-muted)" }}>{v.headline}</div>
+                        </div>
+                        <div className="text-xs" style={{ color: "var(--text-muted)" }}>
+                          Weight {v.weight}%
+                          {!v.active && <span className="ml-2 text-[10px] uppercase">paused</span>}
+                        </div>
+                        <div className="text-xs" style={{ color: "var(--text-muted)" }}>
+                          {formatThousands(v.sentCount)} sent
+                          {v.sentCount > 0 && (
+                            <> · {formatRate(v.openCount / v.sentCount)} open</>
+                          )}
+                        </div>
+                        <form action={deleteVariant}>
+                          <input type="hidden" name="id" value={v.id} />
+                          <button
+                            type="submit"
+                            className="text-xs"
+                            style={{ color: "var(--danger-fg)" }}
+                          >
+                            Delete
+                          </button>
+                        </form>
+                      </li>
+                    ))}
+                  </ul>
+                )}
+              </div>
+              <form action={saveVariant} className="space-y-3 px-5 pb-5">
+                <input type="hidden" name="templateId" value={row.id} />
+                <div className="grid gap-3 md:grid-cols-3">
+                  <FormField label="Label" name="label" required maxLength={40} placeholder="B" hint="Short ID, unique within this template." />
+                  <FormField label="Weight (0–100)" name="weight" type="number" defaultValue="50" required hint="Sampling chance vs other variants." />
+                  <label className="flex items-end gap-2 text-sm">
+                    <input type="checkbox" name="active" defaultChecked className="h-4 w-4" />
+                    <span>Active</span>
+                  </label>
+                </div>
+                <FormField label="Subject" name="subject" required maxLength={300} />
+                <FormField label="Preheader" name="preheader" maxLength={300} />
+                <FormField label="Headline" name="headline" required maxLength={300} />
+                <FormField label="Subheading" name="subheading" maxLength={300} />
+                <TextArea label="Body" name="body" rows={5} required maxLength={8000} />
+                <div className="grid gap-3 md:grid-cols-2">
+                  <FormField label="CTA label" name="ctaLabel" maxLength={100} />
+                  <FormField label="CTA URL / token" name="ctaUrlToken" maxLength={200} />
+                </div>
+                <FormField label="Footer note" name="footerNote" maxLength={500} />
+                <div className="flex justify-end">
+                  <button
+                    type="submit"
+                    className="rounded-md px-3 py-2 text-xs font-medium"
+                    style={{ background: "var(--accent-primary)", color: "var(--accent-fg)" }}
+                  >
+                    Save variant
+                  </button>
+                </div>
+              </form>
+            </Card>
+          )}
+
+          {/* Locales */}
+          <Card>
+            <CardHeader
+              title="Locales"
+              description="Per-locale copies of this template. Adding a locale clones the English content as the starting point — translator edits it from this list."
+            />
+            <div className="px-5 py-5">
+              {localeRows.length === 0 ? (
+                <p className="text-xs" style={{ color: "var(--text-muted)" }}>No localized rows yet.</p>
+              ) : (
+                <ul className="space-y-2">
+                  {localeRows.map((l) => (
+                    <li
+                      key={l.id}
+                      className="grid grid-cols-[60px_1fr_120px_auto] items-center gap-3 rounded-md px-3 py-2"
+                      style={{ background: "var(--surface-2)", border: "1px solid var(--border-subtle)" }}
+                    >
+                      <span className="font-mono text-xs">{l.locale}</span>
+                      <span className="truncate text-sm">{l.subject}</span>
+                      <ApprovalPill state={l.approvalState} />
+                      <span className="text-xs" style={{ color: "var(--text-muted)" }}>
+                        {relativeFromNow(l.updatedAt)}
+                      </span>
+                    </li>
+                  ))}
+                </ul>
+              )}
+              {canWrite && (
+                <form action={provisionLocale} className="mt-4 flex items-end gap-3">
+                  <input type="hidden" name="templateId" value={row.id} />
+                  <FormField label="Add locale (BCP 47)" name="locale" placeholder="es-MX" required maxLength={20} />
+                  <button
+                    type="submit"
+                    className="rounded-md px-3 py-2 text-xs font-medium"
+                    style={{ background: "var(--surface-1)", color: "var(--text-default)", border: "1px solid var(--border-default)" }}
+                  >
+                    Add locale
+                  </button>
+                </form>
+              )}
+            </div>
+          </Card>
+
+          {/* Review timeline */}
+          {reviews.length > 0 && (
+            <Card>
+              <CardHeader title="Review timeline" description="Approval state transitions and reviewer comments." />
+              <ol className="px-5 py-5">
+                {reviews.map((r, idx) => (
+                  <li
+                    key={r.id}
+                    className="grid grid-cols-[140px_1fr] gap-4 py-3 text-sm"
+                    style={{ borderTop: idx === 0 ? "none" : "1px solid var(--border-subtle)" }}
+                  >
+                    <div>
+                      <div className="text-xs uppercase tracking-wide" style={{ color: "var(--text-muted)" }}>
+                        {r.fromState} → {r.toState}
+                      </div>
+                      <div className="mt-1 text-xs" style={{ color: "var(--text-faint)" }}>
+                        {relativeFromNow(r.createdAt)}
+                      </div>
+                    </div>
+                    <div>
+                      <div className="text-xs" style={{ color: "var(--text-default)" }}>{r.actorEmail}</div>
+                      {r.note && (
+                        <p className="mt-1 text-xs" style={{ color: "var(--text-muted)" }}>{r.note}</p>
+                      )}
+                    </div>
+                  </li>
+                ))}
+              </ol>
+            </Card>
+          )}
+        </div>
+      )}
     </div>
   );
 }
 
 /* ──────────────────────────────────────────────────────────────── */
+
+function ApprovalPill({ state }: { state: NotificationApprovalState }) {
+  const t = APPROVAL_TONE[state];
+  return (
+    <span
+      className="rounded-full px-2 py-0.5 text-[10px] font-medium uppercase tracking-wider"
+      style={{ background: t.bg, color: t.fg, border: `1px solid ${t.fg}` }}
+    >
+      {t.label}
+    </span>
+  );
+}
+
+function MetricTile({
+  label, value, hint, tone = "default",
+}: { label: string; value: string; hint?: string; tone?: "default" | "danger" }) {
+  const fg = tone === "danger" ? "var(--danger-fg)" : "var(--text-default)";
+  return (
+    <div
+      className="rounded-md px-3 py-3"
+      style={{ background: "var(--surface-2)", border: "1px solid var(--border-subtle)" }}
+    >
+      <div className="text-[10px] uppercase tracking-wide" style={{ color: "var(--text-faint)" }}>{label}</div>
+      <div className="mt-1 text-lg font-semibold" style={{ color: fg }}>{value}</div>
+      {hint && <div className="mt-0.5 text-xs" style={{ color: "var(--text-muted)" }}>{hint}</div>}
+    </div>
+  );
+}
+
+function Sparkline({ points, label }: { points: number[]; label: string }) {
+  if (points.length === 0) return null;
+  const max = Math.max(1, ...points);
+  const w = 600;
+  const h = 60;
+  const step = w / Math.max(1, points.length - 1);
+  const path = points
+    .map((p, i) => `${i === 0 ? "M" : "L"} ${i * step} ${h - (p / max) * h}`)
+    .join(" ");
+  return (
+    <div>
+      <div className="mb-2 text-[10px] uppercase tracking-wide" style={{ color: "var(--text-faint)" }}>
+        {label}
+      </div>
+      <svg viewBox={`0 0 ${w} ${h}`} preserveAspectRatio="none" style={{ width: "100%", height: 60 }}>
+        <path d={path} fill="none" stroke="var(--accent-primary)" strokeWidth={1.5} />
+      </svg>
+    </div>
+  );
+}
 
 function buildSampleTokens(
   schema: TokenSchema,

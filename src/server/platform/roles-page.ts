@@ -162,6 +162,7 @@ export const PERMISSION_DESCRIPTIONS: Record<PlatformPermission, string> = {
   // Notifications
   "notifications.read":    "Read transactional templates.",
   "notifications.manage":  "Edit transactional templates.",
+  "notifications.review":  "Approve / reject template changes (Lifecycle / Marketing Ops).",
 };
 
 /* ────────────────────────────────────────────────────────── */
