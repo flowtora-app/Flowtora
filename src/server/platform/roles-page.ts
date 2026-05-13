@@ -139,6 +139,9 @@ export const PERMISSION_DESCRIPTIONS: Record<PlatformPermission, string> = {
   "branding.read":     "View Flowtora brand, white-label profiles, per-tenant branding, email footer, login pages, powered-by policy.",
   "branding.manage":   "Edit Flowtora brand, create/update white-label profiles, edit email footer + login pages + powered-by policy.",
   "branding.tenant_manage": "Apply white-label profile to a tenant + per-tenant override (CSM scope).",
+  "localization.read":      "View locales, currencies, FX rates, translation status, glossary, settings.",
+  "localization.manage":    "Add/configure locales + currencies, set FX policy, edit glossary + program settings.",
+  "localization.translate": "Edit translations for assigned locales (per-locale scope).",
   // Analytics
   "analytics.read":        "Read analytics dashboards.",
   "analytics.export":      "Export analytics datasets.",

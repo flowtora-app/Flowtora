@@ -296,6 +296,10 @@ export type PlatformPermission =
   | "branding.read"
   | "branding.manage"
   | "branding.tenant_manage"
+  // Configuration — Page 67 Localization
+  | "localization.read"
+  | "localization.manage"
+  | "localization.translate"
 
   // Analytics / BI
   | "analytics.read"
@@ -353,6 +357,7 @@ const PLATFORM_ALL: PlatformPermission[] = [
   "env.read", "env.reveal", "env.manage",
   "logs.read", "logs.manage", "logs.resolve",
   "branding.read", "branding.manage", "branding.tenant_manage",
+  "localization.read", "localization.manage", "localization.translate",
   "analytics.read", "analytics.export", "revenue.read", "usage.read",
   "reports.read", "reports.create", "reports.edit", "reports.delete",
   "reports.schedule", "reports.export",
@@ -367,7 +372,7 @@ const PLATFORM_ALL: PlatformPermission[] = [
 const PLATFORM_BASELINE_READ: PlatformPermission[] = [
   "tenant.read", "billing.read", "staff.read", "users.read",
   "support.read", "health.read", "audit.read", "compliance.read",
-  "feature_flag.read", "announcement.read", "leads.read", "referrals.read", "affiliates.read", "seo.read", "integrations.read", "webhooks.read", "docs.read", "marketplace.read", "sso.read", "security.read", "privacy.read", "backups.read", "incidents.read", "network.read", "system.status.read", "queues.read", "email.deliverability.read", "storage.read", "database.read", "ratelimits.read", "env.read", "logs.read", "branding.read",
+  "feature_flag.read", "announcement.read", "leads.read", "referrals.read", "affiliates.read", "seo.read", "integrations.read", "webhooks.read", "docs.read", "marketplace.read", "sso.read", "security.read", "privacy.read", "backups.read", "incidents.read", "network.read", "system.status.read", "queues.read", "email.deliverability.read", "storage.read", "database.read", "ratelimits.read", "env.read", "logs.read", "branding.read", "localization.read",
   "analytics.read", "revenue.read", "usage.read",
   "reports.read", "reports.export", // every staff role reads + can export
   "system.read_settings", "notifications.read",
@@ -451,6 +456,7 @@ export const PLATFORM_ROLE_PERMISSIONS: Record<PlatformRole, PlatformPermission[
     "privacy.read", "privacy.triage",
     "incidents.read",
     "logs.read", "logs.resolve", // support triages user-reported errors
+    "localization.translate", // support agents may translate own locale
   ]),
   // Billing team. Can issue refunds, mint coupons, change plans —
   // everything money. No tenant suspension, no staff edits.
@@ -505,6 +511,7 @@ export const PLATFORM_ROLE_PERMISSIONS: Record<PlatformRole, PlatformPermission[
     "notifications.read", "notifications.manage",
     "email.deliverability.read", "email.deliverability.manage",
     "branding.read", "branding.manage", // Brand Admin lives in Marketing
+    "localization.read", "localization.manage", "localization.translate", // Localization Manager
   ]),
   // Internal CMS — announcements + transactional templates, nothing else.
   CONTENT_MANAGER: dedup([

@@ -15815,3 +15815,219 @@ model BrandingChange {
 
   @@index([kind, createdAt(sort: Desc)])
 }
+
+// ────────────────────────────────────────────────────────────
+// Page 67 — Localization.
+// ────────────────────────────────────────────────────────────
+
+enum LocaleStatus {
+  ENABLED
+  BETA
+  HIDDEN
+}
+
+enum FxSource {
+  ECB
+  OPEN_EXCHANGE_RATES
+  FIXER
+  MANUAL
+}
+
+enum CurrencyStatus {
+  ACTIVE
+  INACTIVE
+}
+
+enum TranslationStatus {
+  TRANSLATED
+  PENDING
+  OUTDATED
+  NEEDS_REVIEW
+}
+
+enum TranslationModule {
+  ADMIN
+  TENANT_APP
+  EMAIL
+  SMS
+  MARKETING
+}
+
+enum PaperSize {
+  LETTER
+  A4
+}
+
+model PlatformLocale {
+  id String @id @default(cuid())
+
+  /** BCP 47 code: en-US, es-MX, fr-FR, etc. */
+  code        String @unique
+  language    String
+  region      String?
+  status      LocaleStatus @default(BETA)
+  rtl         Boolean      @default(false)
+  /** Source: in-house / vendor / community. */
+  source      String?
+  ownerEmail  String?
+
+  // ── Regional formats ─────────────────────────────────────
+  dateFormat        String?
+  timeFormat        String?
+  decimalSeparator  String  @default(".")
+  thousandSeparator String  @default(",")
+  paperSize         PaperSize @default(LETTER)
+  phoneFormat       String?
+  addressFormat     String?
+
+  notes      String?
+
+  // ── Cached counters (rebuilt when translations change) ───
+  totalKeys       Int @default(0)
+  translatedCount Int @default(0)
+  pendingCount    Int @default(0)
+  outdatedCount   Int @default(0)
+  reviewCount     Int @default(0)
+
+  createdAt DateTime @default(now())
+  updatedAt DateTime @updatedAt
+
+  translations Translation[]
+  statsTrend   TranslationStatsSnapshot[]
+}
+
+model PlatformCurrency {
+  id String @id @default(cuid())
+
+  /** ISO 4217. */
+  code         String   @unique
+  name         String
+  symbol       String
+  decimals     Int      @default(2)
+
+  /** Rate against USD. */
+  fxRate       Float    @default(1.0)
+  fxSource     FxSource @default(ECB)
+  fxLastUpdatedAt DateTime?
+
+  /** Optional manual override (overrides fxRate). */
+  manualOverride Float?
+  /** Margin percent applied on top of fxRate when displaying. */
+  marginPct    Float    @default(0)
+
+  status       CurrencyStatus @default(ACTIVE)
+  notes        String?
+
+  createdAt DateTime @default(now())
+  updatedAt DateTime @updatedAt
+}
+
+model TranslationKey {
+  id String @id @default(cuid())
+
+  key          String   @unique
+  /** English source text. */
+  sourceText   String
+  module       TranslationModule
+  /** Hint to the translator. */
+  context      String?
+
+  hasPlurals   Boolean  @default(false)
+  hasVariables Boolean  @default(false)
+  /** Detected variables in source — must appear in target. */
+  variables    String[] @default([])
+  /** Glossary terms have their own row but a TranslationKey can also
+      be marked do-not-translate (e.g. brand names in copy). */
+  doNotTranslate Boolean @default(false)
+
+  createdAt DateTime @default(now())
+  updatedAt DateTime @updatedAt
+
+  translations Translation[]
+
+  @@index([module])
+}
+
+model Translation {
+  id String @id @default(cuid())
+
+  keyId    String
+  key      TranslationKey @relation(fields: [keyId], references: [id], onDelete: Cascade)
+  localeId String
+  locale   PlatformLocale @relation(fields: [localeId], references: [id], onDelete: Cascade)
+
+  text     String?
+  status   TranslationStatus @default(PENDING)
+
+  /** AI / TM suggestion. */
+  aiSuggestion String?
+  /** Hash of sourceText at time of last save — detects outdated entries. */
+  sourceHash   String?
+
+  translatorEmail String?
+  reviewerEmail   String?
+  comments        String?
+
+  createdAt DateTime @default(now())
+  updatedAt DateTime @updatedAt
+
+  @@unique([keyId, localeId])
+  @@index([localeId, status])
+}
+
+model GlossaryEntry {
+  id String @id @default(cuid())
+
+  term String @unique
+  /** { "es-MX": "frase", "fr-FR": "phrase", ... } */
+  translationsJson Json?
+  doNotTranslate   Boolean @default(false)
+  /** Gender hint for languages that need it (e.g. "masculine", "feminine", "neuter"). */
+  gender           String?
+  /** Plural forms per locale, JSON: { "en-US": { one: "x", other: "ys" } } */
+  pluralFormsJson  Json?
+  notes            String?
+
+  createdAt DateTime @default(now())
+  updatedAt DateTime @updatedAt
+}
+
+/** Daily snapshot per locale — powers the trend chart. */
+model TranslationStatsSnapshot {
+  id String @id @default(cuid())
+
+  localeId   String
+  locale     PlatformLocale @relation(fields: [localeId], references: [id], onDelete: Cascade)
+  day        DateTime
+
+  totalKeys       Int
+  translatedCount Int
+  pendingCount    Int
+  outdatedCount   Int
+  reviewCount     Int
+
+  @@unique([localeId, day])
+  @@index([day])
+}
+
+model LocalizationSettings {
+  id String @id @default("default")
+
+  icuFormatEnabled        Boolean   @default(true)
+  /** { "en-US": ["one", "other"], "ar-SA": ["zero","one","two","few","many","other"], ... } */
+  pluralRulesJson         Json?
+  /** Resolution chain — locale not in DB falls back left-to-right. */
+  fallbackChain           String[]  @default(["en-US"])
+  /** Wrap strings in [‼ ¡‼…‼] for visual QA. */
+  pseudoLocalizationEnabled Boolean @default(false)
+
+  fxAutoUpdateEnabled     Boolean   @default(true)
+  fxAutoUpdateCron        String    @default("0 5 * * *")
+  fxDefaultSource         FxSource  @default(ECB)
+  fxDefaultMarginPct      Float     @default(0)
+
+  notes                   String?
+  updatedById             String?
+  updatedAt               DateTime @updatedAt
+  createdAt               DateTime @default(now())
+}

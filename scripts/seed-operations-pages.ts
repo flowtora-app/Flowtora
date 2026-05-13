@@ -89,6 +89,7 @@ async function main() {
   await seedLogs();                                    // Page 64
   await seedPlatformSettings();                        // Page 65
   await seedBranding(tenants);                         // Page 66
+  await seedLocalization();                            // Page 67
 
   console.log("\n✓ Seed complete.\n");
   await db.$disconnect();
@@ -376,6 +377,17 @@ async function wipeOldSeed() {
   await db.brandingChange.deleteMany({ where: { actorEmail: { in: [
     "design@flowtora.com", "founder@flowtora.com", "csm@flowtora.com",
     "growth@flowtora.com", "ops@flowtora.com",
+  ] } } });
+  // Page 67 — Localization wipe (cascades translations + snapshots).
+  await db.glossaryEntry.deleteMany({ where: { term: { startsWith: "[seed] " } } });
+  await db.translationKey.deleteMany({ where: { key: { startsWith: "seed." } } });
+  await db.platformLocale.deleteMany({ where: { code: { in: [
+    "en-US", "es-MX", "fr-FR", "de-DE", "pt-BR",
+    "it-IT", "ja-JP", "zh-CN", "ar-SA", "nl-NL",
+  ] } } });
+  await db.platformCurrency.deleteMany({ where: { code: { in: [
+    "USD", "EUR", "GBP", "CAD", "AUD", "MXN", "BRL", "JPY",
+    "CNY", "INR", "AED", "CHF", "SEK", "NOK", "HKD",
   ] } } });
   // Customers tagged seed (after orders are gone).
   await db.customer.deleteMany({ where: { tags: { has: "seed" } } });
@@ -14145,6 +14157,651 @@ async function seedBranding(tenants: { id: string; name: string; slug: string }[
 
   console.log(
     `  ✓ Brand singleton + ${profiles.length} profiles (${profiles.filter(p => p.removeFlowtora).length} white-label), ${appCount} tenant applications, ${changes.length} change events`,
+  );
+}
+
+/* ── Page 67 — Localization seed ───────────────────────── */
+
+async function seedLocalization() {
+  console.log("── Seeding Localization (Page 67)…");
+
+  // 1. Settings singleton — Flowtora defaults.
+  await db.localizationSettings.upsert({
+    where: { id: "default" },
+    create: {
+      id: "default",
+      icuFormatEnabled:        true,
+      pluralRulesJson: {
+        "en-US": ["one", "other"],
+        "es-MX": ["one", "other"],
+        "fr-FR": ["one", "other"],
+        "de-DE": ["one", "other"],
+        "pt-BR": ["one", "other"],
+        "it-IT": ["one", "other"],
+        "ja-JP": ["other"],
+        "zh-CN": ["other"],
+        "ar-SA": ["zero", "one", "two", "few", "many", "other"],
+        "nl-NL": ["one", "other"],
+      } as never,
+      fallbackChain: ["en-US"],
+      pseudoLocalizationEnabled: false,
+      fxAutoUpdateEnabled:    true,
+      fxAutoUpdateCron:       "0 5 * * *",
+      fxDefaultSource:        "ECB",
+      fxDefaultMarginPct:     0,
+      notes: "Source locale en-US is non-deletable. Adding a new locale requires re-running translation imports.",
+    },
+    update: {
+      icuFormatEnabled:        true,
+      fallbackChain: ["en-US"],
+      fxAutoUpdateEnabled:    true,
+      fxAutoUpdateCron:       "0 5 * * *",
+      fxDefaultSource:        "ECB",
+      fxDefaultMarginPct:     0,
+    },
+  });
+
+  // 2. Locales — 10 locales spanning enabled, beta, hidden + one RTL.
+  type LocaleBp = {
+    code: string; language: string; region?: string;
+    status: "ENABLED" | "BETA" | "HIDDEN";
+    rtl?: boolean;
+    source?: string; owner?: string;
+    dateFmt: string; timeFmt: string;
+    decimal: string; thousand: string;
+    paper: "LETTER" | "A4";
+    phoneFmt: string; addressFmt: string;
+    notes?: string;
+  };
+  const localeBps: LocaleBp[] = [
+    { code: "en-US", language: "English", region: "United States",
+      status: "ENABLED", source: "In-house", owner: "design@flowtora.com",
+      dateFmt: "MM/DD/YYYY", timeFmt: "h:mm A", decimal: ".", thousand: ",",
+      paper: "LETTER", phoneFmt: "(###) ###-####",
+      addressFmt: "{name}\n{street}\n{city}, {state} {zip}\n{country}",
+      notes: "Source locale — also the fallback for every other locale." },
+    { code: "es-MX", language: "Spanish", region: "Mexico",
+      status: "ENABLED", source: "Smartling", owner: "translations@flowtora.com",
+      dateFmt: "DD/MM/YYYY", timeFmt: "HH:mm", decimal: ".", thousand: ",",
+      paper: "LETTER", phoneFmt: "+52 ### ### ####",
+      addressFmt: "{name}\n{street}\n{city}, {state}\n{zip} {country}" },
+    { code: "fr-FR", language: "French", region: "France",
+      status: "ENABLED", source: "Lokalise", owner: "translations@flowtora.com",
+      dateFmt: "DD/MM/YYYY", timeFmt: "HH:mm", decimal: ",", thousand: " ",
+      paper: "A4", phoneFmt: "+33 # ## ## ## ##",
+      addressFmt: "{name}\n{street}\n{zip} {city}\n{country}" },
+    { code: "de-DE", language: "German", region: "Germany",
+      status: "BETA", source: "Smartling", owner: "translations@flowtora.com",
+      dateFmt: "DD.MM.YYYY", timeFmt: "HH:mm", decimal: ",", thousand: ".",
+      paper: "A4", phoneFmt: "+49 ### ########",
+      addressFmt: "{name}\n{street}\n{zip} {city}\n{country}",
+      notes: "Awaiting legal review of GDPR-specific copy before public launch." },
+    { code: "pt-BR", language: "Portuguese", region: "Brazil",
+      status: "ENABLED", source: "Community", owner: "carlos@flowtora.com",
+      dateFmt: "DD/MM/YYYY", timeFmt: "HH:mm", decimal: ",", thousand: ".",
+      paper: "A4", phoneFmt: "+55 (##) #####-####",
+      addressFmt: "{name}\n{street}\n{city} - {state}\n{zip}\n{country}" },
+    { code: "it-IT", language: "Italian", region: "Italy",
+      status: "BETA", source: "Lokalise",
+      dateFmt: "DD/MM/YYYY", timeFmt: "HH:mm", decimal: ",", thousand: ".",
+      paper: "A4", phoneFmt: "+39 ### #######",
+      addressFmt: "{name}\n{street}\n{zip} {city} ({state})\n{country}" },
+    { code: "ja-JP", language: "Japanese", region: "Japan",
+      status: "BETA", source: "In-house", owner: "translations@flowtora.com",
+      dateFmt: "YYYY/MM/DD", timeFmt: "HH:mm", decimal: ".", thousand: ",",
+      paper: "A4", phoneFmt: "+81 ##-####-####",
+      addressFmt: "〒{zip}\n{state}{city}{street}\n{name}" },
+    { code: "zh-CN", language: "Chinese", region: "China",
+      status: "HIDDEN", source: "Smartling",
+      dateFmt: "YYYY-MM-DD", timeFmt: "HH:mm", decimal: ".", thousand: ",",
+      paper: "A4", phoneFmt: "+86 ### #### ####",
+      addressFmt: "{country}\n{state}{city}\n{street}\n{name} {zip}",
+      notes: "Holding back until logistics partner has CN presence." },
+    { code: "ar-SA", language: "Arabic", region: "Saudi Arabia",
+      status: "BETA", rtl: true, source: "Lokalise",
+      dateFmt: "DD/MM/YYYY", timeFmt: "HH:mm", decimal: "٫", thousand: "٬",
+      paper: "A4", phoneFmt: "+966 ## ### ####",
+      addressFmt: "{name}\n{street}\n{city} {zip}\n{country}",
+      notes: "RTL — UI must flip for this locale. Pseudo-localization recommended before sign-off." },
+    { code: "nl-NL", language: "Dutch", region: "Netherlands",
+      status: "HIDDEN", source: "Community",
+      dateFmt: "DD-MM-YYYY", timeFmt: "HH:mm", decimal: ",", thousand: ".",
+      paper: "A4", phoneFmt: "+31 # ########",
+      addressFmt: "{name}\n{street}\n{zip} {city}\n{country}",
+      notes: "Drafted by community contributor — awaiting reviewer assignment." },
+  ];
+
+  const localeIdByCode = new Map<string, string>();
+  for (const l of localeBps) {
+    const row = await db.platformLocale.upsert({
+      where: { code: l.code },
+      create: {
+        code: l.code, language: l.language, region: l.region ?? null,
+        status: l.status, rtl: !!l.rtl,
+        source: l.source ?? null, ownerEmail: l.owner ?? null,
+        dateFormat: l.dateFmt, timeFormat: l.timeFmt,
+        decimalSeparator: l.decimal, thousandSeparator: l.thousand,
+        paperSize: l.paper,
+        phoneFormat: l.phoneFmt, addressFormat: l.addressFmt,
+        notes: l.notes ?? null,
+      },
+      update: {
+        language: l.language, region: l.region ?? null,
+        status: l.status, rtl: !!l.rtl,
+        source: l.source ?? null, ownerEmail: l.owner ?? null,
+        dateFormat: l.dateFmt, timeFormat: l.timeFmt,
+        decimalSeparator: l.decimal, thousandSeparator: l.thousand,
+        paperSize: l.paper,
+        phoneFormat: l.phoneFmt, addressFormat: l.addressFmt,
+        notes: l.notes ?? null,
+      },
+    });
+    localeIdByCode.set(l.code, row.id);
+  }
+
+  // 3. Currencies — 15 covering all locales above + extras.
+  type CurrBp = {
+    code: string; name: string; symbol: string; decimals: number;
+    rate: number; source: "ECB" | "OPEN_EXCHANGE_RATES" | "FIXER" | "MANUAL";
+    manual?: number; margin?: number;
+    status?: "ACTIVE" | "INACTIVE";
+    notes?: string;
+  };
+  const currBps: CurrBp[] = [
+    { code: "USD", name: "US Dollar",          symbol: "$",   decimals: 2, rate: 1.0,        source: "ECB" },
+    { code: "EUR", name: "Euro",               symbol: "€",   decimals: 2, rate: 0.92,       source: "ECB" },
+    { code: "GBP", name: "British Pound",      symbol: "£",   decimals: 2, rate: 0.79,       source: "ECB" },
+    { code: "CAD", name: "Canadian Dollar",    symbol: "CA$", decimals: 2, rate: 1.36,       source: "ECB" },
+    { code: "AUD", name: "Australian Dollar",  symbol: "A$",  decimals: 2, rate: 1.52,       source: "ECB" },
+    { code: "MXN", name: "Mexican Peso",       symbol: "MX$", decimals: 2, rate: 17.05,      source: "ECB" },
+    { code: "BRL", name: "Brazilian Real",     symbol: "R$",  decimals: 2, rate: 5.12,       source: "ECB" },
+    { code: "JPY", name: "Japanese Yen",       symbol: "¥",   decimals: 0, rate: 149.8,      source: "ECB" },
+    { code: "CNY", name: "Chinese Yuan",       symbol: "¥",   decimals: 2, rate: 7.24,       source: "OPEN_EXCHANGE_RATES", margin: 1.0,
+      notes: "1% margin applied — onshore vs offshore CNH spread." },
+    { code: "INR", name: "Indian Rupee",       symbol: "₹",   decimals: 2, rate: 83.4,       source: "OPEN_EXCHANGE_RATES" },
+    { code: "AED", name: "UAE Dirham",         symbol: "د.إ", decimals: 2, rate: 3.673,      source: "FIXER",
+      notes: "Pegged to USD at 3.6725." },
+    { code: "CHF", name: "Swiss Franc",        symbol: "Fr.", decimals: 2, rate: 0.88,       source: "ECB" },
+    { code: "SEK", name: "Swedish Krona",      symbol: "kr",  decimals: 2, rate: 10.62,      source: "ECB" },
+    { code: "NOK", name: "Norwegian Krone",    symbol: "kr",  decimals: 2, rate: 10.91,      source: "ECB",
+      status: "INACTIVE",
+      notes: "Deactivated — no NO tenants on the platform yet." },
+    { code: "HKD", name: "Hong Kong Dollar",   symbol: "HK$", decimals: 2, rate: 7.81,       source: "MANUAL",
+      manual: 7.80, notes: "Manual override — bank quote 0.01 better than ECB." },
+  ];
+  for (const c of currBps) {
+    await db.platformCurrency.upsert({
+      where: { code: c.code },
+      create: {
+        code: c.code, name: c.name, symbol: c.symbol, decimals: c.decimals,
+        fxRate: c.rate, fxSource: c.source,
+        fxLastUpdatedAt: minutesAgo(randInt(15, 360)),
+        manualOverride: c.manual ?? null,
+        marginPct: c.margin ?? 0,
+        status: c.status ?? "ACTIVE",
+        notes: c.notes ?? null,
+      },
+      update: {
+        name: c.name, symbol: c.symbol, decimals: c.decimals,
+        fxRate: c.rate, fxSource: c.source,
+        fxLastUpdatedAt: minutesAgo(randInt(15, 360)),
+        manualOverride: c.manual ?? null,
+        marginPct: c.margin ?? 0,
+        status: c.status ?? "ACTIVE",
+        notes: c.notes ?? null,
+      },
+    });
+  }
+
+  // 4. Translation keys — 50 across all 5 modules with realistic variables.
+  type KeyBp = {
+    key: string;
+    source: string;
+    module: "ADMIN" | "TENANT_APP" | "EMAIL" | "SMS" | "MARKETING";
+    context?: string;
+    plural?: boolean;
+    dnt?: boolean;
+  };
+  const keyBps: KeyBp[] = [
+    // ADMIN module — platform-internal copy.
+    { key: "seed.admin.dashboard.title",      source: "Platform dashboard",                                              module: "ADMIN" },
+    { key: "seed.admin.dashboard.welcome",    source: "Welcome back, {name}",                                            module: "ADMIN", context: "Greeting line, {name} is the admin's display name" },
+    { key: "seed.admin.tenants.count",        source: "{count, plural, one {# tenant} other {# tenants}}",               module: "ADMIN", plural: true },
+    { key: "seed.admin.tenants.new",          source: "Add tenant",                                                      module: "ADMIN" },
+    { key: "seed.admin.audit.recent",         source: "Recent activity",                                                 module: "ADMIN" },
+    { key: "seed.admin.billing.mrr",          source: "Monthly recurring revenue",                                       module: "ADMIN" },
+    { key: "seed.admin.security.alerts",      source: "{count, plural, one {# security alert} other {# security alerts}}", module: "ADMIN", plural: true },
+    { key: "seed.admin.empty.no_results",     source: "No results match your filters.",                                  module: "ADMIN" },
+    { key: "seed.admin.flag.disabled",        source: "Disabled — last toggled {when}",                                  module: "ADMIN", context: "{when} renders as a relative time like '2h ago'" },
+    { key: "seed.admin.export.cta",           source: "Export to CSV",                                                   module: "ADMIN" },
+
+    // TENANT_APP module — what shop owners and their teams see.
+    { key: "seed.app.nav.dashboard",          source: "Dashboard",                                                       module: "TENANT_APP" },
+    { key: "seed.app.nav.quotes",             source: "Quotes",                                                          module: "TENANT_APP" },
+    { key: "seed.app.nav.orders",             source: "Orders",                                                          module: "TENANT_APP" },
+    { key: "seed.app.nav.invoices",           source: "Invoices",                                                        module: "TENANT_APP" },
+    { key: "seed.app.nav.customers",          source: "Customers",                                                       module: "TENANT_APP" },
+    { key: "seed.app.quote.total",            source: "Total: {amount}",                                                 module: "TENANT_APP", context: "{amount} pre-formatted with currency symbol" },
+    { key: "seed.app.quote.expires",          source: "Expires in {days, plural, one {# day} other {# days}}",            module: "TENANT_APP", plural: true },
+    { key: "seed.app.order.status.in_production", source: "In production",                                               module: "TENANT_APP" },
+    { key: "seed.app.order.status.ready",     source: "Ready for pickup",                                                module: "TENANT_APP" },
+    { key: "seed.app.order.status.delivered", source: "Delivered",                                                       module: "TENANT_APP" },
+    { key: "seed.app.invoice.due",            source: "Due {date}",                                                      module: "TENANT_APP" },
+    { key: "seed.app.invoice.paid",           source: "Paid in full",                                                    module: "TENANT_APP" },
+    { key: "seed.app.empty.no_orders",        source: "No orders yet. Create a quote to get started.",                   module: "TENANT_APP" },
+    { key: "seed.app.button.save",            source: "Save changes",                                                    module: "TENANT_APP" },
+    { key: "seed.app.button.cancel",          source: "Cancel",                                                          module: "TENANT_APP" },
+    { key: "seed.app.brand.tagline",          source: "Powered by Flowtora",                                             module: "TENANT_APP", dnt: true, context: "Brand line — never translate the word 'Flowtora'" },
+
+    // EMAIL module — transactional emails.
+    { key: "seed.email.welcome.subject",      source: "Welcome to {brand} — let's get your first quote out",             module: "EMAIL" },
+    { key: "seed.email.welcome.body",         source: "Hi {name},\n\nThanks for signing up for {brand}. Your trial includes every feature for 14 days.",  module: "EMAIL" },
+    { key: "seed.email.quote_sent.subject",   source: "Your quote from {shop} is ready",                                  module: "EMAIL" },
+    { key: "seed.email.quote_sent.body",      source: "Hi {customer},\n\n{shop} prepared a quote for you. Total: {amount}. View it here: {link}",        module: "EMAIL" },
+    { key: "seed.email.invoice.subject",      source: "Invoice #{invoiceNumber} from {shop} — {amount} due",              module: "EMAIL" },
+    { key: "seed.email.invoice.body",         source: "Hi {customer},\n\nYour invoice #{invoiceNumber} for {amount} is due on {dueDate}. Pay online: {link}",  module: "EMAIL" },
+    { key: "seed.email.proof_ready.subject",  source: "Proof ready for review — {projectName}",                           module: "EMAIL" },
+    { key: "seed.email.proof_ready.body",     source: "Your proof for {projectName} is ready to review. Approve or request changes here: {link}",       module: "EMAIL" },
+    { key: "seed.email.password_reset.subject", source: "Reset your {brand} password",                                    module: "EMAIL" },
+    { key: "seed.email.password_reset.body",  source: "Click here to reset your password: {link}\n\nThis link expires in 1 hour.",                       module: "EMAIL" },
+
+    // SMS module — short-form notifications.
+    { key: "seed.sms.order_ready",            source: "{shop}: Your order #{orderNumber} is ready for pickup.",            module: "SMS" },
+    { key: "seed.sms.proof_ready",            source: "{shop}: Your proof is ready to review — {link}",                   module: "SMS" },
+    { key: "seed.sms.invoice_reminder",       source: "{shop}: Invoice #{invoiceNumber} for {amount} is due {dueDate}.",  module: "SMS" },
+    { key: "seed.sms.appointment_reminder",   source: "Reminder: appointment with {shop} on {date} at {time}.",            module: "SMS" },
+    { key: "seed.sms.delivery_dispatched",    source: "{shop}: Your order #{orderNumber} is out for delivery.",           module: "SMS" },
+
+    // MARKETING module — landing page & campaign copy.
+    { key: "seed.marketing.hero.headline",    source: "Run your sign shop without the spreadsheet sprawl.",               module: "MARKETING" },
+    { key: "seed.marketing.hero.sub",         source: "Quotes, jobs, vendors, and payments — finally in one place.",      module: "MARKETING" },
+    { key: "seed.marketing.cta.start_trial",  source: "Start free trial",                                                 module: "MARKETING" },
+    { key: "seed.marketing.cta.book_demo",    source: "Book a demo",                                                      module: "MARKETING" },
+    { key: "seed.marketing.feature.ai_quotes.title", source: "AI-assisted quoting",                                       module: "MARKETING" },
+    { key: "seed.marketing.feature.ai_quotes.body",  source: "Stop typing the same five quotes a day. AI drafts price + scope from a photo.",  module: "MARKETING" },
+    { key: "seed.marketing.social_proof",     source: "Trusted by {count, plural, one {# shop} other {#,000+ shops}} across North America.", module: "MARKETING", plural: true },
+    { key: "seed.marketing.pricing.starting", source: "Starting at {amount}/month",                                       module: "MARKETING" },
+    { key: "seed.marketing.footer.copyright", source: "© {year} Flowtora Inc. All rights reserved.",                      module: "MARKETING", dnt: true, context: "Brand line — never translate 'Flowtora'" },
+  ];
+
+  const keyIdByKey = new Map<string, string>();
+  for (const k of keyBps) {
+    // Extract variables exactly the same way the server action does.
+    const matches = k.source.match(/\{[a-zA-Z_][a-zA-Z0-9_]*(,\s*[^}]+)?\}/g) ?? [];
+    const variables = Array.from(new Set(matches.map((m) => m.split(",")[0]!.trim().replace(/[{}]/g, "")))).map((n) => `{${n}}`);
+    const row = await db.translationKey.upsert({
+      where: { key: k.key },
+      create: {
+        key: k.key,
+        sourceText: k.source,
+        module: k.module,
+        context: k.context ?? null,
+        hasPlurals: !!k.plural,
+        hasVariables: variables.length > 0,
+        variables,
+        doNotTranslate: !!k.dnt,
+      },
+      update: {
+        sourceText: k.source,
+        module: k.module,
+        context: k.context ?? null,
+        hasPlurals: !!k.plural,
+        hasVariables: variables.length > 0,
+        variables,
+        doNotTranslate: !!k.dnt,
+      },
+    });
+    keyIdByKey.set(k.key, row.id);
+  }
+
+  // 5. Translations per locale.
+  //
+  // Strategy: hand-author a curated dictionary for the high-coverage
+  // locales (es-MX, fr-FR, de-DE, pt-BR) for the most visible keys.
+  // For other locales, randomly mark some keys TRANSLATED / PENDING /
+  // OUTDATED / NEEDS_REVIEW so the stats panel renders meaningfully.
+  // en-US gets a self-translation (sourceText == translation) so the
+  // 100% coverage badge is accurate.
+  function hashSource(text: string): string {
+    return createHash("sha256").update(text).digest("hex").slice(0, 16);
+  }
+
+  // en-US — every key is "translated" (it's the source).
+  for (const k of keyBps) {
+    const keyId = keyIdByKey.get(k.key)!;
+    const localeId = localeIdByCode.get("en-US")!;
+    await db.translation.upsert({
+      where: { keyId_localeId: { keyId, localeId } },
+      create: {
+        keyId, localeId,
+        text: k.source,
+        status: "TRANSLATED",
+        sourceHash: hashSource(k.source),
+        translatorEmail: "design@flowtora.com",
+      },
+      update: {
+        text: k.source,
+        status: "TRANSLATED",
+        sourceHash: hashSource(k.source),
+        translatorEmail: "design@flowtora.com",
+      },
+    });
+  }
+
+  // Hand-written translations for the four highest-coverage locales.
+  // Only the most user-visible keys — the rest stay PENDING.
+  type CuratedDict = Record<string, string>;
+  const esMX: CuratedDict = {
+    "seed.admin.dashboard.title":   "Panel de la plataforma",
+    "seed.admin.dashboard.welcome": "Bienvenido de nuevo, {name}",
+    "seed.admin.tenants.count":     "{count, plural, one {# inquilino} other {# inquilinos}}",
+    "seed.admin.tenants.new":       "Agregar inquilino",
+    "seed.admin.audit.recent":      "Actividad reciente",
+    "seed.admin.billing.mrr":       "Ingresos recurrentes mensuales",
+    "seed.admin.empty.no_results":  "Ningún resultado coincide con tus filtros.",
+    "seed.admin.export.cta":        "Exportar a CSV",
+    "seed.app.nav.dashboard":       "Inicio",
+    "seed.app.nav.quotes":          "Cotizaciones",
+    "seed.app.nav.orders":          "Órdenes",
+    "seed.app.nav.invoices":        "Facturas",
+    "seed.app.nav.customers":       "Clientes",
+    "seed.app.quote.total":         "Total: {amount}",
+    "seed.app.quote.expires":       "Expira en {days, plural, one {# día} other {# días}}",
+    "seed.app.order.status.in_production": "En producción",
+    "seed.app.order.status.ready":  "Listo para recoger",
+    "seed.app.order.status.delivered": "Entregado",
+    "seed.app.invoice.due":         "Vence el {date}",
+    "seed.app.invoice.paid":        "Pagado en su totalidad",
+    "seed.app.button.save":         "Guardar cambios",
+    "seed.app.button.cancel":       "Cancelar",
+    "seed.email.welcome.subject":   "Bienvenido a {brand} — preparemos tu primera cotización",
+    "seed.email.quote_sent.subject": "Tu cotización de {shop} está lista",
+    "seed.email.invoice.subject":   "Factura #{invoiceNumber} de {shop} — vence {amount}",
+    "seed.sms.order_ready":         "{shop}: Tu orden #{orderNumber} está lista para recoger.",
+    "seed.sms.proof_ready":         "{shop}: Tu prueba está lista para revisar — {link}",
+    "seed.marketing.cta.start_trial": "Iniciar prueba gratuita",
+    "seed.marketing.cta.book_demo": "Reservar una demostración",
+    "seed.marketing.pricing.starting": "Desde {amount} al mes",
+  };
+
+  const frFR: CuratedDict = {
+    "seed.admin.dashboard.title":   "Tableau de bord de la plateforme",
+    "seed.admin.dashboard.welcome": "Content de vous revoir, {name}",
+    "seed.admin.tenants.count":     "{count, plural, one {# locataire} other {# locataires}}",
+    "seed.admin.tenants.new":       "Ajouter un locataire",
+    "seed.admin.audit.recent":      "Activité récente",
+    "seed.admin.billing.mrr":       "Revenu récurrent mensuel",
+    "seed.admin.empty.no_results":  "Aucun résultat ne correspond à vos filtres.",
+    "seed.admin.export.cta":        "Exporter en CSV",
+    "seed.app.nav.dashboard":       "Tableau de bord",
+    "seed.app.nav.quotes":          "Devis",
+    "seed.app.nav.orders":          "Commandes",
+    "seed.app.nav.invoices":        "Factures",
+    "seed.app.nav.customers":       "Clients",
+    "seed.app.quote.total":         "Total : {amount}",
+    "seed.app.quote.expires":       "Expire dans {days, plural, one {# jour} other {# jours}}",
+    "seed.app.order.status.in_production": "En production",
+    "seed.app.order.status.ready":  "Prêt à être retiré",
+    "seed.app.order.status.delivered": "Livré",
+    "seed.app.invoice.due":         "Échéance le {date}",
+    "seed.app.invoice.paid":        "Entièrement payé",
+    "seed.app.button.save":         "Enregistrer",
+    "seed.app.button.cancel":       "Annuler",
+    "seed.email.welcome.subject":   "Bienvenue chez {brand} — préparons votre premier devis",
+    "seed.email.quote_sent.subject": "Votre devis de {shop} est prêt",
+    "seed.sms.order_ready":         "{shop} : votre commande #{orderNumber} est prête à être retirée.",
+    "seed.marketing.cta.start_trial": "Démarrer l'essai gratuit",
+    "seed.marketing.cta.book_demo": "Réserver une démo",
+    "seed.marketing.pricing.starting": "À partir de {amount} par mois",
+  };
+
+  const deDE: CuratedDict = {
+    "seed.admin.dashboard.title":   "Plattform-Dashboard",
+    "seed.admin.dashboard.welcome": "Willkommen zurück, {name}",
+    "seed.admin.tenants.new":       "Mandant hinzufügen",
+    "seed.admin.audit.recent":      "Letzte Aktivitäten",
+    "seed.admin.empty.no_results":  "Keine Ergebnisse für deine Filter.",
+    "seed.app.nav.dashboard":       "Dashboard",
+    "seed.app.nav.quotes":          "Angebote",
+    "seed.app.nav.orders":          "Aufträge",
+    "seed.app.nav.invoices":        "Rechnungen",
+    "seed.app.nav.customers":       "Kunden",
+    "seed.app.order.status.in_production": "In Produktion",
+    "seed.app.order.status.ready":  "Abholbereit",
+    "seed.app.order.status.delivered": "Geliefert",
+    "seed.app.button.save":         "Speichern",
+    "seed.app.button.cancel":       "Abbrechen",
+    "seed.email.welcome.subject":   "Willkommen bei {brand} — bereiten wir Ihr erstes Angebot vor",
+    "seed.marketing.cta.start_trial": "Kostenlose Testphase starten",
+    "seed.marketing.cta.book_demo": "Demo buchen",
+  };
+
+  const ptBR: CuratedDict = {
+    "seed.admin.dashboard.title":   "Painel da plataforma",
+    "seed.admin.dashboard.welcome": "Bem-vindo de volta, {name}",
+    "seed.admin.tenants.new":       "Adicionar inquilino",
+    "seed.admin.audit.recent":      "Atividade recente",
+    "seed.admin.empty.no_results":  "Nenhum resultado para os filtros aplicados.",
+    "seed.app.nav.dashboard":       "Painel",
+    "seed.app.nav.quotes":          "Orçamentos",
+    "seed.app.nav.orders":          "Pedidos",
+    "seed.app.nav.invoices":        "Faturas",
+    "seed.app.nav.customers":       "Clientes",
+    "seed.app.order.status.in_production": "Em produção",
+    "seed.app.order.status.ready":  "Pronto para retirada",
+    "seed.app.order.status.delivered": "Entregue",
+    "seed.app.button.save":         "Salvar alterações",
+    "seed.app.button.cancel":       "Cancelar",
+    "seed.email.welcome.subject":   "Bem-vindo à {brand} — vamos preparar seu primeiro orçamento",
+    "seed.sms.order_ready":         "{shop}: seu pedido #{orderNumber} está pronto para retirada.",
+    "seed.marketing.cta.start_trial": "Iniciar avaliação gratuita",
+    "seed.marketing.cta.book_demo": "Agendar uma demonstração",
+    "seed.marketing.pricing.starting": "A partir de {amount}/mês",
+  };
+
+  const curated: Record<string, CuratedDict> = {
+    "es-MX": esMX,
+    "fr-FR": frFR,
+    "de-DE": deDE,
+    "pt-BR": ptBR,
+  };
+
+  for (const [code, dict] of Object.entries(curated)) {
+    const localeId = localeIdByCode.get(code)!;
+    for (const k of keyBps) {
+      const keyId = keyIdByKey.get(k.key)!;
+      const text = dict[k.key];
+      if (text) {
+        // Mark a handful as NEEDS_REVIEW or OUTDATED for realism.
+        const r = Math.random();
+        const status: "TRANSLATED" | "NEEDS_REVIEW" | "OUTDATED" =
+          r < 0.10 ? "OUTDATED" : r < 0.20 ? "NEEDS_REVIEW" : "TRANSLATED";
+        await db.translation.upsert({
+          where: { keyId_localeId: { keyId, localeId } },
+          create: {
+            keyId, localeId, text, status,
+            sourceHash: status === "OUTDATED" ? "stale" : hashSource(k.source),
+            translatorEmail: code === "pt-BR" ? "carlos@flowtora.com" : "translations@flowtora.com",
+            reviewerEmail: status === "TRANSLATED" ? "review@flowtora.com" : null,
+            comments: status === "NEEDS_REVIEW" ? "Awaiting native-speaker sign-off." : null,
+          },
+          update: { text, status, sourceHash: status === "OUTDATED" ? "stale" : hashSource(k.source) },
+        });
+      } else {
+        await db.translation.upsert({
+          where: { keyId_localeId: { keyId, localeId } },
+          create: {
+            keyId, localeId, text: null, status: "PENDING",
+            translatorEmail: null,
+          },
+          update: { text: null, status: "PENDING" },
+        });
+      }
+    }
+  }
+
+  // Low-coverage locales: only translate a fraction, mostly PENDING.
+  const lowCoverage = ["it-IT", "ja-JP", "zh-CN", "ar-SA", "nl-NL"];
+  for (const code of lowCoverage) {
+    const localeId = localeIdByCode.get(code)!;
+    for (let i = 0; i < keyBps.length; i++) {
+      const k = keyBps[i]!;
+      const keyId = keyIdByKey.get(k.key)!;
+      // ~25% TRANSLATED, 5% NEEDS_REVIEW, 5% OUTDATED, ~65% PENDING.
+      const r = Math.random();
+      let status: "TRANSLATED" | "PENDING" | "OUTDATED" | "NEEDS_REVIEW";
+      let text: string | null;
+      if (r < 0.25) {
+        status = "TRANSLATED";
+        text = `[${code}] ${k.source}`; // Visible stand-in.
+      } else if (r < 0.30) {
+        status = "NEEDS_REVIEW";
+        text = `[${code} draft] ${k.source}`;
+      } else if (r < 0.35) {
+        status = "OUTDATED";
+        text = `[${code} outdated] ${k.source}`;
+      } else {
+        status = "PENDING";
+        text = null;
+      }
+      await db.translation.upsert({
+        where: { keyId_localeId: { keyId, localeId } },
+        create: {
+          keyId, localeId, text, status,
+          sourceHash: status === "OUTDATED" ? "stale" : status !== "PENDING" ? hashSource(k.source) : null,
+          translatorEmail: status !== "PENDING" ? "translations@flowtora.com" : null,
+        },
+        update: { text, status },
+      });
+    }
+  }
+
+  // 6. Recompute every locale's cached counters.
+  const totalKeys = await db.translationKey.count();
+  for (const code of localeIdByCode.keys()) {
+    const localeId = localeIdByCode.get(code)!;
+    const grouped = await db.translation.groupBy({
+      by: ["status"],
+      where: { localeId },
+      _count: { _all: true },
+    });
+    const counts = { TRANSLATED: 0, PENDING: 0, OUTDATED: 0, NEEDS_REVIEW: 0 };
+    for (const g of grouped) counts[g.status as keyof typeof counts] = g._count._all;
+    await db.platformLocale.update({
+      where: { id: localeId },
+      data: {
+        totalKeys,
+        translatedCount: counts.TRANSLATED,
+        pendingCount:    counts.PENDING,
+        outdatedCount:   counts.OUTDATED,
+        reviewCount:     counts.NEEDS_REVIEW,
+      },
+    });
+  }
+
+  // 7. 30 days of TranslationStatsSnapshot per locale — progressive.
+  for (const code of localeIdByCode.keys()) {
+    const localeId = localeIdByCode.get(code)!;
+    const final = await db.platformLocale.findUnique({
+      where: { id: localeId },
+      select: { translatedCount: true, pendingCount: true, outdatedCount: true, reviewCount: true },
+    });
+    if (!final) continue;
+    // Start point: ~60% of today's translated count, ramping up.
+    const startTranslated = Math.floor(final.translatedCount * 0.55);
+    const growth = final.translatedCount - startTranslated;
+    for (let d = 30; d >= 0; d--) {
+      const t = (30 - d) / 30;
+      const translated = Math.round(startTranslated + growth * t);
+      const pending = Math.max(0, totalKeys - translated - final.outdatedCount - final.reviewCount);
+      await db.translationStatsSnapshot.upsert({
+        where: { localeId_day: { localeId, day: daysAgo(d) } },
+        create: {
+          localeId, day: daysAgo(d),
+          totalKeys,
+          translatedCount: translated,
+          pendingCount:    pending,
+          outdatedCount:   final.outdatedCount,
+          reviewCount:     final.reviewCount,
+        },
+        update: {
+          totalKeys,
+          translatedCount: translated,
+          pendingCount:    pending,
+          outdatedCount:   final.outdatedCount,
+          reviewCount:     final.reviewCount,
+        },
+      });
+    }
+  }
+
+  // 8. Glossary entries — Flowtora brand + sign-shop terms.
+  type GlossBp = {
+    term: string;
+    translations?: Record<string, string>;
+    dnt?: boolean;
+    gender?: string;
+    plurals?: Record<string, { one: string; other: string }>;
+    notes?: string;
+  };
+  const glossBps: GlossBp[] = [
+    { term: "[seed] Flowtora",
+      dnt: true,
+      notes: "Brand name — never translate, transliterate, or pluralize." },
+    { term: "[seed] Quote",
+      translations: { "es-MX": "Cotización", "fr-FR": "Devis", "de-DE": "Angebot", "pt-BR": "Orçamento", "it-IT": "Preventivo" },
+      gender: "neuter",
+      plurals: {
+        "en-US": { one: "quote", other: "quotes" },
+        "es-MX": { one: "cotización", other: "cotizaciones" },
+        "fr-FR": { one: "devis", other: "devis" },
+      } },
+    { term: "[seed] Invoice",
+      translations: { "es-MX": "Factura", "fr-FR": "Facture", "de-DE": "Rechnung", "pt-BR": "Fatura", "it-IT": "Fattura" },
+      gender: "feminine" },
+    { term: "[seed] Order",
+      translations: { "es-MX": "Pedido", "fr-FR": "Commande", "de-DE": "Auftrag", "pt-BR": "Pedido", "it-IT": "Ordine" } },
+    { term: "[seed] Estimate",
+      translations: { "es-MX": "Presupuesto", "fr-FR": "Estimation", "de-DE": "Schätzung", "pt-BR": "Estimativa" },
+      notes: "Synonym for Quote in some markets — prefer 'Quote' in EN-US copy." },
+    { term: "[seed] Proof",
+      translations: { "es-MX": "Prueba", "fr-FR": "Bon à tirer", "de-DE": "Druckfreigabe", "pt-BR": "Prova", "it-IT": "Bozza" },
+      notes: "Pre-press industry term — French uses 'BAT' as an abbreviation." },
+    { term: "[seed] Channel letter",
+      translations: { "es-MX": "Letra de canal", "fr-FR": "Lettre boîtier", "de-DE": "Profilbuchstabe", "pt-BR": "Letra caixa" },
+      notes: "Sign-industry term for the fabricated lit letters on storefronts." },
+    { term: "[seed] Vinyl wrap",
+      translations: { "es-MX": "Vinilo de envoltura", "fr-FR": "Covering vinyle", "de-DE": "Folierung", "pt-BR": "Envelopamento" } },
+    { term: "[seed] AI",
+      dnt: true,
+      notes: "Keep as 'AI' across all locales — universally recognized." },
+    { term: "[seed] CRM",
+      dnt: true,
+      notes: "Industry acronym — keep in English." },
+  ];
+  for (const g of glossBps) {
+    await db.glossaryEntry.upsert({
+      where: { term: g.term },
+      create: {
+        term: g.term,
+        translationsJson: g.translations ? (g.translations as never) : undefined,
+        doNotTranslate: !!g.dnt,
+        gender: g.gender ?? null,
+        pluralFormsJson: g.plurals ? (g.plurals as never) : undefined,
+        notes: g.notes ?? null,
+      },
+      update: {
+        translationsJson: g.translations ? (g.translations as never) : undefined,
+        doNotTranslate: !!g.dnt,
+        gender: g.gender ?? null,
+        pluralFormsJson: g.plurals ? (g.plurals as never) : undefined,
+        notes: g.notes ?? null,
+      },
+    });
+  }
+
+  console.log(
+    `  ✓ Settings singleton, ${localeBps.length} locales (${localeBps.filter(l => l.rtl).length} RTL), ${currBps.length} currencies, ${keyBps.length} keys, translations + 30d snapshots per locale, ${glossBps.length} glossary entries`,
   );
 }
 

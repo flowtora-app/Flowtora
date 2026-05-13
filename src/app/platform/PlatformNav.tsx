@@ -109,6 +109,7 @@ const NAV_ITEMS: NavItem[] = [
   // Pages 65+ — configuration
   { href: "/platform/settings/general",             label: "Platform Settings",    icon: "Settings" },
   { href: "/platform/settings/branding",            label: "Branding & White-Label", icon: "Palette" },
+  { href: "/platform/settings/localization",        label: "Localization",         icon: "Globe" },
 ];
 
 const COLLAPSE_KEY = "flowtora.platform-nav.collapsed";
