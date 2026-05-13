@@ -167,6 +167,11 @@ export const PERMISSION_DESCRIPTIONS: Record<PlatformPermission, string> = {
   "domains.read":   "Read custom-domain configuration + SSL cert status.",
   "domains.manage": "Create/edit custom domains, manage DNS templates + SSL issuance.",
   "domains.verify": "Re-verify DNS records on existing domains (support tier).",
+  // Legal documents (Page 71)
+  "legal.read":             "Read all legal documents + version history.",
+  "legal.write":            "Edit legal document drafts; submit for review.",
+  "legal.publish":          "Counsel sign-off + promote drafts to LIVE.",
+  "legal.acceptance.read":  "Read per-tenant acceptance trail (IP/UA/method).",
 };
 
 /* ────────────────────────────────────────────────────────── */

@@ -92,6 +92,7 @@ async function main() {
   await seedLocalization();                            // Page 67
   await seedNotificationCatalog();                     // Page 68
   await seedDomains(tenants);                          // Page 70
+  await seedLegalDocs();                               // Page 71
 
   console.log("\n✓ Seed complete.\n");
   await db.$disconnect();
@@ -407,6 +408,9 @@ async function wipeOldSeed() {
   await db.customDomain.deleteMany({ where: { domain: { contains: ".seed.flowtora." } } });
   await db.dnsTemplate.deleteMany({ where: { key: { startsWith: "seed-" } } });
   await db.apexSetupGuide.deleteMany({ where: { providerKey: { startsWith: "seed-" } } });
+  // Page 71 — Legal Documents wipe (cascades versions/locales/acceptances).
+  await db.mandatoryReAcceptance.deleteMany({ where: { createdByEmail: { contains: "@flowtora.com" } } });
+  await db.legalDocument.deleteMany({ where: { slug: { startsWith: "seed-" } } });
   // Customers tagged seed (after orders are gone).
   await db.customer.deleteMany({ where: { tags: { has: "seed" } } });
   // Products tagged seed (use description marker since Product has no tags array).
@@ -15328,6 +15332,275 @@ async function seedDomains(tenants: { id: string; name: string; slug: string }[]
   }
 
   console.log(`  ✓ Settings singleton + ${dnsTemplates.length} DNS templates + ${apexGuides.length} apex guides + ${dCount} custom domains`);
+}
+
+/* ── Page 71 — Legal Documents seed ─────────────────────── */
+
+async function seedLegalDocs() {
+  console.log("── Seeding Legal Documents (Page 71)…");
+
+  // Settings singleton.
+  await db.legalSettings.upsert({
+    where: { id: "default" },
+    create: {
+      id: "default",
+      defaultJurisdiction: "Delaware, USA",
+      governingLaw: "Delaware",
+      arbitrationProvider: "American Arbitration Association (AAA)",
+      venue: "San Francisco County, California",
+      effectiveDateOffsetDays: 30,
+      cookieBannerCopy: "We use cookies to make Flowtora work, understand how it's used, and improve performance. Choose your preferences below.",
+      notes: "Standard Delaware C-corp boilerplate; international subsidiaries elect Irish law in their local DPAs.",
+    },
+    update: {
+      defaultJurisdiction: "Delaware, USA",
+      governingLaw: "Delaware",
+    },
+  });
+
+  type DocBp = {
+    kind: "TERMS_OF_SERVICE" | "PRIVACY_POLICY" | "ACCEPTABLE_USE_POLICY" | "DPA"
+        | "SUB_PROCESSOR_ADDENDUM" | "SLA" | "COOKIE_POLICY" | "REFUND_POLICY"
+        | "MASTER_SERVICE_AGREEMENT" | "AFFILIATE_AGREEMENT";
+    slug: string;
+    title: string;
+    description: string;
+    owner: string;
+    bodyV1: string;
+    bodyV2?: string; // optional second version
+    acceptances: number; // total accept count
+  };
+
+  const docs: DocBp[] = [
+    {
+      kind: "TERMS_OF_SERVICE",
+      slug: "seed-terms-of-service",
+      title: "Terms of Service",
+      description: "Governs every paid and trial subscription to {{platform_name}}.",
+      owner: "legal@flowtora.com",
+      bodyV1: `# Terms of Service\n\n**Effective {{effective_date}}**\n\nThese Terms govern your use of {{platform_name}} (the "Service"), operated by {{company_name}}.\n\n## 1. Acceptance\nBy creating an account or using the Service, you agree to these Terms.\n\n## 2. Subscription & Billing\nAll fees are billed in advance and non-refundable except as required by law. See our Refund Policy for exceptions.\n\n## 3. Acceptable Use\nYou agree to comply with our Acceptable Use Policy.\n\n## 4. Termination\nWe may suspend or terminate your account for violation of these Terms.\n\n## 5. Limitation of Liability\nTO THE MAXIMUM EXTENT PERMITTED BY LAW, our total liability is capped at the fees paid in the 12 months preceding the claim.\n\n## 6. Governing Law\nThese Terms are governed by {{jurisdiction}} law.`,
+      bodyV2: `# Terms of Service\n\n**Effective {{effective_date}} · Version 2**\n\nThese Terms govern your use of {{platform_name}} (the "Service"), operated by {{company_name}}.\n\n## 1. Acceptance\nBy creating an account or using the Service, you agree to these Terms.\n\n## 2. Subscription & Billing\nAll fees are billed in advance and non-refundable except as required by law. Auto-renewal happens 7 days before each renewal period and customers receive 30-day advance notice of any price increase.\n\n## 3. Acceptable Use\nYou agree to comply with our Acceptable Use Policy. Bulk export of marketing data is restricted to the GROWTH plan and above.\n\n## 4. Data Residency\nEU customers may elect EU data residency at no extra cost. See our DPA for processor details.\n\n## 5. Termination\nWe may suspend or terminate your account for violation of these Terms or non-payment after 30 days.\n\n## 6. Limitation of Liability\nTO THE MAXIMUM EXTENT PERMITTED BY LAW, our total liability is capped at the fees paid in the 12 months preceding the claim.\n\n## 7. Governing Law\nThese Terms are governed by {{jurisdiction}} law.`,
+      acceptances: 1283,
+    },
+    {
+      kind: "PRIVACY_POLICY",
+      slug: "seed-privacy-policy",
+      title: "Privacy Policy",
+      description: "How {{platform_name}} collects, uses, and shares personal data.",
+      owner: "privacy@flowtora.com",
+      bodyV1: `# Privacy Policy\n\n**Effective {{effective_date}}**\n\nThis Privacy Policy describes how {{company_name}} ("we") collects, uses, and shares personal information when you use {{platform_name}}.\n\n## 1. Information We Collect\n- Account information (name, email, role)\n- Tenant + workflow data you enter\n- Billing information (processed by Stripe)\n- Telemetry (page views, feature usage)\n\n## 2. How We Use Information\n- Provide and improve the Service\n- Process billing\n- Send transactional emails\n- Respond to support requests\n\n## 3. Data Retention\nWe retain account data for 90 days after cancellation, then anonymize per our Data Retention Policy.\n\n## 4. Your Rights\nUsers in the EU/UK have GDPR rights; Californians have CCPA rights. See our Privacy Requests page to exercise them.`,
+      acceptances: 1418,
+    },
+    {
+      kind: "ACCEPTABLE_USE_POLICY",
+      slug: "seed-acceptable-use",
+      title: "Acceptable Use Policy",
+      description: "Prohibited conduct and content on {{platform_name}}.",
+      owner: "trust@flowtora.com",
+      bodyV1: `# Acceptable Use Policy\n\nYou may not use {{platform_name}} to:\n- Send spam or unsolicited marketing\n- Distribute malware or attempt to compromise our systems\n- Violate any applicable law\n- Infringe intellectual property\n- Harass, threaten, or harm others\n\nViolations may result in immediate suspension. We cooperate with law enforcement when required.`,
+      acceptances: 1283,
+    },
+    {
+      kind: "DPA",
+      slug: "seed-dpa",
+      title: "Data Processing Addendum",
+      description: "GDPR-compliant processor terms for EU + UK customers.",
+      owner: "privacy@flowtora.com",
+      bodyV1: `# Data Processing Addendum\n\nThis DPA forms part of the Master Service Agreement between {{company_name}} ("Processor") and Customer ("Controller").\n\n## 1. Subject Matter\nProcessor processes Personal Data on behalf of Controller to provide the Services described in the MSA.\n\n## 2. Sub-Processors\nApproved sub-processors are listed in the Sub-Processor Addendum. We provide 30 days' notice before adding new sub-processors.\n\n## 3. Security\nWe maintain SOC 2 Type II certification and ISO 27001 controls.\n\n## 4. Standard Contractual Clauses\nThe EU SCCs (Module 2: Controller-to-Processor) are incorporated by reference for transfers outside the EEA.`,
+      acceptances: 142,
+    },
+    {
+      kind: "SUB_PROCESSOR_ADDENDUM",
+      slug: "seed-subprocessor-addendum",
+      title: "Sub-Processor Addendum",
+      description: "Current list of approved sub-processors.",
+      owner: "privacy@flowtora.com",
+      bodyV1: `# Sub-Processor Addendum\n\n| Sub-processor | Purpose | Location |\n|---|---|---|\n| AWS | Infrastructure hosting | US-East / EU-West (per region) |\n| Vercel | Edge / CDN | Global |\n| Neon | Postgres database | US-East |\n| Stripe | Payment processing | US / EU (per region) |\n| Resend | Transactional email | US |\n| Sentry | Error monitoring | US |\n\nWe provide 30 days' notice before adding new sub-processors. Customers may object via privacy@flowtora.com.`,
+      acceptances: 142,
+    },
+    {
+      kind: "SLA",
+      slug: "seed-sla",
+      title: "Service Level Agreement",
+      description: "Uptime commitment and credit policy for paid plans.",
+      owner: "ops@flowtora.com",
+      bodyV1: `# Service Level Agreement\n\nApplies to GROWTH and ENTERPRISE plans only.\n\n## Uptime Commitment\n99.9% monthly uptime, excluding scheduled maintenance (announced 7 days in advance).\n\n## Service Credits\n- < 99.9% but ≥ 99.0% → 10% credit\n- < 99.0% but ≥ 95.0% → 25% credit\n- < 95.0% → 50% credit\n\nCredits are applied to the next invoice. Customers must request credit within 30 days of the incident.`,
+      acceptances: 268,
+    },
+    {
+      kind: "COOKIE_POLICY",
+      slug: "seed-cookie-policy",
+      title: "Cookie Policy",
+      description: "Cookies used on flowtora.com and inside the product.",
+      owner: "privacy@flowtora.com",
+      bodyV1: `# Cookie Policy\n\nWe use cookies in the following categories:\n\n## Essential\nSession token, CSRF token, theme preference. Cannot be disabled.\n\n## Analytics\nGoogle Analytics, PostHog. Opt-out via the cookie banner.\n\n## Marketing\nMeta Pixel, LinkedIn Insight. Opt-out via the cookie banner.\n\nYou can change preferences any time by clicking "Cookie preferences" in the footer.`,
+      acceptances: 5234,
+    },
+    {
+      kind: "REFUND_POLICY",
+      slug: "seed-refund-policy",
+      title: "Refund Policy",
+      description: "Refund eligibility and process.",
+      owner: "billing@flowtora.com",
+      bodyV1: `# Refund Policy\n\n## Monthly subscriptions\nNon-refundable. Cancel anytime to stop future renewals.\n\n## Annual subscriptions\nPro-rated refund within the first 30 days if you cancel for any reason.\n\n## How to request a refund\nEmail billing@flowtora.com. Refunds are processed to the original payment method within 5–10 business days.`,
+      acceptances: 1283,
+    },
+    {
+      kind: "MASTER_SERVICE_AGREEMENT",
+      slug: "seed-msa",
+      title: "Master Service Agreement",
+      description: "Enterprise MSA template.",
+      owner: "legal@flowtora.com",
+      bodyV1: `# Master Service Agreement\n\nThis MSA governs the relationship between {{company_name}} ("Provider") and Customer for Enterprise plans only.\n\nKey terms negotiated per Order Form: pricing, term, renewal notice, payment terms (NET 30 default), termination for convenience, data residency.\n\nDefault terms incorporate by reference: DPA, Sub-Processor Addendum, SLA, Acceptable Use Policy.`,
+      acceptances: 18,
+    },
+    {
+      kind: "AFFILIATE_AGREEMENT",
+      slug: "seed-affiliate-agreement",
+      title: "Affiliate Agreement",
+      description: "Revenue-sharing terms for affiliate partners.",
+      owner: "partnerships@flowtora.com",
+      bodyV1: `# Affiliate Agreement\n\nAffiliates earn 20% recurring commission on qualified referrals for the first 12 months of each subscription.\n\n## Payouts\nPaid monthly via PayPal or wire (USD only), 30 days in arrears, minimum payout $50.\n\n## Restrictions\n- No bidding on "{{platform_name}}" branded keywords\n- No spam, click farms, or incentivized clicks\n- No misleading claims about pricing or features\n\nViolation results in immediate program termination and forfeiture of pending commissions.`,
+      acceptances: 47,
+    },
+  ];
+
+  let publishedCount = 0;
+  let totalVersions = 0;
+  let totalAccepts = 0;
+  let totalLocales = 0;
+  for (const d of docs) {
+    const doc = await db.legalDocument.upsert({
+      where: { kind: d.kind },
+      create: {
+        kind: d.kind,
+        slug: d.slug,
+        title: d.title,
+        description: d.description,
+        ownerEmail: d.owner,
+      },
+      update: {
+        slug: d.slug,
+        title: d.title,
+        description: d.description,
+        ownerEmail: d.owner,
+      },
+    });
+    // V1 — always created and published.
+    const v1 = await db.legalDocumentVersion.upsert({
+      where: { documentId_version: { documentId: doc.id, version: 1 } },
+      create: {
+        documentId: doc.id,
+        version: 1,
+        body: d.bodyV1,
+        status: d.bodyV2 ? "ARCHIVED" : "PUBLISHED",
+        changeSummary: "Initial version",
+        effectiveAt: daysAgo(d.bodyV2 ? 365 : 90),
+        publishedAt: daysAgo(d.bodyV2 ? 365 : 90),
+        reviewedByEmail: "legal-counsel@flowtora.com",
+        reviewedAt: daysAgo(d.bodyV2 ? 367 : 92),
+        signedOffByEmail: "general-counsel@flowtora.com",
+        signedOffAt: daysAgo(d.bodyV2 ? 366 : 91),
+        publishedByEmail: d.owner,
+      },
+      update: {},
+    });
+    totalVersions++;
+    let publishedVersion = 1;
+    if (d.bodyV2) {
+      const v2 = await db.legalDocumentVersion.upsert({
+        where: { documentId_version: { documentId: doc.id, version: 2 } },
+        create: {
+          documentId: doc.id,
+          version: 2,
+          body: d.bodyV2,
+          status: "PUBLISHED",
+          changeSummary: "Major update: data residency, auto-renewal notice, billing changes",
+          effectiveAt: daysAgo(45),
+          publishedAt: daysAgo(45),
+          reviewedByEmail: "legal-counsel@flowtora.com",
+          reviewedAt: daysAgo(60),
+          signedOffByEmail: "general-counsel@flowtora.com",
+          signedOffAt: daysAgo(50),
+          publishedByEmail: d.owner,
+        },
+        update: {},
+      });
+      publishedVersion = 2;
+      totalVersions++;
+    }
+    // Update doc with denormalized counters.
+    await db.legalDocument.update({
+      where: { id: doc.id },
+      data: {
+        currentVersion: publishedVersion,
+        acceptanceCount: d.acceptances,
+        pendingReacceptCount: d.bodyV2 ? Math.floor(d.acceptances * 0.12) : 0,
+        publishedAt: daysAgo(d.bodyV2 ? 45 : 90),
+        effectiveAt: daysAgo(d.bodyV2 ? 45 : 90),
+      },
+    });
+    publishedCount++;
+    // A few Spanish + French locale rows for the most common docs.
+    if (["TERMS_OF_SERVICE", "PRIVACY_POLICY", "COOKIE_POLICY"].includes(d.kind)) {
+      for (const locale of ["es-MX", "fr-FR"]) {
+        await db.legalDocumentLocale.upsert({
+          where: { documentId_locale: { documentId: doc.id, locale } },
+          create: {
+            documentId: doc.id,
+            locale,
+            body: `[${locale}] ${d.bodyV2 ?? d.bodyV1}`,
+            syncedFromVersion: publishedVersion,
+            completenessPct: locale === "es-MX" ? 100 : 87,
+            source: locale === "es-MX" ? "Smartling" : "Community",
+            translatorNote: locale === "fr-FR" ? "Section 4 awaiting native-speaker review" : null,
+          },
+          update: {},
+        });
+        totalLocales++;
+      }
+    }
+    // Generate ~50 sample acceptance rows per published doc (capped).
+    const sampleAcceptances = Math.min(50, d.acceptances);
+    for (let i = 0; i < sampleAcceptances; i++) {
+      await db.legalDocumentAcceptance.create({
+        data: {
+          documentId: doc.id,
+          version: publishedVersion,
+          userEmail: `user${i}@example.com`,
+          ipAddress: `203.0.113.${randInt(1, 254)}`,
+          userAgent: rand([
+            "Mozilla/5.0 (Macintosh; Intel Mac OS X 14_6) AppleWebKit/605.1.15 (KHTML, like Gecko) Version/17.6 Safari/605.1.15",
+            "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 Chrome/126.0.0.0 Safari/537.36",
+            "Mozilla/5.0 (iPhone; CPU iPhone OS 17_5_1 like Mac OS X) AppleWebKit/605.1.15 Mobile/15E148 Safari/604.1",
+          ]),
+          method: rand(["CLICKWRAP", "CLICKWRAP", "CLICKWRAP", "EMAIL_CONFIRMATION", "SIGNED_PDF"] as const) as "CLICKWRAP",
+          acceptedAt: daysAgo(randInt(0, 60)),
+        },
+      });
+      totalAccepts++;
+    }
+  }
+
+  // One active re-acceptance campaign for the new ToS v2.
+  const tos = await db.legalDocument.findUnique({ where: { kind: "TERMS_OF_SERVICE" } });
+  if (tos) {
+    await db.mandatoryReAcceptance.create({
+      data: {
+        documentId: tos.id,
+        requiredVersion: 2,
+        tenantPlanScope: ["STARTER", "GROWTH"],
+        tenantIdScope: [],
+        bannerCopy: "Heads up — we've updated our Terms of Service to clarify EU data residency. Please review and accept by {{deadline}} to keep using Flowtora.",
+        gracePeriodDays: 14,
+        enforceBlock: false,
+        activatedAt: daysAgo(7),
+        createdByEmail: "legal@flowtora.com",
+      },
+    });
+  }
+
+  console.log(`  ✓ Settings singleton + ${publishedCount} documents, ${totalVersions} versions, ${totalLocales} locale rows, ${totalAccepts} acceptances, 1 active re-acceptance campaign`);
 }
 
 main().catch((e) => {

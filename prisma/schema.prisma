@@ -16356,3 +16356,199 @@ model DomainSettings {
   updatedAt   DateTime @updatedAt
   createdAt   DateTime @default(now())
 }
+
+// ────────────────────────────────────────────────────────────
+// Page 71 — Legal Documents.
+// ────────────────────────────────────────────────────────────
+
+enum LegalDocumentKind {
+  TERMS_OF_SERVICE
+  PRIVACY_POLICY
+  ACCEPTABLE_USE_POLICY
+  DPA
+  SUB_PROCESSOR_ADDENDUM
+  SLA
+  COOKIE_POLICY
+  COOKIE_CONSENT_CATEGORIES
+  REFUND_POLICY
+  ANTI_SPAM_POLICY
+  MASTER_SERVICE_AGREEMENT
+  ORDER_FORM_TEMPLATE
+  RESELLER_AGREEMENT
+  AFFILIATE_AGREEMENT
+  MARKETPLACE_DEV_AGREEMENT
+}
+
+enum LegalDocumentStatus {
+  DRAFT
+  LEGAL_REVIEW
+  COUNSEL_SIGN_OFF
+  PUBLISHED
+  ARCHIVED
+}
+
+enum LegalAcceptanceMethod {
+  CLICKWRAP
+  EMAIL_CONFIRMATION
+  SIGNED_PDF
+  API
+}
+
+model LegalDocument {
+  id String @id @default(cuid())
+
+  kind        LegalDocumentKind @unique
+  slug        String @unique
+  title       String
+  description String?
+  /** Current published version reference (denorm — set when a version is promoted to PUBLISHED). */
+  currentVersion Int @default(0)
+  /** Computed every time tenants accept a new version. */
+  acceptanceCount Int @default(0)
+  /** Number of tenants on stale versions — triggers re-acceptance banner. */
+  pendingReacceptCount Int @default(0)
+
+  publishedAt DateTime?
+  effectiveAt DateTime?
+
+  ownerEmail  String?
+  createdAt   DateTime @default(now())
+  updatedAt   DateTime @updatedAt
+
+  versions    LegalDocumentVersion[]
+  locales     LegalDocumentLocale[]
+  acceptances LegalDocumentAcceptance[]
+  reaccepts   MandatoryReAcceptance[]
+
+  @@index([kind])
+}
+
+model LegalDocumentVersion {
+  id String @id @default(cuid())
+
+  documentId String
+  document   LegalDocument @relation(fields: [documentId], references: [id], onDelete: Cascade)
+
+  version Int
+  /** Markdown source. */
+  body    String
+
+  status         LegalDocumentStatus @default(DRAFT)
+  /** Plain-language summary of what changed in this version. */
+  changeSummary  String?
+
+  effectiveAt    DateTime?
+  publishedAt    DateTime?
+
+  // Approval pipeline.
+  reviewedByEmail   String?
+  reviewedAt        DateTime?
+  signedOffByEmail  String?
+  signedOffAt       DateTime?
+  publishedByEmail  String?
+
+  /** Authors / reviewers can leave inline notes. */
+  notes             String?
+
+  createdAt DateTime @default(now())
+  updatedAt DateTime @updatedAt
+
+  @@unique([documentId, version])
+  @@index([status])
+}
+
+model LegalDocumentLocale {
+  id String @id @default(cuid())
+
+  documentId String
+  document   LegalDocument @relation(fields: [documentId], references: [id], onDelete: Cascade)
+
+  /** BCP 47 locale. */
+  locale String
+
+  /** Translated markdown body. */
+  body          String
+  /** Mirrors the source version this translation is up-to-date with. */
+  syncedFromVersion Int
+  /** Translator working notes. */
+  translatorNote String?
+  /** % of total source words translated — 100 when fully synced. */
+  completenessPct Int @default(0)
+  /** Translation done by — vendor / in-house / community. */
+  source         String?
+
+  updatedAt DateTime @updatedAt
+  createdAt DateTime @default(now())
+
+  @@unique([documentId, locale])
+}
+
+model LegalDocumentAcceptance {
+  id String @id @default(cuid())
+
+  documentId String
+  document   LegalDocument @relation(fields: [documentId], references: [id], onDelete: Cascade)
+  version    Int
+
+  /** Tenant whose user accepted. */
+  tenantId   String?
+  /** User who clicked accept (may be null for API/automated). */
+  userId     String?
+  /** Email of accepting user — denorm for audit even if user is deleted. */
+  userEmail  String?
+
+  ipAddress  String?
+  userAgent  String?
+  method     LegalAcceptanceMethod @default(CLICKWRAP)
+
+  acceptedAt DateTime @default(now())
+
+  @@index([documentId, acceptedAt])
+  @@index([tenantId, acceptedAt])
+}
+
+model MandatoryReAcceptance {
+  id String @id @default(cuid())
+
+  documentId String
+  document   LegalDocument @relation(fields: [documentId], references: [id], onDelete: Cascade)
+  /** Target version that tenants must accept. */
+  requiredVersion Int
+
+  /** Optional tenant filter — null targets every tenant. */
+  tenantPlanScope String[]  @default([])
+  tenantIdScope   String[]  @default([])
+
+  bannerCopy   String
+  /** Days the user can continue using the product before being blocked. */
+  gracePeriodDays Int @default(7)
+  /** When true, app blocks navigation until accepted. */
+  enforceBlock Boolean @default(false)
+
+  /** Set when the re-acceptance is activated. */
+  activatedAt DateTime?
+  /** Set when reached the end of grace period + completed. */
+  closedAt    DateTime?
+
+  createdByEmail String?
+  createdAt      DateTime @default(now())
+
+  @@index([documentId, activatedAt])
+}
+
+model LegalSettings {
+  id String @id @default("default")
+
+  defaultJurisdiction   String  @default("Delaware, USA")
+  governingLaw          String  @default("Delaware")
+  arbitrationProvider   String?
+  venue                 String?
+  effectiveDateOffsetDays Int   @default(30)
+  /** Cookie banner copy snippets used on the public site. */
+  cookieBannerCopy      String?
+
+  notes       String?
+  updatedById String?
+  updatedAt   DateTime @updatedAt
+  createdAt   DateTime @default(now())
+}

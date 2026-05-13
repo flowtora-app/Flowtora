@@ -325,7 +325,11 @@ export type PlatformPermission =
   | "notifications.review"    // approve / reject template changes (Page 68)
   | "domains.read"
   | "domains.manage"          // create/edit custom domains, DNS, SSL (Page 70)
-  | "domains.verify";         // re-verify only (support tier)
+  | "domains.verify"          // re-verify only (support tier)
+  | "legal.read"
+  | "legal.write"             // edit docs (Page 71)
+  | "legal.publish"           // counsel sign-off + publish
+  | "legal.acceptance.read";  // read tenant acceptance trail
 
 const PLATFORM_ALL: PlatformPermission[] = [
   "tenant.read", "tenant.suspend", "tenant.archive", "tenant.delete",
@@ -369,6 +373,7 @@ const PLATFORM_ALL: PlatformPermission[] = [
   "system.maintenance_mode", "system.feature_freeze",
   "notifications.read", "notifications.manage", "notifications.review",
   "domains.read", "domains.manage", "domains.verify",
+  "legal.read", "legal.write", "legal.publish", "legal.acceptance.read",
 ];
 
 // Canonical "everyone with any platform role can read these" baseline.
@@ -382,6 +387,7 @@ const PLATFORM_BASELINE_READ: PlatformPermission[] = [
   "reports.read", "reports.export", // every staff role reads + can export
   "system.read_settings", "notifications.read",
   "domains.read",
+  "legal.read", "legal.acceptance.read",
 ];
 
 function dedup(perms: PlatformPermission[]): PlatformPermission[] {
@@ -406,6 +412,7 @@ export const PLATFORM_ROLE_PERMISSIONS: Record<PlatformRole, PlatformPermission[
     "reports.create", "reports.edit", "reports.delete", "reports.schedule",
     "system.write_settings", "system.maintenance_mode", "system.feature_freeze",
     "notifications.manage",
+    "legal.write", "legal.publish", // SITE_MANAGER acts as Counsel for now
   ]),
   SUPPORT_AGENT: dedup([
     "tenant.read", "billing.read", "users.read",
