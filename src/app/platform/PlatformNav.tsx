@@ -111,6 +111,7 @@ const NAV_ITEMS: NavItem[] = [
   { href: "/platform/settings/branding",            label: "Branding & White-Label", icon: "Palette" },
   { href: "/platform/settings/localization",        label: "Localization",         icon: "Globe" },
   { href: "/platform/settings/webhooks",            label: "Webhooks Catalog",     icon: "Pipeline" },
+  { href: "/platform/settings/domains",             label: "Domains",              icon: "Globe" },
 ];
 
 const COLLAPSE_KEY = "flowtora.platform-nav.collapsed";

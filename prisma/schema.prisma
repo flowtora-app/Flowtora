@@ -440,6 +440,8 @@ model Tenant {
   // Page 66 — Branding & White-Label
   brandingProfiles       WhiteLabelProfile[] @relation("BrandingProfileReseller")
   tenantBranding         TenantBranding?
+  // Page 70 — Domain Management
+  customDomains          CustomDomain[]
 }
 
 // ────────────────────────────────────────────────────────────
@@ -16167,4 +16169,190 @@ model LocalizationSettings {
   updatedById             String?
   updatedAt               DateTime @updatedAt
   createdAt               DateTime @default(now())
+}
+
+// ────────────────────────────────────────────────────────────
+// Page 70 — Domain Management.
+// ────────────────────────────────────────────────────────────
+
+enum CustomDomainStatus {
+  PENDING_DNS    // DNS records not yet pointing at us
+  VERIFYING      // polling DNS / waiting for propagation
+  ISSUING_SSL    // ACME challenge in flight
+  ACTIVE         // serving traffic, SSL healthy
+  EXPIRING       // cert expiry within renewal window
+  FAILED         // verification or SSL issuance failed
+  DISABLED       // admin paused; DNS may still point at us
+}
+
+enum CustomDomainType {
+  APEX           // example.com
+  SUBDOMAIN      // app.example.com
+}
+
+enum SslIssuer {
+  LETS_ENCRYPT
+  ZEROSSL
+  GOOGLE_TRUST_SERVICES
+  CUSTOM_UPLOAD   // tenant-uploaded paid cert
+}
+
+enum AcmeChallengeType {
+  HTTP_01
+  DNS_01
+}
+
+enum SslCertStatus {
+  ACTIVE
+  PENDING
+  EXPIRING
+  EXPIRED
+  REVOKED
+  FAILED
+}
+
+model CustomDomain {
+  id String @id @default(cuid())
+
+  /** Tenant this domain serves. */
+  tenantId String
+  tenant   Tenant @relation(fields: [tenantId], references: [id], onDelete: Cascade)
+
+  /** Fully-qualified domain name. Unique across the platform. */
+  domain String @unique
+  type   CustomDomainType
+
+  status     CustomDomainStatus @default(PENDING_DNS)
+  /** True when this is the tenant's primary public domain. */
+  isPrimary  Boolean @default(false)
+
+  // ── DNS configuration ──────────────────────────────────
+  /** Expected DNS record type (CNAME / ALIAS / A). */
+  dnsRecordType   String   @default("CNAME")
+  /** Value the customer must set in their DNS provider. */
+  dnsRecordValue  String
+  /** Tracks whether we've successfully resolved the DNS record. */
+  dnsVerified     Boolean  @default(false)
+  /** Last time we polled the DNS record. */
+  dnsLastCheckedAt DateTime?
+  /** Verification token added as a TXT record by the customer. */
+  verificationToken String?
+  verifiedAt       DateTime?
+
+  // ── SSL ───────────────────────────────────────────────
+  sslIssuer        SslIssuer @default(LETS_ENCRYPT)
+  acmeChallenge    AcmeChallengeType @default(HTTP_01)
+  /** Comma-separated list of Subject Alternative Names. */
+  sanList          String[] @default([])
+  /** Latest issued cert expiry. Null while pending. */
+  sslExpiresAt     DateTime?
+  /** Last successful renewal. */
+  sslLastRenewedAt DateTime?
+  /** Forces HTTPS at the edge. */
+  forceHttps       Boolean  @default(true)
+  hstsEnabled      Boolean  @default(false)
+  hstsPreload      Boolean  @default(false)
+
+  // ── Redirects / canonical ────────────────────────────
+  redirectFromWww  Boolean  @default(true)
+  redirectRulesJson Json?
+
+  /** Reason for FAILED status, surfaced to the admin. */
+  failureReason String?
+
+  notes      String?
+  createdAt  DateTime @default(now())
+  updatedAt  DateTime @updatedAt
+
+  certs CustomDomainCert[]
+
+  @@index([tenantId, status])
+  @@index([status])
+  @@index([sslExpiresAt])
+}
+
+model CustomDomainCert {
+  id String @id @default(cuid())
+
+  domainId String
+  domain   CustomDomain @relation(fields: [domainId], references: [id], onDelete: Cascade)
+
+  issuer       SslIssuer
+  status       SslCertStatus @default(PENDING)
+  /** Subject common name. */
+  commonName   String
+  /** Comma-separated SAN list this cert covers. */
+  sanList      String[] @default([])
+  /** Fingerprint (SHA-256). */
+  fingerprint  String?
+  serialNumber String?
+  issuedAt     DateTime?
+  expiresAt    DateTime?
+  /** When this cert was retired (auto-renew picks next). */
+  retiredAt    DateTime?
+
+  /** Free-form renewal log line (e.g. "ACME challenge passed in 12s"). */
+  renewalLog   String?
+
+  createdAt DateTime @default(now())
+  updatedAt DateTime @updatedAt
+
+  @@index([domainId, status])
+  @@index([expiresAt])
+}
+
+model DnsTemplate {
+  id String @id @default(cuid())
+
+  /** Key like "subdomain-cname", "apex-alias", "verification-txt". */
+  key   String @unique
+  label String
+  /** Markdown explanation rendered into the page. */
+  description String
+  /** Record type — CNAME / ALIAS / A / TXT. */
+  recordType String
+  /** Hostname pattern (use {sub}, {apex}, etc. as placeholders). */
+  hostnamePattern String
+  /** Target value (e.g. "endpoint.flowtora.com"). */
+  valuePattern    String
+  /** Environment scope — null = all envs, or "prod" / "staging" / "preview". */
+  envScope        String?
+
+  sortOrder Int @default(0)
+
+  createdAt DateTime @default(now())
+  updatedAt DateTime @updatedAt
+}
+
+model ApexSetupGuide {
+  id String @id @default(cuid())
+
+  /** DNS provider slug — "cloudflare", "route53", "godaddy", "namecheap", "squarespace". */
+  providerKey String @unique
+  providerName String
+  /** Markdown body with step-by-step instructions. */
+  bodyMarkdown String
+  /** Whether the provider supports ALIAS/ANAME records (true) or requires A records (false). */
+  supportsAlias Boolean @default(false)
+  /** Sort within the helper list. */
+  sortOrder Int @default(0)
+
+  createdAt DateTime @default(now())
+  updatedAt DateTime @updatedAt
+}
+
+model DomainSettings {
+  id String @id @default("default")
+
+  defaultIssuer     SslIssuer @default(LETS_ENCRYPT)
+  acmeAccountEmail  String    @default("ops@flowtora.com")
+  caFallbackList    String[]  @default([])
+  hstsDefaultMaxAge Int       @default(31536000) // 1y
+  hstsDefaultPreload Boolean  @default(false)
+  certRevocationProcedure String?
+
+  notes       String?
+  updatedById String?
+  updatedAt   DateTime @updatedAt
+  createdAt   DateTime @default(now())
 }

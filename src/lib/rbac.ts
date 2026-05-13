@@ -322,7 +322,10 @@ export type PlatformPermission =
   | "system.feature_freeze"
   | "notifications.read"
   | "notifications.manage"    // edit transactional templates
-  | "notifications.review";   // approve / reject template changes (Page 68)
+  | "notifications.review"    // approve / reject template changes (Page 68)
+  | "domains.read"
+  | "domains.manage"          // create/edit custom domains, DNS, SSL (Page 70)
+  | "domains.verify";         // re-verify only (support tier)
 
 const PLATFORM_ALL: PlatformPermission[] = [
   "tenant.read", "tenant.suspend", "tenant.archive", "tenant.delete",
@@ -365,6 +368,7 @@ const PLATFORM_ALL: PlatformPermission[] = [
   "system.read_settings", "system.write_settings",
   "system.maintenance_mode", "system.feature_freeze",
   "notifications.read", "notifications.manage", "notifications.review",
+  "domains.read", "domains.manage", "domains.verify",
 ];
 
 // Canonical "everyone with any platform role can read these" baseline.
@@ -377,6 +381,7 @@ const PLATFORM_BASELINE_READ: PlatformPermission[] = [
   "analytics.read", "revenue.read", "usage.read",
   "reports.read", "reports.export", // every staff role reads + can export
   "system.read_settings", "notifications.read",
+  "domains.read",
 ];
 
 function dedup(perms: PlatformPermission[]): PlatformPermission[] {
@@ -458,6 +463,7 @@ export const PLATFORM_ROLE_PERMISSIONS: Record<PlatformRole, PlatformPermission[
     "incidents.read",
     "logs.read", "logs.resolve", // support triages user-reported errors
     "localization.translate", // support agents may translate own locale
+    "domains.verify", // support can re-verify DNS without owning provisioning
   ]),
   // Billing team. Can issue refunds, mint coupons, change plans —
   // everything money. No tenant suspension, no staff edits.
@@ -498,6 +504,7 @@ export const PLATFORM_ROLE_PERMISSIONS: Record<PlatformRole, PlatformPermission[
     "ratelimits.manage", // SRE owns rate-limit + quota rules
     "env.reveal", "env.manage", // SRE owns env vars + secrets reveal
     "logs.manage", "logs.resolve", // SRE owns logs + error triage
+    "domains.manage", "domains.verify", // SRE owns custom-domain provisioning (Page 70)
   ]),
   // Marketing — leads, announcements, public plan/feature copy.
   MARKETING_MANAGER: dedup([

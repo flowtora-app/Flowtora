@@ -91,6 +91,7 @@ async function main() {
   await seedBranding(tenants);                         // Page 66
   await seedLocalization();                            // Page 67
   await seedNotificationCatalog();                     // Page 68
+  await seedDomains(tenants);                          // Page 70
 
   console.log("\n✓ Seed complete.\n");
   await db.$disconnect();
@@ -402,6 +403,10 @@ async function wipeOldSeed() {
   await db.notificationTemplateMetric.deleteMany({ where: {
     day: { gte: new Date(Date.now() - 60 * DAY) }
   } });
+  // Page 70 — Domain Management wipe (cascades certs).
+  await db.customDomain.deleteMany({ where: { domain: { contains: ".seed.flowtora." } } });
+  await db.dnsTemplate.deleteMany({ where: { key: { startsWith: "seed-" } } });
+  await db.apexSetupGuide.deleteMany({ where: { providerKey: { startsWith: "seed-" } } });
   // Customers tagged seed (after orders are gone).
   await db.customer.deleteMany({ where: { tags: { has: "seed" } } });
   // Products tagged seed (use description marker since Product has no tags array).
@@ -15106,6 +15111,223 @@ async function seedNotificationCatalog() {
   console.log(
     `  ✓ Enriched ${templates.length} templates (${liveCount} LIVE / ${approvedCount} APPROVED / ${reviewCount} IN_REVIEW / ${draftCount} DRAFT), ${reviewEvents} review events, ${variantCount} A/B variants, ${metricRows} metric rows`,
   );
+}
+
+/* ── Page 70 — Domain Management seed ───────────────────── */
+
+async function seedDomains(tenants: { id: string; name: string; slug: string }[]) {
+  console.log("── Seeding Domain Management (Page 70)…");
+
+  // Settings singleton.
+  await db.domainSettings.upsert({
+    where: { id: "default" },
+    create: {
+      id: "default",
+      defaultIssuer: "LETS_ENCRYPT",
+      acmeAccountEmail: "ops@flowtora.com",
+      caFallbackList: ["LETS_ENCRYPT", "ZEROSSL", "GOOGLE_TRUST_SERVICES"],
+      hstsDefaultMaxAge: 31_536_000,
+      hstsDefaultPreload: false,
+      certRevocationProcedure: "1. Identify affected cert via fingerprint.\n2. Revoke at ACME endpoint.\n3. Issue replacement.\n4. Notify affected tenants within 4h.",
+      notes: "Production policy: prefer Let's Encrypt for cost; fall back to ZeroSSL only when LE rate-limited.",
+    },
+    update: {
+      defaultIssuer: "LETS_ENCRYPT",
+      caFallbackList: ["LETS_ENCRYPT", "ZEROSSL", "GOOGLE_TRUST_SERVICES"],
+    },
+  });
+
+  // DNS templates.
+  const dnsTemplates = [
+    { key: "seed-subdomain-cname", label: "Subdomain CNAME",
+      description: "Add a CNAME pointing the customer subdomain at our edge endpoint.",
+      recordType: "CNAME", hostnamePattern: "{sub}.{apex}", valuePattern: "endpoint.flowtora.com",
+      envScope: null, sortOrder: 10 },
+    { key: "seed-apex-alias", label: "Apex ALIAS / ANAME",
+      description: "For DNS providers that support ALIAS/ANAME at the apex, point the root at our edge.",
+      recordType: "ALIAS", hostnamePattern: "{apex}", valuePattern: "endpoint.flowtora.com",
+      envScope: null, sortOrder: 20 },
+    { key: "seed-apex-a", label: "Apex A records (fallback)",
+      description: "When ALIAS/ANAME isn't supported, use these IP addresses.",
+      recordType: "A", hostnamePattern: "{apex}", valuePattern: "76.76.21.21",
+      envScope: null, sortOrder: 30 },
+    { key: "seed-verification-txt", label: "Ownership verification TXT",
+      description: "Random token we ask the customer to add to prove DNS control.",
+      recordType: "TXT", hostnamePattern: "_flowtora.{apex}", valuePattern: "flowtora-verify={token}",
+      envScope: null, sortOrder: 40 },
+    { key: "seed-preview-cname", label: "Preview environment CNAME",
+      description: "Preview deploys go to a separate edge endpoint.",
+      recordType: "CNAME", hostnamePattern: "{sub}.{apex}", valuePattern: "preview.flowtora.com",
+      envScope: "preview", sortOrder: 50 },
+  ];
+  for (const t of dnsTemplates) {
+    await db.dnsTemplate.upsert({
+      where: { key: t.key },
+      create: t as never,
+      update: t as never,
+    });
+  }
+
+  // Apex setup guides.
+  const apexGuides = [
+    { providerKey: "seed-cloudflare", providerName: "Cloudflare",
+      supportsAlias: true, sortOrder: 10,
+      bodyMarkdown: "1. Open the Cloudflare dashboard → Select your domain.\n2. Go to DNS → Records.\n3. Click 'Add Record'.\n4. Type: CNAME. Name: @ (the apex). Target: endpoint.flowtora.com.\n5. Proxy status: DNS only (gray cloud). Save.\n\nCloudflare 'CNAME flattening' makes this work at the apex automatically." },
+    { providerKey: "seed-route53", providerName: "AWS Route 53",
+      supportsAlias: true, sortOrder: 20,
+      bodyMarkdown: "1. AWS Console → Route 53 → Hosted zones → Your zone.\n2. Click 'Create record'.\n3. Leave 'Record name' blank for the apex.\n4. Record type: A.\n5. Toggle 'Alias' to On.\n6. Alias target: select 'Alias to another AWS resource' then enter endpoint.flowtora.com.\n7. Save." },
+    { providerKey: "seed-godaddy", providerName: "GoDaddy",
+      supportsAlias: false, sortOrder: 30,
+      bodyMarkdown: "GoDaddy does not support ALIAS/ANAME at the apex on shared hosting tiers. Use A records instead.\n\n1. Domain Manager → Manage DNS.\n2. Add A record at '@' pointing to 76.76.21.21.\n3. Add a second A record at '@' for 76.76.21.22 (redundancy).\n4. Wait up to 1h for propagation." },
+    { providerKey: "seed-namecheap", providerName: "Namecheap",
+      supportsAlias: false, sortOrder: 40,
+      bodyMarkdown: "1. Domain List → Manage → Advanced DNS.\n2. 'Add New Record' → URL Redirect Record at '@' is NOT what you want.\n3. Use A Record at '@' with value 76.76.21.21.\n4. TTL: Automatic." },
+    { providerKey: "seed-squarespace", providerName: "Squarespace (Google Domains)",
+      supportsAlias: true, sortOrder: 50,
+      bodyMarkdown: "Since Google Domains migrated to Squarespace, the apex flow uses synthetic CNAME records.\n\n1. Open the domain → DNS settings.\n2. Add a CNAME at '@' (note: most DNS providers reject this; Squarespace allows it via internal flattening).\n3. Target: endpoint.flowtora.com." },
+  ];
+  for (const g of apexGuides) {
+    await db.apexSetupGuide.upsert({
+      where: { providerKey: g.providerKey },
+      create: g as never,
+      update: g as never,
+    });
+  }
+
+  // Custom domains — one per tenant, plus a couple of edge cases.
+  const tenantSubset = tenants.slice(0, 3);
+  let dCount = 0;
+  for (let i = 0; i < tenantSubset.length; i++) {
+    const t = tenantSubset[i]!;
+    // Primary domain — typical happy-path.
+    const primaryDomain = `app.${t.slug}.seed.flowtora.example`;
+    const primary = await db.customDomain.create({
+      data: {
+        tenantId: t.id,
+        domain: primaryDomain,
+        type: "SUBDOMAIN",
+        isPrimary: true,
+        status: "ACTIVE",
+        dnsRecordType: "CNAME",
+        dnsRecordValue: "endpoint.flowtora.com",
+        dnsVerified: true,
+        dnsLastCheckedAt: minutesAgo(randInt(5, 60)),
+        verificationToken: randomBytes(16).toString("hex"),
+        verifiedAt: daysAgo(randInt(30, 180)),
+        sslIssuer: "LETS_ENCRYPT",
+        acmeChallenge: "HTTP_01",
+        sanList: [primaryDomain, `www.${primaryDomain}`],
+        sslExpiresAt: daysAgo(-randInt(30, 80)),
+        sslLastRenewedAt: daysAgo(randInt(10, 60)),
+        forceHttps: true, hstsEnabled: true, hstsPreload: false,
+        redirectFromWww: true,
+        notes: "Primary domain — added during tenant onboarding.",
+      },
+    });
+    await db.customDomainCert.create({
+      data: {
+        domainId: primary.id,
+        issuer: "LETS_ENCRYPT",
+        status: "ACTIVE",
+        commonName: primaryDomain,
+        sanList: primary.sanList,
+        fingerprint: `sha256:${randomBytes(16).toString("hex")}`,
+        serialNumber: randomBytes(8).toString("hex").toUpperCase(),
+        issuedAt: primary.sslLastRenewedAt,
+        expiresAt: primary.sslExpiresAt,
+        renewalLog: "Auto-renew: ACME HTTP-01 challenge passed in 6s",
+      },
+    });
+    dCount++;
+  }
+  // An apex domain — pending DNS verification.
+  if (tenants[0]) {
+    await db.customDomain.create({
+      data: {
+        tenantId: tenants[0].id,
+        domain: `${tenants[0].slug}.seed.flowtora.example`,
+        type: "APEX",
+        status: "PENDING_DNS",
+        dnsRecordType: "A",
+        dnsRecordValue: "76.76.21.21",
+        dnsVerified: false,
+        verificationToken: randomBytes(16).toString("hex"),
+        sslIssuer: "LETS_ENCRYPT",
+        acmeChallenge: "DNS_01",
+        sanList: [],
+        forceHttps: true, hstsEnabled: false, hstsPreload: false,
+        redirectFromWww: true,
+        notes: "Customer is adding A records at GoDaddy — apex domain.",
+      },
+    });
+    dCount++;
+  }
+  // A failed domain — DNS never resolved.
+  if (tenants[1]) {
+    await db.customDomain.create({
+      data: {
+        tenantId: tenants[1].id,
+        domain: `legacy.${tenants[1].slug}.seed.flowtora.example`,
+        type: "SUBDOMAIN",
+        status: "FAILED",
+        dnsRecordType: "CNAME",
+        dnsRecordValue: "endpoint.flowtora.com",
+        dnsVerified: false,
+        dnsLastCheckedAt: daysAgo(2),
+        verificationToken: randomBytes(16).toString("hex"),
+        sslIssuer: "LETS_ENCRYPT",
+        acmeChallenge: "HTTP_01",
+        sanList: [],
+        forceHttps: true, hstsEnabled: false, hstsPreload: false,
+        redirectFromWww: false,
+        failureReason: "DNS record never resolved after 14 days. Customer may have used the wrong record type.",
+        notes: "Stuck — outreach in progress.",
+      },
+    });
+    dCount++;
+  }
+  // An expiring-soon domain.
+  if (tenants[2]) {
+    const expiringDomain = `expiring.${tenants[2].slug}.seed.flowtora.example`;
+    const expiring = await db.customDomain.create({
+      data: {
+        tenantId: tenants[2].id,
+        domain: expiringDomain,
+        type: "SUBDOMAIN",
+        status: "EXPIRING",
+        dnsRecordType: "CNAME",
+        dnsRecordValue: "endpoint.flowtora.com",
+        dnsVerified: true,
+        dnsLastCheckedAt: daysAgo(1),
+        verifiedAt: daysAgo(85),
+        sslIssuer: "LETS_ENCRYPT",
+        acmeChallenge: "HTTP_01",
+        sanList: [expiringDomain],
+        sslExpiresAt: daysAgo(-7), // expires in 7 days
+        sslLastRenewedAt: daysAgo(83),
+        forceHttps: true, hstsEnabled: true, hstsPreload: false,
+        redirectFromWww: false,
+        notes: "Cert expires soon — auto-renew should fire in 3 days.",
+      },
+    });
+    await db.customDomainCert.create({
+      data: {
+        domainId: expiring.id,
+        issuer: "LETS_ENCRYPT",
+        status: "EXPIRING",
+        commonName: expiringDomain,
+        sanList: expiring.sanList,
+        fingerprint: `sha256:${randomBytes(16).toString("hex")}`,
+        serialNumber: randomBytes(8).toString("hex").toUpperCase(),
+        issuedAt: expiring.sslLastRenewedAt,
+        expiresAt: expiring.sslExpiresAt,
+        renewalLog: "Last renewal 83 days ago. Auto-renew scheduled.",
+      },
+    });
+    dCount++;
+  }
+
+  console.log(`  ✓ Settings singleton + ${dnsTemplates.length} DNS templates + ${apexGuides.length} apex guides + ${dCount} custom domains`);
 }
 
 main().catch((e) => {

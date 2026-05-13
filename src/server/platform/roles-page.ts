@@ -163,6 +163,10 @@ export const PERMISSION_DESCRIPTIONS: Record<PlatformPermission, string> = {
   "notifications.read":    "Read transactional templates.",
   "notifications.manage":  "Edit transactional templates.",
   "notifications.review":  "Approve / reject template changes (Lifecycle / Marketing Ops).",
+  // Domains
+  "domains.read":   "Read custom-domain configuration + SSL cert status.",
+  "domains.manage": "Create/edit custom domains, manage DNS templates + SSL issuance.",
+  "domains.verify": "Re-verify DNS records on existing domains (support tier).",
 };
 
 /* ────────────────────────────────────────────────────────── */
