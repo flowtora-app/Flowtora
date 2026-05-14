@@ -65,7 +65,7 @@ export default async function MyProfilePage({
   const me = await db.user.findUnique({
     where: { id: ctx.userId },
     include: {
-      sessions: { orderBy: { lastUsedAt: "desc" }, take: 30 },
+      sessions: { orderBy: { lastActiveAt: "desc" }, take: 30 },
       accounts: true,
       twoFactor: true,
     },
@@ -254,10 +254,10 @@ export default async function MyProfilePage({
                   <div className="mt-0.5 text-xs">{s.ipAddress ?? "(no IP)"}</div>
                 </div>
                 <span className="text-xs" style={{ color: "var(--text-muted)" }}>
-                  Created {relativeFromNow(s.createdAt)}
+                  Created {relativeFromNow(s.startedAt)}
                 </span>
                 <span className="text-xs" style={{ color: "var(--text-muted)" }}>
-                  Active {relativeFromNow(s.lastUsedAt ?? s.createdAt)}
+                  Active {relativeFromNow(s.lastActiveAt ?? s.startedAt)}
                 </span>
                 <span className="text-xs">{s.expires ? `Expires ${relativeFromNow(s.expires)}` : "—"}</span>
               </li>

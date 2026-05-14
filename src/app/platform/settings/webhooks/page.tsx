@@ -64,8 +64,8 @@ export default async function WebhooksCatalogPage({
   const selected = eventName ? await loadEventDetail(eventName) : null;
   const activeEndpoints = selected
     ? await db.webhookEndpoint.findMany({
-        where: { active: true },
-        select: { id: true, url: true, label: true, subscribedEvents: true },
+        where: { status: "ACTIVE" },
+        select: { id: true, url: true, description: true, subscribedEvents: true },
         orderBy: { url: "asc" },
         take: 50,
       })
@@ -240,7 +240,7 @@ function EventDetail({
   lang: Lang;
   subscribers: number;
   lastSeen: Date | null;
-  activeEndpoints: { id: string; url: string; label: string | null; subscribedEvents: string[] }[];
+  activeEndpoints: { id: string; url: string; description: string | null; subscribedEvents: string[] }[];
   canManage: boolean;
 }) {
   const samples = getCodeSamples(event);
@@ -374,7 +374,7 @@ function EventDetail({
                   className="px-5 py-3 text-sm"
                   style={{ borderTop: "1px solid var(--border-subtle)" }}
                 >
-                  <div className="font-medium">{e.label ?? "(unlabeled)"}</div>
+                  <div className="font-medium">{e.description ?? "(no description)"}</div>
                   <div className="mt-0.5 truncate text-xs font-mono" style={{ color: "var(--text-muted)" }}>{e.url}</div>
                 </li>
               ))}
@@ -443,7 +443,7 @@ function EventDetail({
                 <option value="">— Pick an endpoint —</option>
                 {activeEndpoints.map((e) => (
                   <option key={e.id} value={e.id}>
-                    {e.label ?? "(unlabeled)"} — {e.url}
+                    {e.description ?? "(no description)"} — {e.url}
                   </option>
                 ))}
               </select>

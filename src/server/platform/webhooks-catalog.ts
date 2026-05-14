@@ -13,18 +13,16 @@ import type {
 } from "@prisma/client";
 
 export const CATEGORY_LABEL: Record<WebhookEventCategory, string> = {
-  TENANT:        "Tenant lifecycle",
-  USER:          "Users & teams",
-  BILLING:       "Billing",
-  ORDER:         "Orders & jobs",
-  INVOICE:       "Invoices",
-  PAYMENT:       "Payments",
-  PROOF:         "Proofs",
-  PRODUCT:       "Products",
-  INTEGRATION:   "Integrations",
-  SECURITY:      "Security",
-  SUPPORT:       "Support",
-  SYSTEM:        "System",
+  TENANT_LIFECYCLE: "Tenant lifecycle",
+  SUBSCRIPTION:     "Subscription",
+  INVOICE:          "Invoices",
+  PAYMENT:          "Payments",
+  USER:             "Users & teams",
+  JOB:              "Orders & jobs",
+  INTEGRATION:      "Integrations",
+  SYSTEM:           "System",
+  SECURITY:         "Security",
+  MARKETING:        "Marketing",
 };
 
 export const STABILITY_TONE: Record<
@@ -49,8 +47,8 @@ export const STABILITY_TONE: Record<
 };
 
 export const CATEGORY_ORDER: WebhookEventCategory[] = [
-  "TENANT", "USER", "BILLING", "ORDER", "INVOICE", "PAYMENT",
-  "PROOF", "PRODUCT", "INTEGRATION", "SECURITY", "SUPPORT", "SYSTEM",
+  "TENANT_LIFECYCLE", "SUBSCRIPTION", "INVOICE", "PAYMENT",
+  "USER", "JOB", "INTEGRATION", "SYSTEM", "SECURITY", "MARKETING",
 ];
 
 /* ── Loaders ──────────────────────────────────────────── */
@@ -87,7 +85,7 @@ export async function loadEventDetail(name: string) {
 /** Live subscriber count per event — recomputed cheaply at request time. */
 export async function loadSubscriberCounts(): Promise<Map<string, number>> {
   const endpoints = await db.webhookEndpoint.findMany({
-    where: { active: true },
+    where: { status: "ACTIVE" },
     select: { subscribedEvents: true },
   });
   const counts = new Map<string, number>();
@@ -104,10 +102,10 @@ export async function loadLastDeliveryByEvent(): Promise<Map<string, Date>> {
   // One query, group by eventName.
   const grouped = await db.webhookDelivery.groupBy({
     by: ["eventName"],
-    _max: { createdAt: true },
+    _max: { attemptedAt: true },
   });
   const map = new Map<string, Date>();
-  for (const g of grouped) if (g._max.createdAt) map.set(g.eventName, g._max.createdAt);
+  for (const g of grouped) if (g._max.attemptedAt) map.set(g.eventName, g._max.attemptedAt);
   return map;
 }
 
@@ -127,9 +125,9 @@ export async function loadCatalogKpis(): Promise<CatalogKpis> {
   const since = new Date(Date.now() - 86_400_000);
   const [events, activeEndpoints, deliveries24h, failures24h] = await Promise.all([
     db.webhookEvent.findMany({ select: { stability: true } }),
-    db.webhookEndpoint.count({ where: { active: true } }),
-    db.webhookDelivery.count({ where: { createdAt: { gte: since } } }),
-    db.webhookDelivery.count({ where: { createdAt: { gte: since }, status: "FAILED" } }),
+    db.webhookEndpoint.count({ where: { status: "ACTIVE" } }),
+    db.webhookDelivery.count({ where: { attemptedAt: { gte: since } } }),
+    db.webhookDelivery.count({ where: { attemptedAt: { gte: since }, status: "FAILED" } }),
   ]);
   return {
     totalEvents:     events.length,
