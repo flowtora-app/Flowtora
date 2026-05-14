@@ -31,98 +31,206 @@ type NavItem = {
   preview?: boolean;
 };
 
-const NAV_ITEMS: NavItem[] = [
-  // Pages 1-3 — observability
-  { href: "/platform",                        label: "Dashboard",            icon: "Dashboard", exact: true },
-  { href: "/platform/activity",               label: "Activity",             icon: "Activity" },
-  { href: "/platform/reports",                label: "Reports",              icon: "Globe" },
-  // Pages 4-8 — tenants
-  { href: "/platform/tenants",                label: "Tenants",              icon: "Building" },
-  { href: "/platform/tenants/onboarding",     label: "Onboarding",           icon: "Target" },
-  { href: "/platform/tenants/health",         label: "Health Scores",        icon: "Heartbeat" },
-  { href: "/platform/tenants/churn",          label: "Churned & At-Risk",    icon: "Attention" },
-  { href: "/platform/tenants/impersonation",  label: "Impersonation",        icon: "Shield" },
-  // Pages 9-14 — access & audit
-  { href: "/platform/users",                  label: "Users",                icon: "Customers" },
-  { href: "/platform/access/roles",           label: "Roles & Permissions",  icon: "Approvals" },
-  { href: "/platform/access/teams",           label: "Teams",                icon: "User" },
-  { href: "/platform/access/invitations",     label: "Invitations",          icon: "Megaphone" },
-  { href: "/platform/access/sessions",        label: "Sessions & Devices",   icon: "Monitor" },
-  { href: "/platform/access/audit",           label: "Audit Log",            icon: "FileText" },
-  // Pages 15-24 — billing
-  { href: "/platform/billing",                label: "Subscriptions",        icon: "Revenue" },
-  { href: "/platform/billing/invoices",       label: "Invoices",             icon: "Invoices" },
-  { href: "/platform/billing/payments",       label: "Payments",             icon: "Payments" },
-  { href: "/platform/billing/refunds",        label: "Refunds & Disputes",   icon: "Scale" },
-  { href: "/platform/plans",                  label: "Plans & Pricing",      icon: "Package" },
-  { href: "/platform/billing/coupons",        label: "Coupons & Promotions", icon: "Sparkles" },
-  { href: "/platform/billing/tax",            label: "Tax & Compliance",     icon: "FileText" },
-  { href: "/platform/billing/analytics",      label: "Revenue Analytics",    icon: "Globe" },
-  { href: "/platform/billing/dunning",        label: "Dunning",              icon: "Attention" },
-  { href: "/platform/billing/payouts",        label: "Payouts",              icon: "Vendors" },
-  // Pages 25-30 — catalog
-  { href: "/platform/catalog/products",       label: "Master Catalog",       icon: "Products" },
-  { href: "/platform/catalog/materials",      label: "Material Library",     icon: "Package" },
-  { href: "/platform/catalog/equipment",      label: "Equipment Templates",  icon: "Production" },
-  { href: "/platform/catalog/pricing",        label: "Pricing Formulas",     icon: "Revenue" },
-  { href: "/platform/catalog/templates",      label: "Industry Templates",   icon: "FileText" },
-  { href: "/platform/catalog/assets",         label: "Design Assets",        icon: "Palette" },
-  // Pages 31-37 — operations
-  { href: "/platform/operations/jobs",              label: "Job Queue Monitor",    icon: "Pipeline" },
-  { href: "/platform/operations/production",        label: "Production Health",    icon: "Heartbeat" },
-  { href: "/platform/operations/tickets",           label: "Support Tickets",      icon: "Support" },
-  { href: "/platform/operations/knowledge-base",    label: "Knowledge Base",       icon: "FileText" },
-  { href: "/platform/operations/announcements",     label: "Announcements",        icon: "Megaphone" },
-  { href: "/platform/operations/feature-requests",  label: "Feature Requests",     icon: "Sparkles" },
-  { href: "/platform/operations/bugs",              label: "Bug Reports",          icon: "Attention" },
-  // Pages 38-42 — marketing
-  { href: "/platform/marketing/landing-pages",      label: "Landing Pages",        icon: "Globe" },
-  { href: "/platform/marketing/campaigns",          label: "Email Campaigns",      icon: "Megaphone" },
-  { href: "/platform/marketing/sequences",          label: "Drip Sequences",       icon: "Pipeline" },
-  { href: "/platform/marketing/referrals",          label: "Referral Program",     icon: "Sparkles" },
-  { href: "/platform/marketing/affiliates",         label: "Affiliate Program",    icon: "Vendors" },
-  { href: "/platform/marketing/seo",                label: "SEO & Content",        icon: "Globe" },
-  { href: "/platform/marketing/leads",              label: "Lead Inbox",           icon: "Target" },
-  // Pages 45+ — integrations
-  { href: "/platform/integrations",                 label: "Integrations Catalog", icon: "Pipeline" },
-  { href: "/platform/integrations/api",             label: "API Keys & Webhooks",  icon: "Shield" },
-  { href: "/platform/integrations/docs",            label: "Developer Docs",       icon: "FileText" },
-  { href: "/platform/integrations/marketplace",     label: "Marketplace",          icon: "Sparkles" },
-  { href: "/platform/integrations/sso",             label: "SSO Providers",        icon: "Approvals" },
-  // Pages 50-… — compliance & security
-  { href: "/platform/security/center",              label: "Security Center",      icon: "Shield" },
-  { href: "/platform/security/compliance",          label: "Compliance",           icon: "Scale" },
-  { href: "/platform/security/privacy-requests",    label: "Privacy Requests",     icon: "User" },
-  { href: "/platform/security/backups",             label: "Backups & Restore",    icon: "Package" },
-  { href: "/platform/security/incidents",           label: "Incident Log",         icon: "Attention" },
-  { href: "/platform/security/network",             label: "Network Restrictions", icon: "Globe" },
-  // Pages 56+ — system & infrastructure
-  { href: "/platform/system/status",                label: "System Status",        icon: "Heartbeat" },
-  { href: "/platform/system/queues",                label: "Queues & Jobs",        icon: "Pipeline" },
-  { href: "/platform/system/email",                 label: "Email Deliverability", icon: "Megaphone" },
-  { href: "/platform/system/storage",               label: "Storage & CDN",        icon: "Package" },
-  { href: "/platform/system/database",              label: "Database Health",      icon: "Pipeline" },
-  { href: "/platform/system/rate-limits",           label: "Rate Limits & Quotas", icon: "Scale" },
-  { href: "/platform/system/feature-flags",         label: "Feature Flags",        icon: "Sparkles" },
-  { href: "/platform/system/env",                   label: "Environment Vars",     icon: "Shield" },
-  { href: "/platform/system/logs",                  label: "Logs & Errors",        icon: "FileText" },
-  // Pages 65+ — configuration
-  { href: "/platform/settings/general",             label: "Platform Settings",    icon: "Settings" },
-  { href: "/platform/settings/branding",            label: "Branding & White-Label", icon: "Palette" },
-  { href: "/platform/settings/localization",        label: "Localization",         icon: "Globe" },
-  { href: "/platform/settings/webhooks",            label: "Webhooks Catalog",     icon: "Pipeline" },
-  { href: "/platform/settings/domains",             label: "Domains",              icon: "Globe" },
-  { href: "/platform/settings/legal",               label: "Legal Documents",      icon: "Scale" },
-  // Pages 72-75 — Personal admin pages.
-  { href: "/platform/me/profile",                   label: "My Profile",           icon: "User" },
-  { href: "/platform/me/notifications",             label: "My Notifications",     icon: "Megaphone" },
-  { href: "/platform/me/api-keys",                  label: "My API Keys",          icon: "Shield" },
-  { href: "/platform/me/shortcuts",                 label: "Keyboard Shortcuts",   icon: "Sparkles" },
+type NavGroup = {
+  /** Stable id used for the localStorage open-state key. */
+  id: string;
+  /** Section header shown above the items. */
+  label: string;
+  /** Icon shown next to the section header in collapsed-rail mode. */
+  icon: IconName;
+  items: NavItem[];
+};
+
+// Pinned items always render above the first group. Dashboard is the
+// only one — every other link slots into a section below.
+const PINNED: NavItem[] = [
+  { href: "/platform", label: "Dashboard", icon: "Dashboard", exact: true },
 ];
 
-const COLLAPSE_KEY = "flowtora.platform-nav.collapsed";
+const NAV_GROUPS: NavGroup[] = [
+  {
+    id: "observability",
+    label: "Observability",
+    icon: "Activity",
+    items: [
+      { href: "/platform/activity",               label: "Activity",             icon: "Activity" },
+      { href: "/platform/reports",                label: "Reports",              icon: "Globe" },
+    ],
+  },
+  {
+    id: "tenants",
+    label: "Tenants",
+    icon: "Building",
+    items: [
+      { href: "/platform/tenants",                label: "Tenants",              icon: "Building" },
+      { href: "/platform/tenants/onboarding",     label: "Onboarding",           icon: "Target" },
+      { href: "/platform/tenants/health",         label: "Health Scores",        icon: "Heartbeat" },
+      { href: "/platform/tenants/churn",          label: "Churned & At-Risk",    icon: "Attention" },
+      { href: "/platform/tenants/impersonation",  label: "Impersonation",        icon: "Shield" },
+    ],
+  },
+  {
+    id: "access",
+    label: "Access & Audit",
+    icon: "Approvals",
+    items: [
+      { href: "/platform/users",                  label: "Users",                icon: "Customers" },
+      { href: "/platform/access/roles",           label: "Roles & Permissions",  icon: "Approvals" },
+      { href: "/platform/access/teams",           label: "Teams",                icon: "User" },
+      { href: "/platform/access/invitations",     label: "Invitations",          icon: "Megaphone" },
+      { href: "/platform/access/sessions",        label: "Sessions & Devices",   icon: "Monitor" },
+      { href: "/platform/access/audit",           label: "Audit Log",            icon: "FileText" },
+    ],
+  },
+  {
+    id: "billing",
+    label: "Billing & Revenue",
+    icon: "Revenue",
+    items: [
+      { href: "/platform/billing",                label: "Subscriptions",        icon: "Revenue" },
+      { href: "/platform/billing/invoices",       label: "Invoices",             icon: "Invoices" },
+      { href: "/platform/billing/payments",       label: "Payments",             icon: "Payments" },
+      { href: "/platform/billing/refunds",        label: "Refunds & Disputes",   icon: "Scale" },
+      { href: "/platform/plans",                  label: "Plans & Pricing",      icon: "Package" },
+      { href: "/platform/billing/coupons",        label: "Coupons & Promotions", icon: "Sparkles" },
+      { href: "/platform/billing/tax",            label: "Tax & Compliance",     icon: "FileText" },
+      { href: "/platform/billing/analytics",      label: "Revenue Analytics",    icon: "Globe" },
+      { href: "/platform/billing/dunning",        label: "Dunning",              icon: "Attention" },
+      { href: "/platform/billing/payouts",        label: "Payouts",              icon: "Vendors" },
+    ],
+  },
+  {
+    id: "catalog",
+    label: "Catalog",
+    icon: "Products",
+    items: [
+      { href: "/platform/catalog/products",       label: "Master Catalog",       icon: "Products" },
+      { href: "/platform/catalog/materials",      label: "Material Library",     icon: "Package" },
+      { href: "/platform/catalog/equipment",      label: "Equipment Templates",  icon: "Production" },
+      { href: "/platform/catalog/pricing",        label: "Pricing Formulas",     icon: "Revenue" },
+      { href: "/platform/catalog/templates",      label: "Industry Templates",   icon: "FileText" },
+      { href: "/platform/catalog/assets",         label: "Design Assets",        icon: "Palette" },
+    ],
+  },
+  {
+    id: "operations",
+    label: "Operations",
+    icon: "Pipeline",
+    items: [
+      { href: "/platform/operations/jobs",              label: "Job Queue Monitor",    icon: "Pipeline" },
+      { href: "/platform/operations/production",        label: "Production Health",    icon: "Heartbeat" },
+      { href: "/platform/operations/tickets",           label: "Support Tickets",      icon: "Support" },
+      { href: "/platform/operations/knowledge-base",    label: "Knowledge Base",       icon: "FileText" },
+      { href: "/platform/operations/announcements",     label: "Announcements",        icon: "Megaphone" },
+      { href: "/platform/operations/feature-requests",  label: "Feature Requests",     icon: "Sparkles" },
+      { href: "/platform/operations/bugs",              label: "Bug Reports",          icon: "Attention" },
+    ],
+  },
+  {
+    id: "marketing",
+    label: "Marketing",
+    icon: "Megaphone",
+    items: [
+      { href: "/platform/marketing/landing-pages",      label: "Landing Pages",        icon: "Globe" },
+      { href: "/platform/marketing/campaigns",          label: "Email Campaigns",      icon: "Megaphone" },
+      { href: "/platform/marketing/sequences",          label: "Drip Sequences",       icon: "Pipeline" },
+      { href: "/platform/marketing/referrals",          label: "Referral Program",     icon: "Sparkles" },
+      { href: "/platform/marketing/affiliates",         label: "Affiliate Program",    icon: "Vendors" },
+      { href: "/platform/marketing/seo",                label: "SEO & Content",        icon: "Globe" },
+      { href: "/platform/marketing/leads",              label: "Lead Inbox",           icon: "Target" },
+    ],
+  },
+  {
+    id: "integrations",
+    label: "Integrations",
+    icon: "Pipeline",
+    items: [
+      { href: "/platform/integrations",                 label: "Integrations Catalog", icon: "Pipeline" },
+      { href: "/platform/integrations/api",             label: "API Keys & Webhooks",  icon: "Shield" },
+      { href: "/platform/integrations/docs",            label: "Developer Docs",       icon: "FileText" },
+      { href: "/platform/integrations/marketplace",     label: "Marketplace",          icon: "Sparkles" },
+      { href: "/platform/integrations/sso",             label: "SSO Providers",        icon: "Approvals" },
+    ],
+  },
+  {
+    id: "security",
+    label: "Security & Compliance",
+    icon: "Shield",
+    items: [
+      { href: "/platform/security/center",              label: "Security Center",      icon: "Shield" },
+      { href: "/platform/security/compliance",          label: "Compliance",           icon: "Scale" },
+      { href: "/platform/security/privacy-requests",    label: "Privacy Requests",     icon: "User" },
+      { href: "/platform/security/backups",             label: "Backups & Restore",    icon: "Package" },
+      { href: "/platform/security/incidents",           label: "Incident Log",         icon: "Attention" },
+      { href: "/platform/security/network",             label: "Network Restrictions", icon: "Globe" },
+    ],
+  },
+  {
+    id: "system",
+    label: "System & Infrastructure",
+    icon: "Heartbeat",
+    items: [
+      { href: "/platform/system/status",                label: "System Status",        icon: "Heartbeat" },
+      { href: "/platform/system/queues",                label: "Queues & Jobs",        icon: "Pipeline" },
+      { href: "/platform/system/email",                 label: "Email Deliverability", icon: "Megaphone" },
+      { href: "/platform/system/storage",               label: "Storage & CDN",        icon: "Package" },
+      { href: "/platform/system/database",              label: "Database Health",      icon: "Pipeline" },
+      { href: "/platform/system/rate-limits",           label: "Rate Limits & Quotas", icon: "Scale" },
+      { href: "/platform/system/feature-flags",         label: "Feature Flags",        icon: "Sparkles" },
+      { href: "/platform/system/env",                   label: "Environment Vars",     icon: "Shield" },
+      { href: "/platform/system/logs",                  label: "Logs & Errors",        icon: "FileText" },
+    ],
+  },
+  {
+    id: "configuration",
+    label: "Configuration",
+    icon: "Settings",
+    items: [
+      { href: "/platform/settings/general",             label: "Platform Settings",      icon: "Settings" },
+      { href: "/platform/settings/branding",            label: "Branding & White-Label", icon: "Palette" },
+      { href: "/platform/settings/localization",        label: "Localization",           icon: "Globe" },
+      { href: "/platform/settings/webhooks",            label: "Webhooks Catalog",       icon: "Pipeline" },
+      { href: "/platform/settings/domains",             label: "Domains",                icon: "Globe" },
+      { href: "/platform/settings/legal",               label: "Legal Documents",        icon: "Scale" },
+    ],
+  },
+  {
+    id: "personal",
+    label: "Personal",
+    icon: "User",
+    items: [
+      { href: "/platform/me/profile",                   label: "My Profile",           icon: "User" },
+      { href: "/platform/me/notifications",             label: "My Notifications",     icon: "Megaphone" },
+      { href: "/platform/me/api-keys",                  label: "My API Keys",          icon: "Shield" },
+      { href: "/platform/me/shortcuts",                 label: "Keyboard Shortcuts",   icon: "Sparkles" },
+    ],
+  },
+  {
+    id: "help",
+    label: "Help Center",
+    icon: "Support",
+    items: [
+      { href: "/platform/help",                         label: "Help Center",          icon: "Support" },
+    ],
+  },
+];
+
+const COLLAPSE_KEY       = "flowtora.platform-nav.collapsed";
+const OPEN_SECTIONS_KEY  = "flowtora.platform-nav.open-sections";
 const EXPANDED_W = 248;
 const COLLAPSED_W = 64;
+
+/** Find the group id that owns a given pathname, if any. */
+function findActiveGroupId(pathname: string): string | null {
+  for (const g of NAV_GROUPS) {
+    for (const item of g.items) {
+      if (item.exact ? pathname === item.href : pathname === item.href || pathname.startsWith(item.href + "/")) {
+        return g.id;
+      }
+    }
+  }
+  return null;
+}
 
 export interface PlatformNavProps {
   roleLabel: string;
@@ -168,6 +276,48 @@ export function PlatformNav({
     setCollapsed((prev) => {
       const next = !prev;
       try { window.localStorage.setItem(COLLAPSE_KEY, next ? "1" : "0"); } catch { /* noop */ }
+      return next;
+    });
+  }, []);
+
+  // ── Per-group expand/collapse state ────────────────────────
+  // Persist as a Set<string> of OPEN group ids. We default to "only the
+  // group that owns the current path is open" so first-time users see a
+  // clean rail; subsequent toggles persist across navigations.
+  const activeGroupId = findActiveGroupId(pathname);
+  const [openGroups, setOpenGroups] = React.useState<Set<string>>(
+    () => new Set(activeGroupId ? [activeGroupId] : []),
+  );
+  React.useEffect(() => {
+    try {
+      const raw = window.localStorage.getItem(OPEN_SECTIONS_KEY);
+      if (raw) {
+        const ids = JSON.parse(raw) as string[];
+        if (Array.isArray(ids)) setOpenGroups(new Set(ids));
+      } else if (activeGroupId) {
+        // First-run default — open the active group only.
+        setOpenGroups(new Set([activeGroupId]));
+      }
+    } catch { /* ignore */ }
+    // Run once on mount.
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, []);
+  // Always keep the active group open when the path changes.
+  React.useEffect(() => {
+    if (!activeGroupId) return;
+    setOpenGroups((prev) => {
+      if (prev.has(activeGroupId)) return prev;
+      const next = new Set(prev);
+      next.add(activeGroupId);
+      try { window.localStorage.setItem(OPEN_SECTIONS_KEY, JSON.stringify([...next])); } catch { /* noop */ }
+      return next;
+    });
+  }, [activeGroupId]);
+  const toggleGroup = React.useCallback((id: string) => {
+    setOpenGroups((prev) => {
+      const next = new Set(prev);
+      if (next.has(id)) next.delete(id); else next.add(id);
+      try { window.localStorage.setItem(OPEN_SECTIONS_KEY, JSON.stringify([...next])); } catch { /* noop */ }
       return next;
     });
   }, []);
@@ -269,8 +419,9 @@ export function PlatformNav({
           className="flex-1 overflow-y-auto px-2.5 py-3"
           aria-label="Platform"
         >
+          {/* Pinned items (Dashboard) — always visible above sections. */}
           <div className="ts-nav-group">
-            {NAV_ITEMS.map((item) => {
+            {PINNED.map((item) => {
               const active = item.exact
                 ? pathname === item.href
                 : pathname === item.href || pathname.startsWith(item.href + "/");
@@ -281,6 +432,94 @@ export function PlatformNav({
                   active={active}
                   collapsed={isCollapsed({ isMobile: open })}
                 />
+              );
+            })}
+          </div>
+
+          {/* Collapsible sections. */}
+          <div className="mt-3 space-y-1">
+            {NAV_GROUPS.map((group) => {
+              const isOpen = openGroups.has(group.id);
+              const railCollapsed = isCollapsed({ isMobile: open });
+              // Group is "active" when any item inside is the current route.
+              const hasActive = group.items.some((item) =>
+                item.exact ? pathname === item.href
+                           : pathname === item.href || pathname.startsWith(item.href + "/")
+              );
+              const HeaderIcon = Icon[group.icon];
+              return (
+                <div key={group.id} data-nav-group={group.id}>
+                  {railCollapsed ? (
+                    // Icon-rail mode — render section as a tooltip-only
+                    // grouping (no header, just items spaced out).
+                    <div className="ts-nav-group" style={{ marginTop: 8, paddingTop: 8, borderTop: "1px solid var(--border-subtle)" }}>
+                      {group.items.map((item) => {
+                        const active = item.exact
+                          ? pathname === item.href
+                          : pathname === item.href || pathname.startsWith(item.href + "/");
+                        return (
+                          <PlatformNavItem
+                            key={item.href}
+                            item={item}
+                            active={active}
+                            collapsed={true}
+                          />
+                        );
+                      })}
+                    </div>
+                  ) : (
+                    <>
+                      <button
+                        type="button"
+                        onClick={() => toggleGroup(group.id)}
+                        aria-expanded={isOpen}
+                        className={cn(
+                          "ts-focus flex w-full items-center gap-2 rounded-md px-2 py-1.5 text-[11px] font-semibold uppercase tracking-wide transition-colors hover:bg-[var(--surface-2)]",
+                        )}
+                        style={{
+                          color: hasActive ? "var(--text-default)" : "var(--text-muted)",
+                        }}
+                      >
+                        <HeaderIcon size={12} />
+                        <span className="flex-1 text-left">{group.label}</span>
+                        {hasActive && (
+                          <span
+                            aria-hidden
+                            style={{
+                              width: 5, height: 5, borderRadius: "9999px",
+                              background: "var(--accent-primary)",
+                            }}
+                          />
+                        )}
+                        <Icon.ChevronsRight
+                          size={12}
+                          style={{
+                            color: "var(--text-faint)",
+                            transform: isOpen ? "rotate(90deg)" : "rotate(0deg)",
+                            transition: "transform 120ms ease-out",
+                          }}
+                        />
+                      </button>
+                      {isOpen && (
+                        <div className="ts-nav-group mt-0.5">
+                          {group.items.map((item) => {
+                            const active = item.exact
+                              ? pathname === item.href
+                              : pathname === item.href || pathname.startsWith(item.href + "/");
+                            return (
+                              <PlatformNavItem
+                                key={item.href}
+                                item={item}
+                                active={active}
+                                collapsed={false}
+                              />
+                            );
+                          })}
+                        </div>
+                      )}
+                    </>
+                  )}
+                </div>
               );
             })}
           </div>
