@@ -310,6 +310,59 @@ function EntryDetail({ entry }: { entry: ReturnType<typeof getEntry> & object })
         </div>
       </section>
 
+      {/* In plain English — visually distinct from the structured sections so
+          new readers know to start here. */}
+      {entry.inPlainEnglish && (
+        <section
+          className="rounded-xl p-5"
+          style={{
+            background: "var(--accent-surface)",
+            border: "1px solid var(--accent-primary)",
+            boxShadow: "var(--shadow-sm)",
+          }}
+        >
+          <div className="mb-2 flex items-center gap-2 text-[10px] font-semibold uppercase tracking-wide"
+            style={{ color: "var(--accent-primary)" }}>
+            <span style={{ fontSize: 14 }} aria-hidden>💬</span>
+            In plain English
+          </div>
+          <div className="text-sm leading-relaxed" style={{ color: "var(--text-default)" }}>
+            {entry.inPlainEnglish.split("\n\n").map((para, p) => (
+              <p key={p} className={p === 0 ? "" : "mt-3"}>{para}</p>
+            ))}
+          </div>
+        </section>
+      )}
+
+      {/* Examples — concrete real-world scenarios. */}
+      {entry.examples && entry.examples.length > 0 && (
+        <section
+          className="rounded-xl"
+          style={{ background: "var(--surface-1)", border: "1px solid var(--border-subtle)", boxShadow: "var(--shadow-sm)" }}
+        >
+          <header className="px-5 py-3" style={{ borderBottom: "1px solid var(--border-subtle)" }}>
+            <h3 className="text-sm font-semibold">Real-world examples</h3>
+            <p className="mt-0.5 text-xs" style={{ color: "var(--text-muted)" }}>
+              When you&apos;d open this page in practice.
+            </p>
+          </header>
+          <ul>
+            {entry.examples.map((ex, i) => (
+              <li
+                key={i}
+                className="grid grid-cols-1 gap-3 px-5 py-4 text-sm md:grid-cols-[160px_1fr]"
+                style={{ borderTop: i === 0 ? "none" : "1px solid var(--border-subtle)" }}
+              >
+                <div className="font-medium" style={{ color: "var(--text-default)" }}>
+                  {ex.title}
+                </div>
+                <div style={{ color: "var(--text-muted)" }}>{ex.story}</div>
+              </li>
+            ))}
+          </ul>
+        </section>
+      )}
+
       {/* Sections */}
       {entry.sections.map((s, i) => (
         <section

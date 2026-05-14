@@ -13,6 +13,13 @@ export type HelpSection = {
   body: string;
 };
 
+export type HelpExample = {
+  /** Short title like "A customer disputes a charge". */
+  title: string;
+  /** 2-4 sentence narrative — what happens, what you do on this page, what the outcome is. */
+  story: string;
+};
+
 export type HelpEntry = {
   /** Stable slug used as the URL key. */
   slug: string;
@@ -28,6 +35,12 @@ export type HelpEntry = {
   route: string;
   /** One-sentence summary shown in the sidebar + at the top of the detail pane. */
   summary: string;
+  /** Plain-English explanation, like you're describing it to a non-technical
+   *  teammate. 2-4 sentences max. Renders prominently above everything else. */
+  inPlainEnglish?: string;
+  /** Concrete real-world scenarios where you'd open this page. Renders right
+   *  after inPlainEnglish so the reader knows when to come here. */
+  examples?: HelpExample[];
   /** Permissions a user needs to interact with the page. Informational only. */
   permissions?: string[];
   /** Audience — bullets describing who typically owns this page day-to-day. */
@@ -80,6 +93,17 @@ export const HELP_ENTRIES: HelpEntry[] = [
     page: 72,
     route: "/platform/me/profile",
     summary: "Personal profile, security posture, sessions, connected accounts, UI preferences, and recovery codes.",
+    inPlainEnglish: "Your own account settings page. Update your name and photo, turn on two-factor authentication, see every device signed into your account, and tune how the admin looks. Nobody else can edit your stuff from here — for that, an admin would use the Users page.",
+    examples: [
+      { title: "Your first day on the platform",
+        story: "You just got invited as a new admin. Open this page, set your display name, upload an avatar, set your timezone, and turn on two-factor authentication. Takes 3 minutes and you're done." },
+      { title: "Lost your phone with the authenticator app",
+        story: "Go to the Recovery Codes tab, use one of the 10 single-use codes you saved when you set up MFA. Once signed in, disable the old MFA, set it up fresh on your new device, then regenerate a new set of recovery codes." },
+      { title: "Suspect someone else signed in as you",
+        story: "Open the Sessions tab, scan the list of active sessions. If you see one from a city or browser you don't recognize, hit 'Sign out everywhere' on the Security tab. Then change your password — both moves invalidate every existing session." },
+      { title: "Switching to dark mode",
+        story: "Preferences tab → Theme dropdown → Dark. Save. The choice syncs to every device you sign in on, so you don't have to set it twice." },
+    ],
     audience: ["Every signed-in admin (self only — other admins can't edit yours)"],
     permissions: ["Self-only — no special permission required"],
     sections: [
@@ -107,6 +131,17 @@ export const HELP_ENTRIES: HelpEntry[] = [
     page: 73,
     route: "/platform/me/notifications",
     summary: "Per-channel notification preferences. Pick the frequency you want for each event category across email, in-app, Slack, SMS, and push.",
+    inPlainEnglish: "A big grid where you decide: for each kind of event that happens on the platform (a tenant signs up, a payment fails, a support ticket is assigned to you), pick whether you want to hear about it by Email / In-app / Slack / SMS / Push, and how often (Real-time / Hourly digest / Daily / Weekly / Off). Everything starts at Off except a few critical security alerts that always come through.",
+    examples: [
+      { title: "Stop the email flood",
+        story: "Your inbox is overflowing because every tenant signup pings you. In the Tenants row, flip the Email cell from Real-time to Daily digest. Now you get one summary email per day instead of 50 individual ones." },
+      { title: "Page me only for emergencies",
+        story: "You're on-call this week. Turn Security and System cells to Real-time on SMS. Everything else stays on Daily digest. Your phone only buzzes when it actually matters." },
+      { title: "Going on vacation",
+        story: "Click 'Until tomorrow' (or '1 week' if you're traveling longer) in the Snooze panel. Every channel mutes for that period, except a couple of critical security alerts that punch through." },
+      { title: "Route Slack to a specific channel",
+        story: "In Delivery Setup, type your Slack workspace handle and the channel name (e.g. #admin-alerts). Now anything you set to Slack frequency goes to that channel instead of cluttering your DMs." },
+    ],
     audience: ["Every signed-in admin (self only)"],
     permissions: ["Self-only"],
     sections: [
@@ -132,6 +167,17 @@ export const HELP_ENTRIES: HelpEntry[] = [
     page: 74,
     route: "/platform/me/api-keys",
     summary: "Personal API tokens scoped to your role's permissions. Use for CLI/CI/local scripts that act as you.",
+    inPlainEnglish: "If you need to talk to the Flowtora admin API from a script, a CI runner, or a local CLI, you need an API token. This page lets you mint one. The token inherits a subset of YOUR permissions — you can't accidentally make a token that does more than you can.",
+    examples: [
+      { title: "Setting up a deploy pipeline",
+        story: "Your CI runner needs to call the Flowtora API after each deploy to update a release marker. Click '+ Create token', name it 'CI deployment', pick the scopes you need (e.g. tenants:read), restrict it to your CI runner's IP, set a 90-day expiry. Copy the token into your CI's secret store — it's only shown once." },
+      { title: "Your laptop got stolen",
+        story: "Open this page, click Revoke on every active token. They're dead instantly. Mint new ones for the machines you still control." },
+      { title: "Quarterly token rotation",
+        story: "Click Rotate on a token you want to renew. The old one revokes; you get a new secret with the same scopes + IP allowlist. Update your CI secret store, redeploy, you're done — no downtime." },
+      { title: "Auditing token usage",
+        story: "Worried a token has been compromised? Look at the 'Last 24h' column — if a token you barely use is suddenly making thousands of calls, something is wrong. Revoke immediately." },
+    ],
     audience: ["Engineers, SRE, anyone scripting against the admin API"],
     permissions: ["Self-only. Org admins can revoke any admin's keys from the Users page."],
     sections: [
@@ -157,6 +203,15 @@ export const HELP_ENTRIES: HelpEntry[] = [
     page: 75,
     route: "/platform/me/shortcuts",
     summary: "Reference for every admin shortcut, plus per-user rebinding.",
+    inPlainEnglish: "Every keyboard shortcut in the admin lives here. There are 43 of them across 9 groups (Navigation, Search, Create, Tables, etc.). If a default binding conflicts with something you use elsewhere, click Edit on any row and remap it — your override only affects you.",
+    examples: [
+      { title: "Cmd+K conflict with another tool",
+        story: "You use a separate tool that already binds Cmd+K. Find the 'Open command palette' row, click Edit, change it to Cmd+Shift+K. Save. Cmd+K is now free for the other tool." },
+      { title: "Learning the basics",
+        story: "Press ? on any admin page to pop up a cheat sheet of current shortcuts. From there, click 'Customize' to land back on this page." },
+      { title: "Reset everything",
+        story: "You've made too many custom bindings and want to start over. Each customized row has a Reset link — click it to drop the override and fall back to the default. To wipe all overrides at once, the page footer has a 'Reset all to defaults' button (coming soon)." },
+    ],
     audience: ["Power users who want to never touch the mouse"],
     permissions: ["Self-only"],
     sections: [
@@ -182,6 +237,17 @@ export const HELP_ENTRIES: HelpEntry[] = [
     page: 66,
     route: "/platform/settings/branding",
     summary: "Flowtora's own brand kit + reseller / white-label profiles + per-tenant brand application.",
+    inPlainEnglish: "Three things live here. (1) Flowtora's own brand — logos, colors, fonts used on our marketing site and default emails. (2) Reseller / white-label profiles — separate brand packages for partners who resell Flowtora under their own name. (3) Per-tenant application — pointing a specific tenant at a specific brand profile.",
+    examples: [
+      { title: "Updating the Flowtora logo",
+        story: "Marketing redesigned the logo. Open the Brand tab, upload the new full-color + monochrome versions, save. Every transactional email and the default login page picks up the new logo within minutes." },
+      { title: "Onboarding a reseller",
+        story: "PrintShop Pro signed a reseller agreement. Create a profile under the Profiles tab named 'PrintShop Pro', upload their logos, set their primary color, set their custom domain to app.printshop.pro. Now their tenants can be pointed at this profile and see their brand instead of Flowtora's." },
+      { title: "Hiding Powered-By for an enterprise client",
+        story: "An enterprise customer paid for a full white-label. On their profile, flip 'Remove Flowtora mentions' to ON. The 'Powered by Flowtora' badge disappears from their tenants automatically." },
+      { title: "One tenant wants a different accent color",
+        story: "You don't need a whole new profile — go to the Tenants tab, find them, click Override, set just the primary color. Everything else inherits from their assigned profile." },
+    ],
     audience: ["Marketing Ops, Brand Admin, Founder, Resellers' CSMs"],
     permissions: ["branding.read (everyone), branding.manage (Marketing/Developer/Admin), branding.tenant_manage (CSM)"],
     sections: [
@@ -199,6 +265,17 @@ export const HELP_ENTRIES: HelpEntry[] = [
     page: 67,
     route: "/platform/settings/localization",
     summary: "Locales (BCP 47), currencies (ISO 4217), translation keys, glossary, FX policy, and per-locale stats.",
+    inPlainEnglish: "If you want Flowtora to work in Spanish, French, German, etc., this is where you register the languages and translate every string in the product. It also handles currencies (USD, EUR, MXN, etc.) and exchange rates. Tenants in each country see their language + their currency automatically.",
+    examples: [
+      { title: "Launching Mexican Spanish",
+        story: "Mexican shops are calling about pricing in MXN. (1) Languages tab → add es-MX with status Beta. (2) Currencies tab → MXN should already exist; make sure it's Active. (3) Translation Editor → go through the user-visible strings and add Spanish translations. (4) Once 95%+ translated, flip es-MX from Beta to Enabled." },
+      { title: "Updating English copy",
+        story: "Product wants to change 'Quotes' to 'Estimates' platform-wide. Edit the source text on the seed.app.nav.quotes key. Every existing translation auto-flips to OUTDATED so translators know to re-check. Hard, but it prevents stale translations from going live." },
+      { title: "Adding a new currency",
+        story: "A customer requested SEK pricing. Currencies tab → New → SEK, symbol kr, fxSource ECB. Save. The dispatcher will start using the live ECB rate; you can also set a manual override + margin %." },
+      { title: "Pseudo-localization QA",
+        story: "Before launching German, flip 'Pseudo-localization' on in Settings. Every English string renders as [‼ Ǻccőúņt sēttîngś ‼] — visually obvious which strings got translated and which didn't. Catches missing translations before customers do." },
+    ],
     audience: ["Localization Manager (Marketing), in-house translators, founder"],
     permissions: ["localization.read (everyone), localization.manage (Marketing), localization.translate (Support Lead)"],
     sections: [
@@ -216,6 +293,17 @@ export const HELP_ENTRIES: HelpEntry[] = [
     page: 68,
     route: "/platform/notifications",
     summary: "Author + version transactional templates (email/SMS/push/in-app) with approval workflow, A/B variants, and per-locale rows.",
+    inPlainEnglish: "Every email, SMS, push notification, or in-app message that Flowtora sends to a tenant lives here. 'Your invoice is ready', 'Welcome to Flowtora', 'Your trial expires in 3 days' — all of them. Edit the wording, change subject lines, run A/B tests on copy, or just turn one off if it's annoying customers.",
+    examples: [
+      { title: "Improving the welcome email",
+        story: "New users aren't completing onboarding. Open the 'auth.email_welcome' template, rewrite the body to emphasize the 'Create your first quote' CTA, submit for review. A Marketing Ops reviewer approves it, then a Lifecycle Manager promotes it to Live. New signups start getting the new copy immediately." },
+      { title: "Testing two subject lines",
+        story: "Open a template, scroll to A/B Variants, add a Variant B with a different subject. Set weight 50/50. After a week, the table shows you Variant B opened 23% better. Promote B to be the default by flipping its weight to 100." },
+      { title: "Adding Spanish translations",
+        story: "On a template's detail page, scroll to Locales card. 'Add locale' → es-MX. We clone the English content as a starting point; a translator on the Localization team then edits the Spanish version. Each locale walks its own approval workflow." },
+      { title: "Turning off a noisy notification",
+        story: "Customers complained that 'Order updated' fires too often. Find the template, flip the kill-switch to Disabled. Dispatcher returns early on that kind — nothing sends." },
+    ],
     audience: ["Marketing Ops, Lifecycle Manager, Founder"],
     permissions: ["notifications.read (everyone), notifications.manage (Marketing Ops, Lifecycle), notifications.review (sign-off)"],
     sections: [
@@ -235,6 +323,17 @@ export const HELP_ENTRIES: HelpEntry[] = [
     page: 69,
     route: "/platform/settings/webhooks",
     summary: "Developer-facing catalog of every webhook event Flowtora emits — schemas, sample payloads, receiver code, version history.",
+    inPlainEnglish: "Webhooks are how Flowtora tells external systems that something happened. 'A new tenant signed up', 'an invoice was paid', 'a job finished production' — all events that other tools (Zapier, your accounting system, your CRM) can subscribe to. This page is the encyclopedia of every event we send, including sample payloads and copy-paste receiver code in 6 languages.",
+    examples: [
+      { title: "Wiring up QuickBooks sync",
+        story: "Your accounting team wants invoices created in Flowtora to flow into QuickBooks. Find the 'invoice.paid' event, copy the Node.js receiver snippet, plug in your endpoint URL + signing secret. Save. Now every paid invoice triggers a POST to your QuickBooks bridge with the full payload." },
+      { title: "Debugging why a webhook isn't firing",
+        story: "A customer says they're not getting 'job.shipped' events. Open the event on this page → Subscribers tab. If their endpoint isn't listed, they haven't subscribed (point them to /platform/integrations/api). If it IS listed, click Test Send to that endpoint and watch the delivery log." },
+      { title: "Migrating to a new schema version",
+        story: "We added a 'tax_breakdown' field to 'invoice.paid' in v2024.06. The event's Version History tab shows the diff. Old subscribers stay on v2024.01 until they explicitly upgrade — no breaking changes ship without notice." },
+      { title: "Showing the engineering team what we emit",
+        story: "Your new engineer needs to learn the Flowtora event model. Send them the catalog URL; they can browse every event by category and read the actual schemas without bothering anyone." },
+    ],
     audience: ["Engineers integrating against Flowtora, DevRel, Support"],
     permissions: ["webhooks.read (everyone), webhooks.manage (Developer/Admin) for test-send"],
     sections: [
@@ -254,6 +353,17 @@ export const HELP_ENTRIES: HelpEntry[] = [
     page: 70,
     route: "/platform/settings/domains",
     summary: "Custom-domain provisioning for tenants: DNS records, SSL issuance, apex / subdomain helpers, certificate management.",
+    inPlainEnglish: "Lets a customer use their own domain (e.g. app.signshop.com) instead of the default Flowtora-branded one. You set up the DNS instructions, wait for them to add the records, then we issue an SSL certificate automatically. This page is where you watch it happen and fix things when DNS doesn't resolve.",
+    examples: [
+      { title: "Enterprise customer wants their own domain",
+        story: "Signaire Group signed an enterprise contract. Add a domain: pick tenant Signaire, type 'app.signaire.com', select Subdomain. We generate the exact CNAME + verification TXT records. Send them the DNS instructions. They add the records at their DNS provider. Status flips PENDING_DNS → VERIFYING → ISSUING_SSL → ACTIVE within an hour." },
+      { title: "DNS isn't resolving — customer says they added it",
+        story: "Open their domain, click 'Re-verify' (Support can do this). If still failing, look at the failure reason. Common cause: customer added the CNAME but their DNS provider doesn't allow CNAMEs at the apex — switch to apex A records, give them the right IPs from the Apex Helpers tab." },
+      { title: "Cert expiring soon",
+        story: "The Expiring (30d) KPI tile shows 3 domains. We auto-renew at day 60 (30 days before expiry), so usually nothing to do. If one is genuinely about to expire, click Reissue to manually trigger a fresh cert." },
+      { title: "Customer canceled — clean up",
+        story: "Tenant is canceled. Their custom domains stay in the table for a few days for audit, then either disable each (keeps the record) or delete (removes entirely). Don't accidentally delete an active customer's domain — the table sorts active ones to the top to help avoid this." },
+    ],
     audience: ["SRE, CSMs, Support (re-verify only)"],
     permissions: ["domains.read (everyone), domains.manage (SRE/Admin), domains.verify (Support re-verify)"],
     sections: [
@@ -271,6 +381,17 @@ export const HELP_ENTRIES: HelpEntry[] = [
     page: 71,
     route: "/platform/settings/legal",
     summary: "Versioned editor for ToS / Privacy / DPA / SLA with approval pipeline, tenant acceptance tracking, and per-locale translations.",
+    inPlainEnglish: "Every legal document we make customers accept lives here: Terms of Service, Privacy Policy, DPA, SLA, Cookie Policy. You can edit them, run them through a Draft → Legal Review → Counsel Sign-Off → Published approval workflow, and see exactly who accepted which version when (with their IP for audit). When you publish a new version, you can force existing customers to re-accept.",
+    examples: [
+      { title: "Updating the ToS for EU data residency",
+        story: "Legal needs a new ToS clause covering EU data residency. (1) Documents tab → open Terms of Service → Versions tab. (2) Save a new draft with the updated body + a clear change summary. (3) Submit for review. (4) Counsel reviews + approves. (5) Promote to Live — v2 goes live, v1 archives. (6) Optionally activate a Mandatory Re-acceptance campaign on Starter/Growth tenants with a 14-day grace period." },
+      { title: "Customer asks 'did we accept the DPA?'",
+        story: "Acceptance Tracking tab → filter by tenant + document = DPA. You'll see the user who clicked accept, the version, IP, user agent, timestamp, and method (clickwrap vs signed PDF). Forward the row to the customer as evidence." },
+      { title: "Translating the Privacy Policy for the EU",
+        story: "Open Privacy Policy → Locales tab → Add Locale → fr-FR. We pre-fill the body with the English source as a starting point. A translator (legal.write permission) edits the French version + bumps completenessPct as they finish sections." },
+      { title: "Rejecting a draft",
+        story: "Marketing submitted a Refund Policy update that's too generous. As a Counsel reviewer, click Reject with the reason 'Section 3 conflicts with our existing dispute policy'. The version goes back to Draft. The submitter sees the rejection reason in the Versions tab + an email." },
+    ],
     audience: ["Legal, General Counsel, Compliance (read), Support (read)"],
     permissions: ["legal.read (everyone), legal.write (edit drafts), legal.publish (Counsel sign-off), legal.acceptance.read (audit trail)"],
     sections: [
@@ -296,6 +417,17 @@ export const HELP_ENTRIES: HelpEntry[] = [
     page: 65,
     route: "/platform/settings/general",
     summary: "Platform-wide identity (name, tagline, support email), default timezone/currency, business hours, signup/trial policy, session policy.",
+    inPlainEnglish: "The settings panel for Flowtora itself — not for any one tenant, but for the whole platform. Things like 'what's our support email', 'how long are trials', 'do new tenants get MFA enforced', 'what's the system-wide banner saying right now'. There's exactly one row here; every change is audited.",
+    examples: [
+      { title: "Maintenance window tonight",
+        story: "Going to do a 30-min DB migration at 2am PT. Edit the System banner copy to 'Scheduled maintenance — Saturday 2am PT (~30 min). Tenants will be read-only.', set the variant to WARNING, set the expiration timestamp. Save. The banner appears on every tenant app immediately and disappears automatically when it expires." },
+      { title: "Changing the default trial length",
+        story: "Growth team wants to A/B test 14d vs 21d trials. Update 'defaultTrialLengthDays' to 21. Existing tenants keep their original trial length; only new signups get 21 days. Roll back from the Change History at the bottom if numbers get worse." },
+      { title: "Forcing MFA for all admins",
+        story: "Security audit recommends it. Flip 'forceMfaForAdmins' to ON. Save. On their next sign-in, every admin without MFA gets a 'set up MFA before continuing' wall." },
+      { title: "Updating the support email",
+        story: "Support team migrated from support@flowtora.io to support@flowtora.com. Change the email here once; every transactional template that uses {{support_email}} picks up the new value within minutes." },
+    ],
     audience: ["Founder, Site Manager, SRE"],
     permissions: ["system.read_settings (everyone), system.write_settings (Site Manager/Developer)"],
     sections: [
@@ -315,6 +447,15 @@ export const HELP_ENTRIES: HelpEntry[] = [
     page: 1,
     route: "/platform",
     summary: "The 30-second overview: KPIs you watch every morning, live activity, plus links into the parts of the platform that need attention right now.",
+    inPlainEnglish: "Your morning coffee page. Open the platform, scan four big tiles (MRR, active tenants, recent activity, system status), check if anything's red, then click into whichever section needs you. It's designed so a quick glance tells you whether you can have a relaxed day or whether something needs immediate attention.",
+    examples: [
+      { title: "Monday morning routine",
+        story: "Open the dashboard with coffee. Scan: MRR up week-over-week (green), system status all green, 3 new tenants overnight, 1 failed payment in the alerts strip. Click the alerts strip → land on the failed payment → kick off dunning. Total time: 2 minutes." },
+      { title: "Investor asks 'how's the business doing'",
+        story: "Screenshot the hero band. MRR + Active Tenants + 24h Activity. That's the answer for 95% of casual check-ins." },
+      { title: "First day at Flowtora",
+        story: "New admin signs in. The dashboard auto-detects their role and lays out tiles relevant to it — Finance roles see invoice/dunning tiles, Marketing roles see leads/campaigns, SRE sees system health. They don't have to learn the whole product to be useful on day one." },
+    ],
     audience: ["Every admin role — this is the first page after sign-in"],
     permissions: ["No special permission — visible to anyone with a platform role"],
     sections: [
@@ -336,6 +477,17 @@ export const HELP_ENTRIES: HelpEntry[] = [
     page: 2,
     route: "/platform/activity",
     summary: "Live, infinite-scroll event stream of every meaningful platform action — appended only, never edited.",
+    inPlainEnglish: "A live news ticker for the entire platform. Every important thing that happens — a new tenant signs up, someone changes their plan, a payment fails, an admin impersonates a customer — scrolls through here in real time. It's the place you go to answer 'what just happened on the platform in the last hour?'",
+    examples: [
+      { title: "A customer calls confused",
+        story: "Customer on the phone: 'I got a weird email about my account being suspended'. Filter to: actor = their tenant, last 24 hours. You see the suspension event with the reason (failed payment 5x in a row) — instant context for the conversation." },
+      { title: "Watching for a specific event",
+        story: "You want to know whenever a tenant on Growth plan downgrades to Starter. Filter to event type = 'Plan changed' AND plan-from = Growth AND plan-to = Starter. Save as a view. Click 'Subscribe to filter' and you'll get an email anytime that pattern fires." },
+      { title: "Forensics after a security incident",
+        story: "Audit team needs every sign-in attempt from IP 203.0.113.x in the last 48 hours. Filter by IP, date range, export to CSV. They get a clean tamper-evident timeline to hand to the investigator." },
+      { title: "Why is my activity feed empty?",
+        story: "You filtered to too narrow a window. Check the right rail — events-per-minute sparkline shows the platform IS firing events. Widen the date range or clear filters." },
+    ],
     audience: ["Everyone (filtered by role)", "Auditors", "Support Leads"],
     permissions: ["audit.read (everyone with a platform role). Sensitive event payloads are masked unless your role has the matching read permission."],
     sections: [
@@ -365,6 +517,17 @@ export const HELP_ENTRIES: HelpEntry[] = [
     page: 3,
     route: "/platform/reports",
     summary: "Library of saved and pre-built reports with drill-down, scheduling, and export.",
+    inPlainEnglish: "Your filing cabinet of every report — both the 30 we ship out of the box (MRR Waterfall, Churn Analysis, Cohort Retention) and the custom ones you build. Open one to see a chart, drill into the data, schedule a recurring email, or share with the team.",
+    examples: [
+      { title: "Monthly board meeting prep",
+        story: "Board meeting in 3 days. Open the MRR Movement Waterfall report → click the November bar → see the breakdown of New/Expansion/Contraction/Churned. Export to PDF, paste into the deck. Total time: 5 minutes." },
+      { title: "Finance wants weekly numbers",
+        story: "Open the ARR Trend report → Schedule → recipients (finance@flowtora.com, founder@flowtora.com), cadence Weekly Monday 8am, format PDF + CSV. Done. Every Monday they get the chart + the raw data without anyone manually exporting." },
+      { title: "Building a custom report",
+        story: "Marketing wants 'tenants who signed up via the AI quoting campaign and converted to paid'. Click '+ New report', use the builder to filter by signup source = AI campaign AND status = active. Save as 'AI Campaign Conversions'. Pin to your dashboard." },
+      { title: "Sharing a report with the team",
+        story: "You built a great churn report. Open it → Share → 'Team can see this'. Now everyone on the team can find it under 'Team reports' on the left rail. They can fork it to make their own variants without changing yours." },
+    ],
     audience: ["Founder, Finance, Marketing, Ops — anyone running monthly numbers"],
     permissions: ["reports.read (everyone), reports.create/edit/delete (Site Manager, Developer, Billing Manager, Marketing Manager), reports.schedule + reports.export (most staff)"],
     sections: [
@@ -394,6 +557,17 @@ export const HELP_ENTRIES: HelpEntry[] = [
     page: 4,
     route: "/platform/tenants",
     summary: "The master list of every shop on the platform with filters, bulk actions, and deep links into every tenant detail.",
+    inPlainEnglish: "A directory of every shop using Flowtora. Search for a specific one by name, slice by plan/country/status, or take bulk actions across a group (add a tag, send an email, change a CSM). Clicking any tenant opens their full detail page where you can do everything for that one customer.",
+    examples: [
+      { title: "Finding a customer who called",
+        story: "Customer calls: 'I'm having trouble with my account at Bright Light Signs'. Type 'Bright Light' in the search bar → their tenant appears → click → land on their detail page with everything about them. Took 4 seconds." },
+      { title: "Mass action — tag all UK tenants",
+        story: "Compliance asked you to tag every UK-based tenant for GDPR review. Filter to country = UK, select all, Bulk actions → Add tag → 'gdpr-review-2026'. The tag shows up on every row, and you can filter by it later." },
+      { title: "CSM coverage check",
+        story: "Filter CSM = '(unassigned)'. Bulk-assign them to the rep with capacity. Their next QBR cycle includes the new tenants." },
+      { title: "Investigating a billing complaint",
+        story: "Customer thinks they were charged twice. Click their name → land on Tenant detail → Billing tab → see every invoice + payment. Faster than searching across separate Invoice and Payment pages." },
+    ],
     audience: ["Founder, Site Manager, Support, CSM, Finance"],
     permissions: ["tenant.read (everyone), tenant.suspend / archive / tag / transfer (Site Manager, Admin)"],
     sections: [
@@ -419,6 +593,15 @@ export const HELP_ENTRIES: HelpEntry[] = [
     page: 5,
     route: "/platform/tenants/onboarding",
     summary: "Pipeline view of every tenant in trial or onboarding — Kanban or List — with stage progression, drop-off risk, and CSM actions.",
+    inPlainEnglish: "A Trello-style board for trial → paid conversion. Every trialing customer is a card moving through stages (Signed Up → Invited Team → First Quote → First Order → First Paid Invoice). Cards stuck too long turn red. CSMs use this to find who needs a nudge before they churn.",
+    examples: [
+      { title: "Finding tomorrow's outreach list",
+        story: "Filter to drop-off risk = red. Get a list of trial customers who haven't moved in 3+ days. CSM picks them up, sends a personal email or schedules a 15-min call." },
+      { title: "Bulk re-engagement campaign",
+        story: "20 tenants are stuck on 'Signed Up but didn't invite team'. Switch to List view, select all of that column, Bulk actions → Send email → pick the 'invite-your-team' template. Email goes out within minutes." },
+      { title: "Spotting a funnel bottleneck",
+        story: "Look at the Stage Timing histogram at the top. If 'Quote → Order' is taking 5 days at p90 instead of the usual 2, something is wrong with the quote-to-order handoff. Investigate why; fix the product." },
+    ],
     audience: ["CSM, Founder, Marketing Ops"],
     permissions: ["tenant.read (everyone). Stage-change + CSM-assignment actions require tenant.tag / tenant.transfer."],
     sections: [
@@ -442,6 +625,15 @@ export const HELP_ENTRIES: HelpEntry[] = [
     page: 6,
     route: "/platform/tenants/health",
     summary: "0-100 health score per tenant built from usage, billing, support, and engagement signals — with a model editor for tuning weights.",
+    inPlainEnglish: "A single 0-100 number per tenant that tells you 'how likely are they to keep paying'. We compute it from how often they log in, whether their payments succeed, how many support tickets they file, etc. Red (0-30) means at risk; green (71-100) means healthy. CSMs use it to prioritize who to call.",
+    examples: [
+      { title: "Weekly CSM standup",
+        story: "Filter to score < 50 AND trend = dropping. That's your at-risk list for the week. CSM team divides them up and each rep takes 5 to call." },
+      { title: "Tenant looks unhealthy but they're actually fine",
+        story: "Tenant just migrated data and isn't running jobs yet — their Usage sub-score dropped. CSM applies a manual adjustment of +20 with reason 'data migration, not real disengagement', expires in 60 days. Their score reflects reality again." },
+      { title: "Tuning the model",
+        story: "Founder thinks Support weight (20%) is too high — heavy ticket usage doesn't actually predict churn. Open the Model Editor, drop Support weight to 10%, raise Billing to 40%, preview the top movers, save. The whole table re-scores." },
+    ],
     audience: ["CSM, Founder, Customer Success Manager"],
     permissions: ["tenant.read (everyone). Editing the scoring model requires tenant.tag (Site Manager / Admin)."],
     sections: [
@@ -461,6 +653,15 @@ export const HELP_ENTRIES: HelpEntry[] = [
     page: 7,
     route: "/platform/tenants/churn",
     summary: "Three tabs: live at-risk tenants, churned tenants with reason analytics, and win-back email campaigns.",
+    inPlainEnglish: "The 'who's leaving us and why' page. Three tabs: tenants in trouble right now (At-Risk), tenants who already left (Churned, with reason breakdowns), and outbound campaigns trying to bring lapsed customers back (Win-back).",
+    examples: [
+      { title: "Stopping a customer from churning",
+        story: "At-Risk tab shows Castle Signage with score 18 and reason 'No logins for 21 days'. CSM clicks Open tenant, checks their notes (they hired a new admin who hasn't been onboarded). Schedule a re-onboarding call. Score should recover within 2 weeks." },
+      { title: "Why did 10 customers churn last quarter",
+        story: "Churned tab → filter to last 90 days. Pie chart shows: 40% 'too expensive', 25% 'switched to competitor', 20% 'project ended'. Click the 'switched to competitor' slice → list of tenants → call a few to learn which competitor and why." },
+      { title: "Running a win-back campaign",
+        story: "Win-back tab → New Campaign → segment = 'Cancelled in last 90 days with reason = Too expensive', template = 'Come back with 30% off for 6 months' (uses a real coupon code from Coupons page). Sent. Track reactivations attributed to the coupon code." },
+    ],
     audience: ["CSM, Marketing Ops, Founder"],
     permissions: ["tenant.read (everyone). Triggering win-back campaigns requires leads.manage."],
     sections: [
@@ -480,6 +681,17 @@ export const HELP_ENTRIES: HelpEntry[] = [
     page: 8,
     route: "/platform/tenants/impersonation",
     summary: "Audit + control surface for every impersonation session — Active, History, and Compliance settings.",
+    inPlainEnglish: "When a Flowtora admin temporarily signs in AS a customer (to debug an issue or fix something on their behalf), it's called impersonation. This page is where you see every active impersonation session, every past one, and tune the rules (max duration, require-reason, notify-customer).",
+    examples: [
+      { title: "Helping a stuck customer",
+        story: "Customer says 'I can't get the invoice to send'. Open their tenant → click Impersonate, type the reason 'help send invoice INV-1024'. You're now signed in as them, can click around their dashboard, send the invoice yourself. End the session — full audit trail shows what you did." },
+      { title: "Forensic review",
+        story: "Quarterly compliance review: 'show me every impersonation by Support Agents in Q3'. History tab → filter actor = Support roles, date range = Q3. Export. Done." },
+      { title: "Lock down impersonation policy",
+        story: "Legal wants customer consent before any impersonation. Open Compliance Settings → flip 'require-customer-consent' to ON. Now every impersonation triggers an email to the tenant owner; they have 5 min to deny before the session starts." },
+      { title: "Kill an active session",
+        story: "Active tab shows a session that's been running for 90 minutes — that's way too long. Click 'End session'. The impersonator gets kicked out instantly. Question why it ran so long in your next 1:1 with them." },
+    ],
     audience: ["Founder, Support Lead, Security, Auditor"],
     permissions: ["tenant.impersonate to start sessions. Reading the audit trail is gated by audit.read."],
     sections: [
@@ -507,6 +719,17 @@ export const HELP_ENTRIES: HelpEntry[] = [
     page: 9,
     route: "/platform/users",
     summary: "Cross-tenant directory of every end user with security posture, activity insights, and admin-of-user actions.",
+    inPlainEnglish: "A directory of every individual person who uses Flowtora — across all tenants. Not the businesses (that's Tenants), but the actual humans. Use it when a specific person calls support, or when you need to do something at the human level: reset their password, force a sign-out, deactivate them.",
+    examples: [
+      { title: "User locked out, can't reset password",
+        story: "User calls: 'the password reset email never arrives'. Find them by email → confirm their email is correct → 3-dot menu → 'Reset password' (sends them a fresh link from your account, bypassing whatever was broken on theirs)." },
+      { title: "Audit MFA coverage",
+        story: "Filter MFA = off, plan = Enterprise. That's your list of enterprise users without MFA — a real security gap. Bulk action: send a 'please enable MFA' email or escalate to their tenant admin." },
+      { title: "Employee left a customer's company",
+        story: "Customer admin emails: 'please remove jane@company.com immediately'. Find Jane → 3-dot → 'Sign out all sessions' (kicks her out of any active session) → 'Deactivate' (prevents future sign-ins). Audit log records who did it and why." },
+      { title: "Suspicious sign-ins from a new country",
+        story: "KPI strip shows 'Suspicious activity (24h): 5'. Click → see users with sign-ins from unexpected geos. Investigate each — sometimes it's a customer traveling; sometimes it's a real compromise." },
+    ],
     audience: ["Founder, Support, CSM, Security, Auditor"],
     permissions: ["users.read (everyone), users.ban (Site Manager/Admin), users.merge (Site Manager)"],
     sections: [
@@ -532,6 +755,15 @@ export const HELP_ENTRIES: HelpEntry[] = [
     page: 10,
     route: "/platform/access/roles",
     summary: "Platform-wide RBAC. Manage built-in admin roles, custom roles, and the permission catalog. Edit the matrix; assign admins.",
+    inPlainEnglish: "Roles control who can do what. 'Site Manager can change plans but not delete tenants. Support Agent can read tickets but not edit billing.' This page is where those rules live. Edit them carefully — a wrong checkbox can either lock people out or accidentally give them dangerous powers.",
+    examples: [
+      { title: "Creating a custom role for a contractor",
+        story: "Hiring a contractor to triage support tickets. They shouldn't see billing or change anything. Tab: Custom Roles → New role → 'Contract Support'. Inherit from Support Agent, then UNCHECK every billing.* permission. Assign your contractor to the new role." },
+      { title: "Auditing who can suspend tenants",
+        story: "Auditor asks: 'which admins can suspend a tenant?'. Open the role detail for Site Manager → see 'tenant.suspend' checked → see the list of admins on this role. Same for Admin. Hand the list to the auditor." },
+      { title: "Tightening a built-in role",
+        story: "Decided Support Agents shouldn't be able to impersonate. Open Support Agent → uncheck tenant.impersonate → save. Every Support Agent loses the impersonate button immediately." },
+    ],
     audience: ["Founder, Security Lead — locked-down page"],
     permissions: ["Read: Admin/Auditor. Edit: SUPER_ADMIN only."],
     sections: [
@@ -555,6 +787,15 @@ export const HELP_ENTRIES: HelpEntry[] = [
     page: 11,
     route: "/platform/access/teams",
     summary: "Internal admin teams (Engineering, Support, Sales, Finance, CSM) with on-call rotations and team mentions.",
+    inPlainEnglish: "Groups of admins organized by what they do — the Engineering team, Support team, etc. Useful for two things: (1) assign permissions to whole teams instead of individuals, (2) define on-call rotations so PagerDuty knows who to wake up when something breaks at 3am.",
+    examples: [
+      { title: "Setting up Support's on-call",
+        story: "Open the Support team → On-Call tab. Build a weekly rotation: Monday-Sunday primary, with each rep taking 2 days. Set escalation: if primary doesn't acknowledge in 5 min, page secondary. PagerDuty integration pulls this rotation automatically." },
+      { title: "New hire onboarding",
+        story: "Engineer joins. Add them to the Engineering team → they inherit every permission the team has → they automatically join the on-call rotation according to the team's policy. One add, three things done." },
+      { title: "Auditing team membership",
+        story: "Compliance asks 'who has access to production database?'. Open the SRE team → Members tab → that's your answer." },
+    ],
     audience: ["Engineering Leads, Support Lead, Founder"],
     permissions: ["staff.read (everyone). Editing requires staff.assign_role."],
     sections: [
@@ -572,6 +813,15 @@ export const HELP_ENTRIES: HelpEntry[] = [
     page: 12,
     route: "/platform/access/invitations",
     summary: "Pending admin invitations to the platform — invite, resend, revoke.",
+    inPlainEnglish: "When you want to give someone else access to the Flowtora admin, you invite them from here. They get an email with a one-time link; clicking it lets them set a password and they're in. You can also see who you've invited that hasn't accepted yet.",
+    examples: [
+      { title: "Inviting a new teammate",
+        story: "New Marketing Manager joining tomorrow. Click '+ Invite admin', type their email, pick role = Marketing Manager, pick team = Marketing, send. They get an email; once they click and set a password they show up in Users with the correct role." },
+      { title: "Invite never arrived",
+        story: "Person says 'I never got the email'. Find their row, hit 'Resend'. If still nothing, click 'Copy link' and send the URL via Slack — works regardless of email delivery." },
+      { title: "Mistake — invited the wrong person",
+        story: "Find the invite, hit 'Revoke'. The link becomes invalid immediately. Send a new invite to the correct email." },
+    ],
     audience: ["Founder, Site Manager"],
     permissions: ["staff.invite (Site Manager / Admin)"],
     sections: [
@@ -593,6 +843,15 @@ export const HELP_ENTRIES: HelpEntry[] = [
     page: 13,
     route: "/platform/access/sessions",
     summary: "Every active platform-admin session for security oversight. World map + table + bulk sign-out.",
+    inPlainEnglish: "Every device + browser currently signed in as a Flowtora admin shows up here, mapped to geographic location. If you see a sign-in from a country no one's traveling to, something is wrong. Bulk-sign-out lets you kick everyone out in one click during an incident.",
+    examples: [
+      { title: "Routine security review",
+        story: "Friday afternoon habit: open the page, look at the map. If every bubble is in a place a team member would plausibly be (SF, NYC, Toronto, etc.) → all good. Spend 30 seconds, move on." },
+      { title: "Suspected compromise",
+        story: "Someone reports a phishing attempt against a teammate. Filter to that admin → see 4 active sessions, one from a country they've never been to. Click 'Sign out all sessions for this admin'. Block the IP. Force MFA re-prompt. Damage contained in under a minute." },
+      { title: "Quarterly cleanup",
+        story: "Filter to last-active > 30 days. These are stale sessions on devices that haven't been used. Bulk sign out — they'll just have to sign in again next time. Reduces the attack surface." },
+    ],
     audience: ["Security Lead, Founder"],
     permissions: ["audit.read (everyone), force sign-out requires staff.assign_role or higher"],
     sections: [
@@ -612,6 +871,17 @@ export const HELP_ENTRIES: HelpEntry[] = [
     page: 14,
     route: "/platform/access/audit",
     summary: "Tamper-evident, append-only log of every admin action for compliance and forensics.",
+    inPlainEnglish: "A permanent record of every action a Flowtora admin takes. 'Sarah suspended Acme Signs at 2:34pm on Tuesday because of fraud.' Once it's in the log, no one can delete it — not even SUPER_ADMIN. This is your compliance evidence trail; it's what auditors look at.",
+    examples: [
+      { title: "SOC2 audit prep",
+        story: "Auditor asks 'show me every refund issued in Q3 and who approved each'. Filter actor = Finance roles, action = billing.refund, date = Q3. Export to CSV. Hand it over." },
+      { title: "Investigating a mistake",
+        story: "A customer's plan changed unexpectedly. Filter by their tenant, action = billing.plan_change, last 7 days. The row shows you who did it, when, and the before/after JSON diff. Now you can fix it AND understand how it happened." },
+      { title: "Subscribing your SIEM",
+        story: "Security team wants every audit event in Datadog. Configure → 'Subscribe via webhook' → destination URL, signing secret. Now every event POSTs to Datadog in real time. Verified by the hash chain — any tampering breaks the chain and alerts." },
+      { title: "Why does my action say FAILED?",
+        story: "Some entries have a red status dot. Click → slide-over shows the permission check trail: 'tenant.delete required, you only have tenant.archive'. The attempt was logged + refused. Good — that's the system working as intended." },
+    ],
     audience: ["Auditor, Security Lead, Founder"],
     permissions: ["audit.read (everyone). Webhook subscriptions + hash-chain verify: Super Admin / Engineer only."],
     sections: [
@@ -639,6 +909,15 @@ export const HELP_ENTRIES: HelpEntry[] = [
     page: 15,
     route: "/platform/billing",
     summary: "Single source of truth for every subscription on the platform. Status, MRR, plan changes, cancellations.",
+    inPlainEnglish: "Every active, trialing, past-due, paused, or canceled subscription on Flowtora. Use it to find a tenant's subscription, change their plan, apply a coupon, pause billing while they're on hiatus, or cancel them.",
+    examples: [
+      { title: "Upgrading a customer who asked",
+        story: "Customer on the phone wants to go from Growth to Pro mid-month. Find their tenant → Change plan → Pro → 'Proration preview' shows you the prorated charge (e.g. $43 extra for the rest of the month). Confirm. Done — they're on Pro immediately." },
+      { title: "Customer says they can't pay this month",
+        story: "They asked to pause for 30 days. Find them → Pause → set until-date 30 days out. Their access stays; billing stops. On day 30 they automatically resume." },
+      { title: "Trial expiring tomorrow, want to gift a month",
+        story: "CSM noticed a high-value trial that hasn't converted. Apply Coupon → pick a coupon for '1 month free'. Their first invoice will be $0. They have time to evaluate without the urgency of expiration." },
+    ],
     audience: ["Finance, Founder, CSM, Support"],
     permissions: ["billing.read (everyone). billing.plan_change / cancel / pause require billing.invoice or billing.plan_change."],
     sections: [
@@ -658,6 +937,17 @@ export const HELP_ENTRIES: HelpEntry[] = [
     page: 16,
     route: "/platform/billing/invoices",
     summary: "Every invoice across every tenant. Status, payment history, PDF preview, refunds, credit notes.",
+    inPlainEnglish: "Every bill we've sent to every customer. You can search for a specific invoice, see if it was paid, look at the PDF, void one that was issued by mistake, or apply a manual credit to one we're not going to collect on.",
+    examples: [
+      { title: "Customer didn't get their invoice",
+        story: "Customer emails: 'never got invoice INV-1024'. Search the invoice number → open → 'Resend' with a custom message. Goes out in seconds." },
+      { title: "Voiding a mistake",
+        story: "Sales accidentally created an invoice with the wrong amount. Open it → Void → type the reason 'incorrect line items, replaced with INV-1031'. Voided invoices stay in the table for audit but never bill anyone." },
+      { title: "Quarterly aging report",
+        story: "Filter status = Open, due date < today. That's your aging receivables list. Sort by amount descending — top 10 are where to focus collections." },
+      { title: "Customer paid offline (wire transfer)",
+        story: "A wire just hit the bank for an open invoice. Open it → 'Mark paid' with reference number, today's date, payment method = wire. Invoice flips to Paid; the customer's account is settled." },
+    ],
     audience: ["Finance, Billing Manager"],
     permissions: ["billing.read (everyone). billing.invoice for void / mark paid / issue credit."],
     sections: [
@@ -681,6 +971,15 @@ export const HELP_ENTRIES: HelpEntry[] = [
     page: 17,
     route: "/platform/billing/payments",
     summary: "Every payment attempt — succeeded, failed, refunded, disputed — with success/failure analysis charts.",
+    inPlainEnglish: "The ledger of every credit card charge, ACH debit, wire transfer, and refund. If a customer's card was declined, you find the reason here and retry. If you need to issue a refund, you start here too.",
+    examples: [
+      { title: "Customer's card was declined",
+        story: "Filter status = Failed, tenant = Acme Signs. Detail drawer shows decline code = 'insufficient_funds'. Send the customer the 'Update payment method' email (one click). They update their card via Stripe portal; click Retry → it succeeds." },
+      { title: "What's our payment success rate this week",
+        story: "KPI band shows Success rate = 96.8%. The chart on top breaks down failures by reason: 60% insufficient_funds, 25% expired_card, 15% fraud_blocked. Insights for the dunning team to improve recovery." },
+      { title: "Issuing a refund",
+        story: "Customer was double-charged. Find the duplicate payment → 3-dot → Refund. Pick amount (full) and reason 'Duplicate charge'. Money goes back to their card in 5-10 business days." },
+    ],
     audience: ["Finance, Support"],
     permissions: ["billing.read (everyone). Retry / refund require billing.invoice or billing.refund."],
     sections: [
@@ -700,6 +999,15 @@ export const HELP_ENTRIES: HelpEntry[] = [
     page: 18,
     route: "/platform/billing/refunds",
     summary: "Process refunds, manage chargebacks/disputes, maintain a reusable chargeback-evidence library.",
+    inPlainEnglish: "Two related but different things. Refunds = money we choose to give back. Disputes = customer's bank challenges a charge (chargeback) and we have to defend it with evidence or accept the loss. Both flow through here. The third tab is a library of reusable evidence templates you can submit to the bank when a dispute lands.",
+    examples: [
+      { title: "Customer canceled and wants a refund",
+        story: "Customer wants their annual subscription pro-rated and refunded. Refunds tab → '+ New refund' → pick their payment, partial amount (8 months remaining = $480), reason 'Customer request', internal note 'Approved by founder'. Confirm. Money returns to their card in 5-10 days." },
+      { title: "Chargeback notification from Stripe",
+        story: "Disputes tab shows a new dispute, evidence due in 6 days. Click → see the bank's reason (claimed fraud). Pull our records: payment receipt + login history + product usage logs. Use the 'Fraud — legitimate charge' evidence template, fill in tenant + amount + date, attach docs, submit. Bank reviews; if we win, the money stays." },
+      { title: "Reusing evidence",
+        story: "We've already submitted the same kind of evidence 5 times for similar disputes. Chargeback Evidence Library → New template → 'Subscription cancellation timing'. Now any dispute with reason 'product not received' uses this template as a starting point." },
+    ],
     audience: ["Finance, Support Lead"],
     permissions: ["billing.refund (Site Manager, Billing Manager, Admin)"],
     sections: [
@@ -719,6 +1027,17 @@ export const HELP_ENTRIES: HelpEntry[] = [
     page: 19,
     route: "/platform/plans",
     summary: "Author + version every subscription plan with features, limits, pricing, trial settings, and regional overrides.",
+    inPlainEnglish: "Where you decide what's on the Starter plan, what's on Pro, what's on Enterprise. Prices, features included, usage limits, what happens when someone hits the limit. Edit carefully — pricing changes affect every new signup AND optionally every existing customer at renewal.",
+    examples: [
+      { title: "Raising the price of the Pro plan",
+        story: "Pro is going from $99/mo to $129/mo on Jan 1. Open Pro → Pricing tab → bump monthly price to $129. Decide: do existing Pro customers pay the new price or stay grandfathered? Flip 'Grandfathering rules' as needed. Save as a new version. Old version archives." },
+      { title: "Adding a new feature limit",
+        story: "Sales says customers are abusing the AI quote feature on Starter. Open Starter → Features → set 'ai_quotes' limit to 10/month with overage = $1 per extra quote. Save. New limit applies on next renewal." },
+      { title: "Launching a localized price for the UK",
+        story: "Open Growth plan → Pricing tab → Currency variants → add GBP @ £79/mo annual. UK customers now see £ pricing on the public pricing page." },
+      { title: "Hiding a legacy plan",
+        story: "We're discontinuing the 'Solo' plan but want existing Solo customers to keep using it. Open Solo → set Visibility = 'Hidden (admin assign only)'. New visitors don't see it on the pricing page; existing Solo subscriptions continue undisturbed." },
+    ],
     audience: ["Founder, Finance, Marketing — anyone who can change pricing"],
     permissions: ["plans.manage (Site Manager, Billing Manager, Marketing Manager, Admin)"],
     sections: [
@@ -740,6 +1059,17 @@ export const HELP_ENTRIES: HelpEntry[] = [
     page: 20,
     route: "/platform/billing/coupons",
     summary: "Create + track coupons, promo codes, and bundled promotion campaigns with performance analytics.",
+    inPlainEnglish: "Discount codes. Make them, share them, see who used them, see how much they cost you, see what conversion lift they drove. Coupons can be percentage off / dollar off / free trial extension / free months. They can apply to specific plans, specific tenants, or everyone.",
+    examples: [
+      { title: "Running a Black Friday promo",
+        story: "Marketing wants 30% off the first 3 months. Coupons tab → '+ New' → code BLACKFRIDAY, type % off, amount 30, duration Repeating 3 months, applicable plans = Growth + Pro, max redemptions 500, expires Nov 30. Save. Marketing can now promote the code." },
+      { title: "Win-back coupon for a specific customer",
+        story: "A churned customer is considering coming back. Make a coupon: code WELCOMEBACK-{theirSlug}, type % off, amount 25, duration Forever, applicable tenants = just them, max redemptions 1. Send them the code." },
+      { title: "Is our coupon performing",
+        story: "Code Performance tab → see BLACKFRIDAY redemption count, total $ discounted, conversion lift (% of redeemers who became paying customers). If lift is high, run it again next year." },
+      { title: "Shutting down a leaked code",
+        story: "BLACKFRIDAY leaked to Reddit and is being abused. Open it → set Status to Disabled. Existing redemptions stand; no new redemptions accepted." },
+    ],
     audience: ["Marketing, Finance"],
     permissions: ["billing.coupon (Site Manager, Billing Manager, Marketing Manager)"],
     sections: [
@@ -761,6 +1091,15 @@ export const HELP_ENTRIES: HelpEntry[] = [
     page: 21,
     route: "/platform/billing/tax",
     summary: "Tax rates by jurisdiction, tax-exempt tenants, tax reports, and filings calendar.",
+    inPlainEnglish: "All things sales tax / VAT / GST. Set tax rates by state/country, mark tax-exempt customers (e.g. nonprofits with a 501c3 certificate), generate accountant-ready reports for monthly filings, and track which jurisdictions you owe by when.",
+    examples: [
+      { title: "Customer says they're tax-exempt",
+        story: "Nonprofit customer sends their 501c3 certificate. Tax-Exempt Tenants tab → Add exemption → upload the cert, set exemption type, scope to their state. From now on their invoices don't include sales tax." },
+      { title: "Monthly Texas sales tax filing",
+        story: "End of month, time to file Texas sales tax. Tax Reports tab → period October → 'Tax collected by jurisdiction' → filter to Texas → export the accountant-ready PDF. File it with your accountant or upload to the TX comptroller." },
+      { title: "Connecting Stripe Tax",
+        story: "You want tax to be computed automatically instead of manually. Tax Configuration tab → enable Stripe Tax. From now on, Stripe calculates the right tax for each invoice based on the customer's location and your nexus." },
+    ],
     audience: ["Finance, Tax Accountant"],
     permissions: ["billing.read (everyone). Editing tax config requires billing.invoice."],
     sections: [
@@ -784,6 +1123,17 @@ export const HELP_ENTRIES: HelpEntry[] = [
     page: 22,
     route: "/platform/billing/analytics",
     summary: "Deep SaaS revenue analytics — MRR movement, ARR trend, churn, retention, ARPU, LTV, CAC, plan migration, forecasting.",
+    inPlainEnglish: "All the SaaS metrics that an investor or finance team cares about. MRR, ARR, churn rate, retention by cohort, LTV, CAC payback — each on its own tab with a chart and a drill-down. This is the page you screenshot for board decks and use to find growth opportunities.",
+    examples: [
+      { title: "Prepping for a board meeting",
+        story: "MRR Movement tab → screenshot the stacked-bar chart. ARR Trend tab → screenshot the 24-month line with goal overlay. Churn tab → screenshot the cohort heatmap. Three slides done in 5 minutes." },
+      { title: "Investigating an MRR dip",
+        story: "Net MRR went negative this month. MRR Movement → click the red Churn segment → list of subscriptions that churned. Look for a pattern — most are on the same plan? Same country? Same signup cohort? That's your investigation lead." },
+      { title: "Modeling 12-month MRR",
+        story: "Founder wants 'what if churn drops to 2%'. Forecasting tab → drag the churn slider down to 2%. Confidence band shifts; new 12-month projection appears. Compare to current 4% churn projection to see the upside of fixing churn." },
+      { title: "LTV by acquisition channel",
+        story: "Marketing wants to know which paid channel produces the best LTV. LTV tab → segmented by acquisition channel. Bar chart shows Google Ads = $3,200 LTV, Facebook = $1,800 LTV. Double down on Google Ads spend." },
+    ],
     audience: ["Founder, Finance"],
     permissions: ["revenue.read + analytics.read (Finance, Site Manager, Admin)"],
     sections: [
@@ -803,6 +1153,15 @@ export const HELP_ENTRIES: HelpEntry[] = [
     page: 23,
     route: "/platform/billing/dunning",
     summary: "Recover failed payments via configurable email cadences, smart retries, and per-stage actions.",
+    inPlainEnglish: "When a customer's card fails, you don't just give up — you politely chase them for a few weeks to update their payment method. This page defines that chase. Day 1: send an email. Day 3: retry the card. Day 7: notify their CSM. Day 14: cancel. The page also shows you how well your dunning is recovering revenue.",
+    examples: [
+      { title: "Live queue of failed payments",
+        story: "Dunning Queue tab → see every tenant currently in the chase. Each row shows what stage they're on, when the next action fires, what the failure reason was. Click any to manually retry or send a custom email." },
+      { title: "Building a new sequence",
+        story: "We want a gentler approach for Enterprise customers (longer grace, no auto-cancel). Sequences tab → New → 'Enterprise Dunning'. Day 1: friendly email. Day 7: CSM personal call. Day 21: gentle email. Day 45: continue indefinitely (never auto-cancel). Assign as default for Enterprise plan." },
+      { title: "Tuning recovery",
+        story: "Performance tab → recovery funnel. 'Email sent → Email opened' is 30%. Maybe the subject line is bad. A/B test a new subject; if open rate jumps to 50%, recovery rate goes up too." },
+    ],
     audience: ["Finance, Customer Success"],
     permissions: ["billing.invoice (Billing Manager, Site Manager, Admin)"],
     sections: [
@@ -820,6 +1179,15 @@ export const HELP_ENTRIES: HelpEntry[] = [
     page: 24,
     route: "/platform/billing/payouts",
     summary: "Payouts to partners + resellers + affiliates: schedule, statements, methods, history.",
+    inPlainEnglish: "If you owe money to a reseller or affiliate (e.g. they earned 20% commission on referred customers), this is where you pay them. You can see what's owed, see past payouts, manage their payout method, and trigger payouts manually or wait for the schedule.",
+    examples: [
+      { title: "Monthly payout run",
+        story: "First of the month. Schedule tab → see upcoming payouts. Each row shows affiliate + amount + method. Trigger payout for the batch (or wait for auto-run on the 5th). Payments go via Stripe Connect / ACH / PayPal / Wise depending on each affiliate's preference." },
+      { title: "Affiliate asks about their last statement",
+        story: "Affiliate emails: 'what was on my March payout?'. Statements tab → search by affiliate → click their March statement. See line items (each commission earned), deductions (returns), holds (90-day clawback period), net amount. Export the PDF, email it back." },
+      { title: "Failed payout",
+        story: "History tab shows a failed payout — wrong bank account. Methods tab → update the affiliate's account → retry from History. Communication thread on the affiliate's profile keeps the back-and-forth recorded." },
+    ],
     audience: ["Finance, Partnerships"],
     permissions: ["billing.invoice + partnerships role"],
     sections: [
@@ -837,6 +1205,15 @@ export const HELP_ENTRIES: HelpEntry[] = [
     page: 25,
     route: "/platform/catalog/products",
     summary: "Curated library of sign/print product templates that tenants clone into their own catalogs as starting points.",
+    inPlainEnglish: "Pre-built product templates (vinyl banner, yard sign, channel letter, T-shirt, business card, etc.) that every new tenant starts with. Edit them once here; new tenants inherit your edits. Existing tenants can opt into updates when you make important changes.",
+    examples: [
+      { title: "Adding a new product type",
+        story: "Sign industry is growing in dimensional letters. '+ New product' → name 'Acrylic dimensional letter', category Channel Letters, set attributes (height, depth, color, mount type), pick a pricing formula, define material defaults (acrylic + mounting hardware). Publish. Every new tenant gets this in their catalog from day one." },
+      { title: "Fixing a wrong default",
+        story: "Customer reports: 'the default waste % on 13oz vinyl banners is too high'. Open Vinyl Banner → Materials tab → adjust waste from 10% to 5%. Save as new version → 'Push update to tenants who use this'. Tenants get a notification and can accept the update with one click." },
+      { title: "Discontinuing an old product",
+        story: "We stopped supporting flatbed-printed coroplast. Find it → Archive. Existing tenants keep their copy (they own it now); new tenants don't see it." },
+    ],
     audience: ["Catalog Editor, Founder, Industry SME"],
     permissions: ["catalog.read (everyone), catalog.write (Super Admin / Admin), push-to-tenants (Super Admin)"],
     sections: [
@@ -858,6 +1235,15 @@ export const HELP_ENTRIES: HelpEntry[] = [
     page: 26,
     route: "/platform/catalog/materials",
     summary: "Master list of materials (vinyl, inks, substrates, threads, blanks) tenants can adopt, with specs, costs, suppliers.",
+    inPlainEnglish: "Every raw material a shop might use — different weights of vinyl, ink types, substrates, threads, blank apparel. We pre-define the canonical specs (cost, durability, indoor/outdoor, supplier links) so tenants don't have to research what '13oz scrim vinyl' means.",
+    examples: [
+      { title: "Adding a new material we discovered",
+        story: "Industry source recommends 3M IJ180Cv3. '+ New material' → category Vinyl → subcategory Cast → fill in specs (3-yr outdoor, 2-mil, with adhesive type), suppliers (3M direct + Grimco + Fellers as backup), default cost $4.20/sqft. Save. Tenants can adopt it for vehicle wrap products." },
+      { title: "Supplier price increased",
+        story: "Grimco bumped wholesale prices 8%. Open every material that has Grimco as primary supplier → bump the supplier price → tenants using that material see a 'supplier price changed' notification on their material library." },
+      { title: "Discontinuing a material",
+        story: "Manufacturer EOL'd a specific vinyl. Find it → set Status to Discontinued. Tenants who use it keep using their stock; new tenants don't see it as an option." },
+    ],
     audience: ["Catalog Editor, Procurement, Production Manager"],
     permissions: ["catalog.read (everyone), catalog.write (Admin)"],
     sections: [
@@ -877,6 +1263,13 @@ export const HELP_ENTRIES: HelpEntry[] = [
     page: 27,
     route: "/platform/catalog/equipment",
     summary: "Pre-built equipment templates (printers, cutters, presses, embroidery, CNC) with productivity defaults for capacity planning.",
+    inPlainEnglish: "Every major brand and model of equipment a sign/print shop might own — Roland, HP Latex, Mimaki, Brother embroidery, ROQ screen press, etc. We pre-define their realistic speeds, ink types, max widths so tenants don't have to look up specs when they're setting up production.",
+    examples: [
+      { title: "New customer adopting Roland TrueVIS VG3-640",
+        story: "Customer just bought a Roland VG3. In their tenant production setup, they pick the template from our catalog instead of typing specs from scratch. We give them: rated speed 600 sqft/hr, 64\" max width, eco-solvent ink, 4-color CMYK. They override only what's different in their shop." },
+      { title: "Adding a new printer model",
+        story: "HP shipped the Latex R2000. '+ New equipment' → brand HP → model Latex R2000 → category Printer → specs (96\" max width, ~250 sqft/hr) → materials compatibility (canvas, vinyl, fabric, mesh) → default uptime 95%. Save. Tenants can adopt it immediately." },
+    ],
     audience: ["Catalog Editor, Industry SME"],
     permissions: ["catalog.write (Admin)"],
     sections: [
@@ -894,6 +1287,13 @@ export const HELP_ENTRIES: HelpEntry[] = [
     page: 28,
     route: "/platform/catalog/pricing",
     summary: "Pre-built and custom pricing formula templates with a Monaco-based code editor + live test sandbox.",
+    inPlainEnglish: "The math that turns 'I want a 4x8 ft vinyl banner, quantity 5' into a price. Formulas live here so the same 'banner sq-ft' calculation can power 10 different banner products without duplicating logic. There's a code editor + a tester pane to verify the math before publishing.",
+    examples: [
+      { title: "Fixing a pricing bug",
+        story: "Customers complain that 24x36\" banners price as 24×36 inches instead of converting to sq-ft (it's off by 144x). Open Banner SqFt formula → tester pane → input 24, 36 → see price = $30,400 (very wrong). Fix the formula to convert inches → feet first → tester now shows $20. Save as v2; old quotes keep using v1, new quotes use v2." },
+      { title: "Creating a tiered pricing formula",
+        story: "Apparel shop wants tier pricing: 1-49 pcs at $12 each, 50-99 at $10, 100+ at $8. New formula → 'Tiered Quantity Apparel' → tier table editor → quantity ranges + unit prices → save. Their T-shirt product points at this formula." },
+    ],
     audience: ["Industry SME, Catalog Editor"],
     permissions: ["catalog.write (Admin)"],
     sections: [
@@ -913,6 +1313,13 @@ export const HELP_ENTRIES: HelpEntry[] = [
     page: 29,
     route: "/platform/catalog/templates",
     summary: "Document templates (storefronts, quote PDFs, work orders, invoices, proof emails) tenants can adopt.",
+    inPlainEnglish: "Pre-designed templates for documents that tenants send their own customers — quote PDFs, work orders, invoices, the email that asks 'please approve this proof'. Tenants pick one as their default; they can override individual ones.",
+    examples: [
+      { title: "Adding a new quote PDF layout",
+        story: "Industry feedback: 'we want a quote layout that shows materials breakdown'. Quote PDFs tab → '+ New template' → 'Detailed Materials Quote'. Design it in the WYSIWYG editor using variables ({{customer.name}}, {{job.materials}}, {{job.total}}). Preview with sample data. Publish. Tenants can adopt." },
+      { title: "Translating templates for a new market",
+        story: "Launching in Mexico. Open each template → Multi-language tab → add Spanish version. Customer-facing documents now go out in Spanish for tenants with es-MX locale." },
+    ],
     audience: ["Marketing, Industry SME"],
     permissions: ["catalog.write (Admin)"],
     sections: [
@@ -930,6 +1337,15 @@ export const HELP_ENTRIES: HelpEntry[] = [
     page: 30,
     route: "/platform/catalog/assets",
     summary: "Licensed stock assets — fonts, vectors, mockups, palettes — available to tenants on eligible plans.",
+    inPlainEnglish: "A library of stock fonts, icons, mockups, color palettes, photos that we've licensed and bundled with Flowtora. Tenants on the right plan see these inside their design tools and can use them in customer work without worrying about licensing.",
+    examples: [
+      { title: "Adding new fonts for the new year",
+        story: "Marketing licensed 5 new display fonts from Adobe Fonts. Fonts tab → bulk upload → attach license docs → mark commercial-use OK + which plans get access (Pro + Enterprise). Tenants see the new fonts immediately in their design picker." },
+      { title: "License audit",
+        story: "Adobe asks 'how often is X font being used'. Per-tenant usage tracking on the asset shows downloads per tenant. Export for the license audit." },
+      { title: "Removing an asset (license expired)",
+        story: "A photo's license expires. Remove it from the library → tenants who already downloaded it get a warning that the license expired (so they can replace it in their materials) → asset is no longer downloadable." },
+    ],
     audience: ["Catalog Editor, Designers"],
     permissions: ["catalog.write (Admin) for upload + license attestation"],
     sections: [
@@ -949,6 +1365,13 @@ export const HELP_ENTRIES: HelpEntry[] = [
     page: 31,
     route: "/platform/operations/jobs",
     summary: "Cross-tenant production job throughput visibility (anonymized) for platform health and benchmarking.",
+    inPlainEnglish: "A live view of how busy the shops on our platform are. How many jobs are in production right now, how many shipped today, how many are running late. Tenant names are blurred by default — this is for industry-wide health checking, not surveillance.",
+    examples: [
+      { title: "Holiday season capacity planning",
+        story: "Black Friday week. Open the page → capacity utilization gauge shows 92% across the platform. Time to remind tenants we offer overflow production partners. Trigger an announcement (Operations → Announcements)." },
+      { title: "Investigating slow processes",
+        story: "Bottleneck stacked bar shows 'Approval wait' is 4 days at p90 — way too long. Means customers approve their proofs slowly. Maybe send tenants a tip about proof email subject lines." },
+    ],
     audience: ["Operations, SRE, Founder"],
     permissions: ["queues.read (everyone), tenant.impersonate for opening any specific tenant job"],
     sections: [
@@ -966,6 +1389,13 @@ export const HELP_ENTRIES: HelpEntry[] = [
     page: 32,
     route: "/platform/operations/production",
     summary: "Aggregated production metrics for benchmarking — uptime, waste, rework, on-time delivery, margin.",
+    inPlainEnglish: "Industry benchmarks. 'Average shop runs equipment at 80% uptime, wastes 3% of materials, hits 92% on-time delivery'. We compute these from real tenant data (anonymized) and then optionally publish them back to tenants as 'how do I compare to my peers'.",
+    examples: [
+      { title: "Publishing a new benchmark",
+        story: "We've calculated reliable benchmarks for on-time delivery. Flip 'Publish to tenant dashboards' on the metric. Privacy review confirms there are enough contributors (50+) that no individual is identifiable. Every tenant's own analytics dashboard now shows 'You: 88%. Industry: 92%' as a benchmark." },
+      { title: "Anomaly investigation",
+        story: "A tenant got flagged 2σ outside norm for waste rate (very high). Click → it's clearly a bug in their setup, not actual waste. CSM reaches out, helps them fix the data entry workflow. Score normalizes within a week." },
+    ],
     audience: ["Founder, Industry Benchmarks Team"],
     permissions: ["queues.read"],
     sections: [
@@ -985,6 +1415,15 @@ export const HELP_ENTRIES: HelpEntry[] = [
     page: 33,
     route: "/platform/operations/tickets",
     summary: "Helpdesk inbox across all tenants. Three-pane layout: views, list, ticket detail with rich conversation.",
+    inPlainEnglish: "Where the support team lives all day. Every customer question, complaint, bug report, or 'how do I' lands here as a ticket. Three panes: left = saved views (Unassigned, Mine, Breaching SLA), middle = ticket list, right = the open ticket with the full conversation.",
+    examples: [
+      { title: "Starting your morning shift",
+        story: "Open the page → click 'Unassigned' on the left. See 12 new tickets that landed overnight. Triage: assign 4 to other agents, take 8 yourself, sort by priority, work them one at a time." },
+      { title: "Replying with a macro",
+        story: "Customer asks the same FAQ for the 50th time. Open ticket → reply composer → pick macro 'Standard onboarding answer' → variables auto-fill (their name, their tenant). Edit, send. 30 seconds." },
+      { title: "Escalating a critical ticket",
+        story: "Tenant says their app is completely down. Priority P1, status NEW. Right rail: assign to Engineering team, change priority, @-mention SRE-on-call, add internal note 'production outage, paging on-call'. Engineering picks it up immediately." },
+    ],
     audience: ["Support Agent, Support Lead, CSM, Founder"],
     permissions: ["support.read (everyone), support.respond (Support Agent+)"],
     sections: [
@@ -1006,6 +1445,15 @@ export const HELP_ENTRIES: HelpEntry[] = [
     page: 34,
     route: "/platform/operations/knowledge-base",
     summary: "Author and manage public KB articles for tenants. Rich editor + translations + analytics + versioning.",
+    inPlainEnglish: "The help articles customers read instead of opening a support ticket. 'How do I create a quote?', 'Why didn't my proof email arrive?'. Authors write them here; the system measures whether the articles actually deflect tickets (reduce support load).",
+    examples: [
+      { title: "Writing a new how-to article",
+        story: "Support team gets the same question every week: 'how do I refund a customer'. New article → category Billing → title 'How to refund a customer'. Write the steps with screenshots. Submit for review. Editor publishes. Article goes live; future questions get the link instead of a long reply." },
+      { title: "Finding content gaps",
+        story: "Search analytics → 'zero-result queries' shows customers searched for 'channel letter pricing' 47 times with no result. Write an article for that. Search again next month → no more zero-results." },
+      { title: "Localizing an article",
+        story: "Open the most-popular article → Translations tab → add es-MX → translation memory pre-fills similar phrases from past translations. Translator polishes; flip from Draft to Published when complete." },
+    ],
     audience: ["Support Lead, Content Manager, Tech Writer"],
     permissions: ["docs.write (Authors), docs.publish (Editors)"],
     sections: [
@@ -1025,6 +1473,15 @@ export const HELP_ENTRIES: HelpEntry[] = [
     page: 35,
     route: "/platform/operations/announcements",
     summary: "Compose announcements pushed to tenants — banners, modals, emails, changelog posts. A/B testable.",
+    inPlainEnglish: "When you need to tell every tenant about something — a new feature, a scheduled maintenance, a price change — you make an announcement here. It can show up as an in-app banner, a modal, an email blast, a changelog entry, or a push notification, all from one composer.",
+    examples: [
+      { title: "Announcing a new feature",
+        story: "Just shipped AI quote suggestions. New announcement → target = all tenants → channels = in-app banner + email + changelog entry → title 'New: AI quote suggestions are here' + a Try It CTA pointing at the feature. Schedule for tomorrow 9am. Performance dashboard tracks views/clicks/dismissals." },
+      { title: "Scheduled maintenance notice",
+        story: "DB migration tomorrow night. New announcement → channels = in-app banner only → variant Warning → schedule 24 hours before the window, auto-dismiss after the window passes. Customers see the heads-up; the banner disappears on its own when maintenance is done." },
+      { title: "A/B testing announcement copy",
+        story: "Marketing wants to know which call-to-action wording converts better. Compose two variants of the same announcement with different CTA copy. Set 50/50 split. Performance dashboard shows clear winner after 24 hours." },
+    ],
     audience: ["Marketing, Content Manager, Founder"],
     permissions: ["announcement.write (Site Manager, Marketing, Content Manager)"],
     sections: [
@@ -1044,6 +1501,15 @@ export const HELP_ENTRIES: HelpEntry[] = [
     page: 36,
     route: "/platform/operations/feature-requests",
     summary: "Roadmap board with voting, prioritization, ICE scoring, and tenant linkage.",
+    inPlainEnglish: "Feature requests from customers + our own internal ideas. They get voted on, scored by Impact / Confidence / Ease, and walk through Backlog → Planned → In Progress → Shipped. The public roadmap (read by customers) shows them which requests are getting built.",
+    examples: [
+      { title: "Triaging incoming requests",
+        story: "Submitted tab shows 8 new requests from yesterday. Each: pick severity, merge duplicates with existing requests, link to support tickets that mention the same problem. Move to Backlog (just collecting) or Under Review (we're considering)." },
+      { title: "Building the next quarter's roadmap",
+        story: "Sort Backlog by votes + ICE score. Top 8 items move to Planned, assigned to teams. Public roadmap auto-updates so customers can see what's coming." },
+      { title: "Shipping a feature",
+        story: "Engineering completed AI quote suggestions. Move from In Progress → Beta → tag the 5 beta tenants → after a week, move to Shipped → trigger a changelog announcement to all customers." },
+    ],
     audience: ["Product, Engineering Lead, CS"],
     permissions: ["Read: everyone. Status changes + ICE editing: Product roles."],
     sections: [
@@ -1063,6 +1529,15 @@ export const HELP_ENTRIES: HelpEntry[] = [
     page: 37,
     route: "/platform/operations/bugs",
     summary: "Bug tracker integrated with Sentry + Linear/Jira + customer support tickets.",
+    inPlainEnglish: "Where bugs are tracked. Severity SEV1-4, status from New → In Progress → Resolved. Each bug links back to the Sentry error that detected it, the Linear/Jira issue engineering is working in, and any support tickets where customers reported the same problem.",
+    examples: [
+      { title: "Customer reports a bug",
+        story: "Support ticket: 'invoices show wrong tax for Canadian customers'. Support agent clicks 'Convert to bug' from the ticket → new bug auto-created with the ticket linked, severity SEV2, module = Billing → assigned to engineering." },
+      { title: "Auto-correlating affected customers",
+        story: "Sentry detects an error in proof email rendering. Bug auto-created → 'Tenants Impacted' tab shows 12 affected tenants. Engineering can see real-world impact while debugging." },
+      { title: "Triaging severity",
+        story: "Daily bug triage. New tab → 5 new bugs. Two are real (assign + label SEV2), two are 'won't fix' (mark as such + comment why), one is a duplicate of an open bug (mark Duplicate + link to the open one)." },
+    ],
     audience: ["Engineering, QA, Support Lead"],
     permissions: ["Read: everyone. Write: engineering roles."],
     sections: [
@@ -1082,6 +1557,15 @@ export const HELP_ENTRIES: HelpEntry[] = [
     page: 38,
     route: "/platform/marketing/landing-pages",
     summary: "CMS for marketing-site pages with visual block builder, A/B testing, and conversion analytics.",
+    inPlainEnglish: "A page builder for the flowtora.com marketing site. Build landing pages with a block builder (drag a Hero + Features + Pricing card + FAQ → done) or drop into code mode for HTML/CSS. Run A/B tests on copy or design. Track who signed up from each page.",
+    examples: [
+      { title: "Launching a paid-ads landing page",
+        story: "Growth team is running Google Ads for 'channel letter software'. New page → /lp/channel-letter-shops → use the SaaS landing template → swap hero copy to mention channel letters → publish. Ads point at the new URL. Analytics show conversion rate; iterate if low." },
+      { title: "Testing two CTAs",
+        story: "On the pricing page, A vs B: 'Start free trial' vs 'Try Flowtora free for 14 days'. Set 50/50 split → primary metric = signup. After 2 weeks → B converts 18% better. Promote B to 100%, retire A." },
+      { title: "Rolling back a bad change",
+        story: "Marketing pushed an update that tanked conversions. Open the page → Versions → click yesterday's version → 'Rollback'. Live page reverts in seconds." },
+    ],
     audience: ["Marketing, Growth"],
     permissions: ["features.manage / leads.manage"],
     sections: [
@@ -1099,6 +1583,15 @@ export const HELP_ENTRIES: HelpEntry[] = [
     page: 39,
     route: "/platform/marketing/campaigns",
     summary: "One-off and recurring email campaigns to tenants and leads. Full wizard from audience → content → send-time → review.",
+    inPlainEnglish: "Email marketing. Pick an audience (e.g. 'all customers on Starter plan'), write an email, schedule it, send it. Track who opened/clicked/unsubscribed. Different from transactional notifications (those are triggered by events; campaigns are scheduled blasts).",
+    examples: [
+      { title: "Announcing a price change",
+        story: "Pricing changes Jan 1. Campaign → segment = 'all active subscribers' → subject 'Important pricing update' → body with explanation + grandfathering details + FAQ link → send-time optimization (per-recipient timezone) → preflight checks pass → confirm. Goes to ~1,200 customers at 9am local each. Open rate 45%." },
+      { title: "Monthly newsletter",
+        story: "Campaign → type Recurring → segment = all newsletter subscribers → template 'Newsletter (monthly)' with dynamic content blocks for featured stories. Schedule to fire 1st of every month at 8am." },
+      { title: "A/B subject lines",
+        story: "Compose 3 subject line variants. Send each to 10% of the audience, measure open rate after 2 hours. Auto-promote the winner to the remaining 70%. Real open-rate optimization without manual intervention." },
+    ],
     audience: ["Marketing, Lifecycle Manager"],
     permissions: ["notifications.manage / leads.manage"],
     sections: [
@@ -1118,6 +1611,15 @@ export const HELP_ENTRIES: HelpEntry[] = [
     page: 40,
     route: "/platform/marketing/sequences",
     summary: "Behavioral email/in-app sequences triggered by tenant events. Visual flow builder.",
+    inPlainEnglish: "Automated email sequences triggered by what a customer does (or doesn't do). 'Send these 5 emails over 14 days to anyone who signs up.' Or 'if a tenant goes inactive for 7 days, send a re-engagement email + a coupon if they still don't return after 3 more days.' A visual flow builder lets you draw the logic.",
+    examples: [
+      { title: "Building the onboarding drip",
+        story: "Goal: get new tenants to create their first quote. Trigger = Signup → wait 1 day → email 'Here's how to build your first quote' → branch: if they created a quote, exit (goal hit); if not, wait 2 days → email 'Need help? Book a 15-min onboarding call'. Activate. Measure conversion at the end of week 2." },
+      { title: "Win-back sequence",
+        story: "Trigger = 'no logins for 14 days' → email 'We miss you. Here's what's new.' → wait 7 days → if still no logins, email + 20% off coupon. Stops if they sign back in." },
+      { title: "Trial conversion sequence",
+        story: "Trigger = 'trial started' → schedule emails at day 3, 7, 11 with progressive nudges. Day 13: notify CSM internally if they haven't converted. Day 14: trial expires email. Goal = 'paid subscription' — anyone who converts auto-exits the sequence." },
+    ],
     audience: ["Lifecycle Manager, Marketing"],
     permissions: ["notifications.manage / leads.manage"],
     sections: [
@@ -1137,6 +1639,15 @@ export const HELP_ENTRIES: HelpEntry[] = [
     page: 41,
     route: "/platform/marketing/referrals",
     summary: "Tenant-to-tenant referrals — reward structure, top referrers, conversion funnel, fraud detection.",
+    inPlainEnglish: "When existing customers refer new customers, this is where you manage the rewards (free month, $100 credit, etc.) and track how the program is performing. Fraud detection catches self-referrals and suspicious patterns automatically.",
+    examples: [
+      { title: "Setting up the program",
+        story: "Reward structure editor → referrer gets $100 credit when referee subscribes for 60 days. Referee gets 20% off their first 3 months. Save. Customers see a 'Refer a friend' page in their tenant app with their unique link." },
+      { title: "Identifying top advocates",
+        story: "Top Referrers leaderboard → top 5 customers brought in 18 new tenants between them. Send them a thank-you gift (custom Flowtora swag) — they're your unpaid sales team." },
+      { title: "Catching fraud",
+        story: "Fraud queue shows a tenant who 'referred' 8 new tenants all from the same IP address with sequential email aliases. Reject the referrals; investigate whether the original tenant should keep their account." },
+    ],
     audience: ["Growth, Marketing"],
     permissions: ["referrals.manage"],
     sections: [
@@ -1154,6 +1665,15 @@ export const HELP_ENTRIES: HelpEntry[] = [
     page: 42,
     route: "/platform/marketing/affiliates",
     summary: "Affiliate sign-ups, tracking, tiered commissions, creative library, payouts.",
+    inPlainEnglish: "Different from referrals (which are customer-to-customer). Affiliates are people who don't use Flowtora but promote it to their audience for commission. Industry bloggers, YouTubers, consultants. They get a tracking link; you pay them % of revenue from anyone who signs up via that link.",
+    examples: [
+      { title: "Approving a new affiliate",
+        story: "Applications tab → an industry consultant applied. Review their site + audience size. Approve → they get an email with their tracking dashboard + first banner/text-link creative. Status flips to Active. Their tracking link starts working immediately." },
+      { title: "Creating a creative pack",
+        story: "Creative Library tab → '+ New banner' → upload 728×90 + 300×250 + 160×600 ads with our latest visual identity. Tracking link auto-embedded. Affiliates can grab them from their dashboard." },
+      { title: "Commission tier promotion",
+        story: "An affiliate hit 25 conversions this quarter. Their tier auto-promotes from Standard (20%) to Premier (30%). Future commissions on their referred subscribers pay 30%. (Existing commissions stay at the old rate per their original contract.)" },
+    ],
     audience: ["Partnerships, Marketing"],
     permissions: ["affiliates.manage"],
     sections: [
@@ -1175,6 +1695,15 @@ export const HELP_ENTRIES: HelpEntry[] = [
     page: 43,
     route: "/platform/marketing/seo",
     summary: "SEO oversight for the marketing site — keyword rankings, backlinks, broken links, content gaps, page speed.",
+    inPlainEnglish: "Everything search-engine-related for flowtora.com. Where do we rank for our target keywords? Who's linking to us? Are any pages broken? Are we as fast as competitors? Without this you're flying blind in organic growth.",
+    examples: [
+      { title: "Weekly SEO check",
+        story: "Keyword Rankings tab → our top 10 keywords. 'sign shop software' moved up to position 4 this week (was 6). 'channel letter pricing' dropped from 8 to 12 — investigate; maybe a competitor published a better article." },
+      { title: "Finding broken links",
+        story: "Broken Link Checker tab → 3 broken inbound links from blogs in our backlink network. Reach out to each blog owner asking them to update the URL. Recovers organic traffic." },
+      { title: "Page speed regression",
+        story: "Page Speed Core Web Vitals chart → /pricing LCP jumped from 1.2s to 3.5s last week. Coincides with the new hero video. Engineering optimizes the video; LCP returns to baseline." },
+    ],
     audience: ["Growth, Content Manager"],
     permissions: ["seo.manage"],
     sections: [
@@ -1190,6 +1719,15 @@ export const HELP_ENTRIES: HelpEntry[] = [
     page: 44,
     route: "/platform/marketing/leads",
     summary: "Inbound leads from forms with scoring, routing, and conversion-to-trial workflow.",
+    inPlainEnglish: "Every form submission from the marketing site — demo requests, pricing inquiries, newsletter signups — lands here as a lead. Each gets a score (0-100, how likely to convert) and an owner (CSM or sales rep). Use this page to manage the pipeline from 'name and email captured' to 'paying customer'.",
+    examples: [
+      { title: "Following up on a hot lead",
+        story: "Filter score > 80, status = New. There's a lead from a 50-employee shop that requested a demo. Click → see their activity timeline (they read 4 blog posts + viewed pricing 3 times). Click 'Schedule meeting', send a personalized email. Mark as Working." },
+      { title: "Converting a lead to a trial",
+        story: "Lead replied 'yes, send me the trial link'. On their detail page → 'Convert to tenant trial'. Creates a tenant + invitation email. They sign in; lead status auto-flips to Converted. The tenant now appears in the Tenants page." },
+      { title: "Bulk-assigning new leads",
+        story: "Monday morning, 30 new leads from the weekend. Filter status = New. Select all. Bulk action → Assign → distribute evenly across the sales team. Each rep gets ~10 leads in their queue." },
+    ],
     audience: ["Sales, Marketing"],
     permissions: ["leads.manage"],
     sections: [
@@ -1211,6 +1749,15 @@ export const HELP_ENTRIES: HelpEntry[] = [
     page: 45,
     route: "/platform/integrations",
     summary: "Master catalog of every third-party integration available to tenants (QuickBooks, Stripe, Shopify, Slack, Zapier, etc.) with adoption metrics and configuration management.",
+    inPlainEnglish: "Every third-party tool that customers can connect their Flowtora workspace to — QuickBooks for accounting, Shopify for e-commerce, Slack for notifications, Zapier for automation. This page is where we manage the catalog: what integrations exist, what they do, who's connected, how healthy they are.",
+    examples: [
+      { title: "Adding QuickBooks Desktop to the catalog",
+        story: "Customers keep asking for QB Desktop (not just Online). New integration → category Accounting → name 'QuickBooks Desktop' → upload logo + description + screenshots → config schema for QB Desktop connection params → mark status Beta → tenants on the right plan can now connect their QBD." },
+      { title: "Investigating a sync failure",
+        story: "An integration's Health tab shows the sync error rate spiked. Drill into the Health charts: error rate 8%, mostly 'rate-limit exceeded'. The vendor changed their rate limit. Update the integration's retry config + backoff settings; error rate normalizes." },
+      { title: "Deprecating an integration",
+        story: "WeTransfer is shutting down. Open integration → Danger Zone → Deprecate with sunset date 90 days out. Tenants currently connected get a notification with migration instructions. New connections blocked." },
+    ],
     audience: ["Engineering, Integration Partners, CSM"],
     permissions: ["integrations.read (everyone), integrations.manage (Engineer + Admin)"],
     sections: [
@@ -1230,6 +1777,15 @@ export const HELP_ENTRIES: HelpEntry[] = [
     page: 46,
     route: "/platform/integrations/api",
     summary: "Platform-level API keys, webhook endpoints, event catalog, delivery logs, signing secrets, rate limits.",
+    inPlainEnglish: "The plumbing for system-to-system integrations. API keys for services that talk to Flowtora programmatically. Webhook endpoints where Flowtora sends events to your other systems. Deliveries log so you can see if a webhook actually arrived. Different from My API Keys (which are personal admin tokens); this is platform-level.",
+    examples: [
+      { title: "Setting up a Zapier connection",
+        story: "Tenant wants to use Zapier. Create an API key with scopes tenant:read + invoice:read. Copy the key once (only shown at creation), paste into Zapier setup. They can now build Zaps that read Flowtora data." },
+      { title: "Webhook delivery failed",
+        story: "Customer's external system isn't receiving events. Deliveries tab → filter status = Failed, their endpoint → see HTTP 503 errors from their server. Click Replay on a few — when their server comes back, deliveries succeed. Bulk replay everything that's queued." },
+      { title: "Rotating a leaked signing secret",
+        story: "Their endpoint's signing secret got committed to GitHub. Signing Secrets tab → click Rotate on that endpoint. Old + new secret both work for 24 hours so they have time to update; after that, old secret is dead." },
+    ],
     audience: ["Engineering, SRE"],
     permissions: ["webhooks.manage / api.manage (Engineer, Admin)"],
     sections: [
@@ -1255,6 +1811,15 @@ export const HELP_ENTRIES: HelpEntry[] = [
     page: 47,
     route: "/platform/integrations/docs",
     summary: "Author and publish the public Flowtora developer docs and OpenAPI reference.",
+    inPlainEnglish: "The public developer documentation at docs.flowtora.com. Getting Started guides, API reference, SDK docs, code samples. This page is the CMS where DevRel + engineering write + publish all of it.",
+    examples: [
+      { title: "Documenting a new API endpoint",
+        story: "Engineering just shipped POST /v1/jobs/batch. New doc page → category API Reference → use the `<Endpoint />` component to declare path + method + auth + params + response → add a Node.js code sample → publish. Live on docs.flowtora.com within a minute." },
+      { title: "Updating the OpenAPI spec",
+        story: "We added a new optional field to the Invoice schema. OpenAPI sub-page → upload the new YAML → schema validator passes → diff shows the addition (backward compatible) → auto-publish toggle ON → per-endpoint docs regenerate automatically." },
+      { title: "Scheduling a release announcement",
+        story: "API v3 launches Monday. Write the release notes today → set Status = Draft → schedule Publish for Monday 9am UTC → it goes live without anyone clicking anything." },
+    ],
     audience: ["DevRel, Engineering"],
     permissions: ["docs.write (Authors), docs.publish (Editors)"],
     sections: [
@@ -1274,6 +1839,15 @@ export const HELP_ENTRIES: HelpEntry[] = [
     page: 48,
     route: "/platform/integrations/marketplace",
     summary: "Third-party apps tenants can install into their workspaces. Submission queue, approval workflow, revenue share.",
+    inPlainEnglish: "Like the App Store but for Flowtora. External developers build apps that plug into Flowtora workspaces (custom workflows, niche integrations, analytics dashboards). They submit their app here; we review for security + listing quality; approved apps appear in the in-app marketplace. We take a cut of revenue.",
+    examples: [
+      { title: "Reviewing a submitted app",
+        story: "Pending Review queue → an app called 'Quote PDF Designer Pro' just submitted. Open it → security tab: their manifest requests scopes (quote.read, quote.write — reasonable). Code scan results: no critical findings. Listing tab: name + description + screenshots look good. Approve → developer is notified; app goes live in the marketplace." },
+      { title: "Suspending a misbehaving app",
+        story: "An app is being reported by customers for spamming. Danger Zone → Suspend with reason 'Spamming customers via webhooks'. App is hidden from marketplace; new installs blocked; existing installs disabled. Developer notified to investigate." },
+      { title: "Monthly revenue share statement",
+        story: "Revenue Share tab → see all marketplace apps and their share-tier (70/30 / 80/20 / 85/15 depending on volume). Statements ready for the month → bulk-send to all developer payout methods." },
+    ],
     audience: ["Marketplace Admin, Engineering, Finance"],
     permissions: ["marketplace.manage (Engineer, Admin)"],
     sections: [
@@ -1293,6 +1867,15 @@ export const HELP_ENTRIES: HelpEntry[] = [
     page: 49,
     route: "/platform/integrations/sso",
     summary: "Configure SAML 2.0 / OIDC SSO and SCIM provisioning for Enterprise tenants.",
+    inPlainEnglish: "Enterprise customers want their employees to sign in via their corporate identity provider (Okta, Azure AD, etc.) instead of a separate Flowtora password. This page is where you configure that integration per tenant. SCIM provisioning means their HR system can automatically create/disable users when employees join/leave.",
+    examples: [
+      { title: "Onboarding an Enterprise customer with Okta",
+        story: "Big customer signed Enterprise. Per-Tenant Configurations → Add → tenant Castle Signage → provider Okta → SAML. Customer's IT team pastes their Okta metadata URL. We give them our ACS URL to paste in Okta. Test login button: opens a flow in popup → decoded SAML assertion looks right. Flip to Active." },
+      { title: "Setting up SCIM auto-provisioning",
+        story: "Customer wants HR-driven user lifecycle. After SSO is working, enable SCIM in the tenant config + send their IT team the SCIM token. Their HR system pushes user creates/updates/deletes to us. SCIM Logs tab shows every operation; failures retry automatically." },
+      { title: "Customer's certificate expired",
+        story: "SSO sign-in stopped working. Per-Tenant Configurations → their row shows status Failed. Click their config → re-upload their renewed IdP certificate → test login → confirms working. Document in audit log." },
+    ],
     audience: ["Security Engineer, Enterprise CSM"],
     permissions: ["sso.manage (Security Engineer, Admin)"],
     sections: [
@@ -1316,6 +1899,15 @@ export const HELP_ENTRIES: HelpEntry[] = [
     page: 50,
     route: "/platform/security/center",
     summary: "Single-pane-of-glass view of Flowtora platform security posture with 10+ widgets.",
+    inPlainEnglish: "The security team's dashboard. One overall security score, then 10+ widgets showing different angles: MFA coverage, vulnerability scans, suspicious activity feed, dependency vulnerabilities, password policy compliance, etc. Open it in the morning, scan for red, drill into anything that's not green.",
+    examples: [
+      { title: "Monday security review",
+        story: "Open page → score 84 (A grade). Suspicious activity widget shows 3 new events overnight (failed logins from a new geo on one admin account). Investigate. Vulnerability scanner: 1 high-severity CVE landed in a dependency over the weekend — assign to engineering with deadline." },
+      { title: "Onboarding a new SOC2 control",
+        story: "Auditor wants to see 'every admin has MFA'. KPI 'MFA enforced %' shows 96%. The 4% holdouts are listed. Email them; if not done in 48h, force-enable from the Users page." },
+      { title: "Bug bounty payout",
+        story: "Bug bounty widget shows a new High-severity report from HackerOne. Engineering verifies the bug, fixes it, marks resolved. Click payout amount + currency in the widget → triggers the Finance team to issue payment." },
+    ],
     audience: ["Security Engineer, CISO, Founder"],
     permissions: ["security.read (everyone). Resolving findings requires security.findings.resolve."],
     sections: [
@@ -1333,6 +1925,15 @@ export const HELP_ENTRIES: HelpEntry[] = [
     page: 51,
     route: "/platform/security/compliance",
     summary: "SOC2, ISO 27001, GDPR, CCPA, HIPAA, PCI DSS program management — controls, evidence, policies, sub-processors, DPAs, risk register.",
+    inPlainEnglish: "All the formal compliance work needed to pass enterprise sales reviews + audits. Frameworks (SOC2, ISO 27001, etc.) → Controls within them → Evidence proving each control is operational → Policies → Sub-processors we use → DPAs with customers → Risk register → Vendor reviews → Auto-generated audit reports.",
+    examples: [
+      { title: "Annual SOC2 Type II audit",
+        story: "Auditor sent a controls testing list. Open Controls tab → filter to SOC2 → mark each control's evidence as available. Auto-collected evidence (CloudTrail logs, GitHub PRs) is already attached; manually upload anything missing. Generate the audit package as PDF + ZIP from the Reports tab. Send to auditor." },
+      { title: "Adding a new sub-processor",
+        story: "We onboarded a new vendor for OCR processing. Sub-Processors tab → add their name, purpose, data location, link to their SOC2 cert, risk tier. Public /sub-processors page regenerates automatically. Send a notification to enterprise customers per their DPAs (30-day notice)." },
+      { title: "Customer DPA signing",
+        story: "Enterprise prospect needs a signed DPA. DPAs tab → request DPA workflow → fill in their info, send → they counter-sign electronically → DPA on file. Their contract reflects DPA in place." },
+    ],
     audience: ["Compliance Officer, CISO, Auditor"],
     permissions: ["compliance.read (everyone), compliance.manage (Compliance Officer, Admin)"],
     sections: [
@@ -1354,6 +1955,15 @@ export const HELP_ENTRIES: HelpEntry[] = [
     page: 52,
     route: "/platform/security/privacy-requests",
     summary: "Process GDPR/CCPA/CPRA Subject Access Requests — access, deletion, rectification, restriction, objection, portability.",
+    inPlainEnglish: "When a customer (or one of their end-users) exercises their right under GDPR / CCPA / similar privacy laws — 'give me my data', 'delete me', 'I'm opting out of sale' — the request lands here. Track it, verify identity, query every system that has their data, generate the export or perform the deletion, deliver the result within the legal SLA (30 days GDPR, 45 days CCPA).",
+    examples: [
+      { title: "GDPR data export request",
+        story: "EU user wants their data. New request → type Export → verify their identity via ID upload. Scope discovery: 'Postgres returned 47 rows, S3 returned 12 files, Sentry returned 8 events, Mailchimp returned 234 emails'. Build ZIP → encrypted with password → secure delivery link with 14-day expiry. SLA timer: 30 days, hit comfortably in 4." },
+      { title: "GDPR deletion request",
+        story: "User requests deletion. Verify identity → confirm legal basis to retain (we keep payment records for tax 7 years per legal obligation; the rest we delete) → typed confirmation 'DELETE-{subjectId}' → two-step confirm. Final report PDF for the subject + immutable audit trail." },
+      { title: "Triage queue",
+        story: "Inbox tab → 8 new requests. Support tier can triage: confirm jurisdiction, route to DPO who handles processing. Support cannot do the actual deletion (gated by privacy.delete)." },
+    ],
     audience: ["DPO, Compliance Officer, Support (triage only)"],
     permissions: ["privacy.read (everyone), privacy.triage (Support Lead), privacy.process (DPO), privacy.delete (DPO + Admin)"],
     sections: [
@@ -1371,6 +1981,15 @@ export const HELP_ENTRIES: HelpEntry[] = [
     page: 53,
     route: "/platform/security/backups",
     summary: "Backup oversight and point-in-time recovery — schedules, jobs, restore tests, per-tenant restore, storage, settings.",
+    inPlainEnglish: "Backups of every database + file we keep, and the controls to restore from them. Three states you care about: (1) are backups actually running and succeeding, (2) can we actually restore from them (we test this monthly), (3) when a customer corrupts their data, can we roll them back to last Tuesday.",
+    examples: [
+      { title: "Daily check",
+        story: "Open the page. 'Last successful backup' shows 'just now', green. 'Successful jobs (30d)' = 100%. RPO = 5min, RTO = 30min, both green. Move on with your day." },
+      { title: "Customer asks for a rollback",
+        story: "Tenant accidentally deleted 200 orders this morning. Per-Tenant Restore tab → pick tenant → pick timestamp '2 hours ago' → preview affected tables → confirm with typed tenant slug → restore runs in shadow → diff against current state → looks correct → Apply. Tenant's data is restored." },
+      { title: "Monthly restore drill",
+        story: "Restore Tests tab → scheduled monthly drill ran last night → result Pass → 47 sample queries verified against the restored copy. Drill report PDF auto-generated and emailed to the SRE team. Proves we can actually restore, not just collect backups." },
+    ],
     audience: ["SRE, Founder"],
     permissions: ["backups.read (everyone), backups.manage + backups.restore (SRE + Admin)"],
     sections: [
@@ -1388,6 +2007,15 @@ export const HELP_ENTRIES: HelpEntry[] = [
     page: 54,
     route: "/platform/security/incidents",
     summary: "Incident response and postmortem tracking — Active, Resolved, Postmortems, Status Page, Runbooks, On-Call.",
+    inPlainEnglish: "When something breaks, this is incident command. Open a new incident, assign a commander, post timeline updates, push status-page updates that customers see, write the postmortem afterward. Also tracks the public status page customers can subscribe to.",
+    examples: [
+      { title: "API outage at 3am",
+        story: "PagerDuty wakes the on-call SRE. They declare an incident: SEV1, title 'API errors elevated', IC themselves, scribe a teammate, post status update 'Investigating API errors' on public status page. Work the timeline. 45 minutes later: identified + mitigated + monitoring → resolved. Schedule retro for tomorrow morning." },
+      { title: "Writing the postmortem",
+        story: "Day after the incident. Open the incident → Postmortem tab → markdown template with sections (What happened / Impact / Root cause / 5 Whys / Action items / Customer-facing summary). Fill it in. Blameless tone is enforced — the editor flags phrases like 'X messed up' as not aligned with our culture." },
+      { title: "Scheduled maintenance",
+        story: "Status Page tab → New maintenance window → 'DB migration', component DB, window Saturday 2-3am. Customers subscribed to the status page get a notification 24h before. The maintenance window auto-publishes the right messages at start/end times." },
+    ],
     audience: ["SRE, Engineering on-call, CISO"],
     permissions: ["incidents.read (everyone), incidents.manage (SRE, Engineer)"],
     sections: [
@@ -1407,6 +2035,15 @@ export const HELP_ENTRIES: HelpEntry[] = [
     page: 55,
     route: "/platform/security/network",
     summary: "Global and per-tenant network restrictions — IP allow/block, geo restrictions, Tor/VPN blocking, bot mitigation, WAF rules.",
+    inPlainEnglish: "Network-level security controls. Block specific IPs, block whole countries (we follow OFAC sanctions automatically), block Tor / commercial VPNs, configure your WAF rules. Used during attacks and to enforce sanctions compliance.",
+    examples: [
+      { title: "Blocking an attacker",
+        story: "DDoS attack from a known botnet. Global Block tab → add their CIDR ranges → save. Hits drop to zero in minutes. Audit log records who blocked them and why." },
+      { title: "Geo compliance",
+        story: "We're not allowed to do business in a sanctioned country. Geo Restrictions tab → click that country on the world map → Block. Anyone signing in from there gets a clean rejection page, not silent failure. OFAC list auto-updates." },
+      { title: "Enterprise tenant wants IP allowlist",
+        story: "Big customer says 'only let our office IPs sign in to our tenant'. Per-Tenant tab → their row → mode 'Allowlist only' → add their CIDR ranges. Outside-the-allowlist sign-in attempts are refused." },
+    ],
     audience: ["Security Engineer, SRE"],
     permissions: ["network.manage (Security Engineer, SRE), network.waf.write (SRE)"],
     sections: [
@@ -1428,6 +2065,15 @@ export const HELP_ENTRIES: HelpEntry[] = [
     page: 56,
     route: "/platform/system/status",
     summary: "Real-time platform health across every internal service with dependency graph and public status page editor.",
+    inPlainEnglish: "Live health of every internal service — API, web, auth, DB, Redis, queues, email, webhooks, CDN, WebSocket, AI services. Green means healthy. Anything else means investigate. Also where you edit the public status.flowtora.com page that customers subscribe to.",
+    examples: [
+      { title: "Customer reports the app is slow",
+        story: "Open the page → API card shows p95 latency spiked 30s ago, error rate climbing. Click API → time-series chart confirms. Recent deploys overlay shows a deploy 35s ago — almost certainly the cause. Roll back the deploy from CI; status returns to green in 90 seconds." },
+      { title: "Dependency graph for debugging",
+        story: "Queue Workers showing 'Degraded' but no clear reason. Open Dependency Graph → see Queue Workers depends on Redis (also degraded) → Redis depends on… that's your root cause path. Investigate Redis first." },
+      { title: "Posting a status update",
+        story: "DB is degraded. Status Page Editor → post update 'Investigating elevated DB latency'. Anyone subscribed to status updates gets an email/SMS within seconds. Update again at each phase (Identified, Monitoring, Resolved)." },
+    ],
     audience: ["SRE, Engineering on-call, Support"],
     permissions: ["system.status.read (everyone), system.status.manage (SRE)"],
     sections: [
@@ -1447,6 +2093,15 @@ export const HELP_ENTRIES: HelpEntry[] = [
     page: 57,
     route: "/platform/system/queues",
     summary: "Inspect and manage background job queues — BullMQ / SQS / Cloud Tasks. Queues, workers, failed jobs, DLQ, cron schedules.",
+    inPlainEnglish: "Background work happens in queues — sending emails, generating PDFs, syncing integrations, running cron jobs. This page shows you which queues exist, what's processing them (workers), what failed, and what's been dead-lettered after too many retries.",
+    examples: [
+      { title: "Customer says invoices aren't generating",
+        story: "Open the page → queue 'invoice-generation' shows 1,200 waiting jobs and 0 workers. The worker pool died. Restart the worker via SRE tooling → backlog drains in 5 minutes. Future cron alert if depth > 100." },
+      { title: "Investigating dead-letter jobs",
+        story: "Dead-Letter tab → 47 jobs failed permanently last night. All from queue 'webhook-delivery'. Error: 'Connection refused — endpoint.partner.com'. That partner had downtime. Bulk replay all 47 → they succeed now that the partner is back." },
+      { title: "Pausing a cron temporarily",
+        story: "We're doing maintenance; don't want the nightly sync to run. Schedules tab → find 'nightly-tenant-sync' → toggle disabled. Save. Won't fire tonight. Re-enable tomorrow." },
+    ],
     audience: ["SRE, Engineering"],
     permissions: ["queues.manage (SRE)"],
     sections: [
@@ -1466,6 +2121,17 @@ export const HELP_ENTRIES: HelpEntry[] = [
     page: 58,
     route: "/platform/system/email",
     summary: "Monitor email sending health and reputation — volume, bounces, complaints, suppression, domain auth, providers.",
+    inPlainEnglish: "All things 'are our emails actually arriving in customers' inboxes?'. Volume sent, bounce rates, spam complaints, suppression list (we don't send to people who unsubscribed or hard-bounced), domain authentication (SPF/DKIM/DMARC must be set up right or emails go to spam).",
+    examples: [
+      { title: "Customer says they don't get our emails",
+        story: "Filter Bounces tab by recipient → see hard bounces from their email 30 days ago, then auto-suppressed. They reactivated the email but we're still suppressing. Unsuppress → next sends will go through." },
+      { title: "Bounce rate climbing",
+        story: "KPI shows bounce rate = 3.4%, way over the 2% target. Bounces tab → most are from one specific provider with 'mailbox full' reasons. Filter the audience to exclude users on that provider → bounce rate drops below 2%." },
+      { title: "Failing over to a backup ESP",
+        story: "Resend is having an outage. Providers tab → enable automatic failover; SendGrid takes over until Resend is back. No outage visible to customers." },
+      { title: "DKIM broken",
+        story: "Domain Authentication tab → DKIM for flowtora.com is failing. Re-verify; DNS shows the record is missing. Add the right TXT record at our DNS provider. Re-verify again → passes." },
+    ],
     audience: ["Engineering, Marketing Ops"],
     permissions: ["email.deliverability.manage (Engineer, Marketing Ops)"],
     sections: [
@@ -1485,6 +2151,15 @@ export const HELP_ENTRIES: HelpEntry[] = [
     page: 59,
     route: "/platform/system/storage",
     summary: "Storage and CDN operations — per-tenant usage, buckets, CDN POPs, image optimization, lifecycle policies, egress cost.",
+    inPlainEnglish: "How much disk we're using, how much it's costing, how many GB of data we're serving to customers from our CDN. Investigate tenants suddenly using too much storage, set up lifecycle rules (auto-archive old files to cheaper Glacier), watch for hotlinking abuse.",
+    examples: [
+      { title: "One tenant is using a ton of storage",
+        story: "Per-Tenant tab → top 10 by storage. A tenant at the top is using 8x their plan limit. Drill in → their 'archive' folder is enormous. Email them with their usage report; they cleanup, or upgrade plan to fit." },
+      { title: "Setting up cold storage",
+        story: "Old proof files don't need fast access. Lifecycle Policies → for the proofs bucket → 'after 90 days, move to Glacier; after 7 years, delete'. Storage cost drops; retention rules satisfied." },
+      { title: "CDN bandwidth spike",
+        story: "Bandwidth doubled overnight. Top URLs by bandwidth → 80% from one specific image at a customer's site. Suspected hotlinking detector flags it. Enable hotlink protection for the bucket; bandwidth normalizes." },
+    ],
     audience: ["SRE, Finance (Egress)"],
     permissions: ["storage.manage (SRE, Admin), storage.egress.read (Finance)"],
     sections: [
@@ -1502,6 +2177,15 @@ export const HELP_ENTRIES: HelpEntry[] = [
     page: 60,
     route: "/platform/system/database",
     summary: "PostgreSQL operational health — slow queries, indexes, replication lag, locks, cache hit ratio, vacuum.",
+    inPlainEnglish: "Everything you need to know about the database. Connection pool usage, replication lag, slow queries that need optimizing, indexes that aren't being used, locks blocking other queries. SREs live in this page during a database performance investigation.",
+    examples: [
+      { title: "Site feels slow today",
+        story: "Open page → Connections gauge at 95% (red), replication lag 12s (yellow), cache hit ratio 87% (target 99%). Slow Queries tab shows 1 query with 4,000 calls/min and 800ms mean. Suggest index → apply → query drops to 8ms, cache ratio recovers, connections drop back to normal." },
+      { title: "Killing a stuck query",
+        story: "Customer report: 'export job won't complete'. Locks tab → see a long-running export query holding a table lock. Click Kill (typed confirmation 'KILL-{pid}'). Export job exits, table unlocks, other queries unblock." },
+      { title: "Cleaning up unused indexes",
+        story: "Index Usage tab → 8 indexes flagged as 'never used in 30d'. Each adds storage + slows down writes. Drop them after engineering review." },
+    ],
     audience: ["DBA, SRE"],
     permissions: ["database.manage (DBA, SRE, Admin)"],
     sections: [
@@ -1519,6 +2203,15 @@ export const HELP_ENTRIES: HelpEntry[] = [
     page: 61,
     route: "/platform/system/rate-limits",
     summary: "API rate limits, plan-based quotas, per-tenant overrides, abuse alerts.",
+    inPlainEnglish: "Rate limits prevent one customer from overwhelming our API. Set them per endpoint (e.g. 100 requests/sec on /jobs), per plan tier (Starter gets 10k API calls/month, Pro gets unlimited), or per specific tenant override (a big partner gets 10x the normal limit).",
+    examples: [
+      { title: "A tenant complains about getting rate-limited",
+        story: "Per-Tenant Overrides tab → add an override for them on the endpoint they're hitting. Reason 'integration partner — high-volume legitimate use'. Expires in 90 days so we re-review." },
+      { title: "Investigating an API surge",
+        story: "Abuse Alerts tab shows 'sudden 10× spike on /v1/quotes from tenant X'. Top Consumers tab confirms. Click Inspect → looks like a runaway script. Throttle their key further until they investigate; email them." },
+      { title: "Updating plan quotas",
+        story: "Pro plan should get 100k API calls/month now (was 50k). Per-Plan Quotas tab → edit Pro row → save. New limit applies on next month's billing cycle." },
+    ],
     audience: ["SRE, Engineering"],
     permissions: ["ratelimits.manage (SRE)"],
     sections: [
@@ -1536,6 +2229,15 @@ export const HELP_ENTRIES: HelpEntry[] = [
     page: 62,
     route: "/platform/system/feature-flags",
     summary: "Centralized feature flag management with targeting rules, multivariate variants, gradual rollouts, dependencies.",
+    inPlainEnglish: "Feature flags let you turn features on or off without deploying code. Roll out a feature to 10% of tenants first, then 50%, then 100%. Or target specific tenants ('show this to Acme only'). If something goes wrong, flip the flag off — no deploy needed.",
+    examples: [
+      { title: "Gradually rolling out a new feature",
+        story: "Engineering merged 'ai-quote-suggestions-v2'. Open the flag → set targeting: 5% of GROWTH plan tenants in production. Watch error rates for 24h. Bump to 25%, then 50%, then 100% over the next week." },
+      { title: "Emergency kill",
+        story: "The new feature is causing errors. Flip the flag to OFF in production → save. Within seconds, every server returns the OFF value. Feature is dead without a deploy or code revert." },
+      { title: "Per-tenant override",
+        story: "Beta customer wants early access to a feature. Targeting rule → 'tenant.id == X → return ON'. Just for them; everyone else sees default." },
+    ],
     audience: ["Engineering, Product"],
     permissions: ["feature_flag.write (Developer, Site Manager)"],
     sections: [
@@ -1553,6 +2255,15 @@ export const HELP_ENTRIES: HelpEntry[] = [
     page: 63,
     route: "/platform/system/env",
     summary: "Per-environment configuration values + secrets with reveal gating, change history, code references.",
+    inPlainEnglish: "All the environment variables — config values + secrets — for every deployment environment (Production / Staging / Sandbox / Preview). View the keys; reveal a secret requires re-authentication; every reveal is audited. Lets you see which env has drifted from prod without SSH'ing into the boxes.",
+    examples: [
+      { title: "Updating an API credential",
+        story: "Our Stripe webhook secret rotated. Find STRIPE_WEBHOOK_SECRET → edit → save new value in Production. Auto-sync to staging too. Change is audited; the prior value is in history if we need to roll back." },
+      { title: "Production secret leak suspected",
+        story: "Engineer thinks they accidentally logged a secret. Reveal the value (re-auth + audited) → confirm it's the right one → rotate it. Update the secret here; restart the service that uses it; old secret is invalidated." },
+      { title: "Why is staging behaving differently",
+        story: "Filter status = Drift. 3 keys differ between Production and Staging. Investigate each — staging needs to match prod, or there's a real reason for the difference. Update staging to align." },
+    ],
     audience: ["SRE, Engineering"],
     permissions: ["env.read (everyone), env.reveal (SRE — re-auth required), env.manage (SRE, Admin)"],
     sections: [
@@ -1570,6 +2281,15 @@ export const HELP_ENTRIES: HelpEntry[] = [
     page: 64,
     route: "/platform/system/logs",
     summary: "Application logs and Sentry-like error grouping with saved queries, alerts, and tenant correlation.",
+    inPlainEnglish: "Application logs + grouped error issues. The Stream tab is a live tail you can filter. The Issues tab groups identical errors together (like Sentry) so you know 'this error fired 8,000 times affecting 23 tenants' instead of seeing 8,000 separate entries.",
+    examples: [
+      { title: "Debugging a specific customer's issue",
+        story: "Customer says 'I got a 500 error 5 minutes ago'. Stream tab → filter tenant = their slug, severity = ERROR, last 15 min → 4 log entries with the stack trace. Forward to engineering with context." },
+      { title: "Spotting a new error",
+        story: "Issues tab → sort by 'first seen' descending → top result is an issue that started 1 hour ago, already 200 occurrences. Click → see stack trace → assign to engineering with screenshot. Catch it before customer reports come in." },
+      { title: "Alerting on a known bad pattern",
+        story: "Alerts tab → New alert → 'pattern: ERROR rate exceeds 50/min on service=api'. Notify channel = SRE Slack channel. Now we get paged before customers feel the impact." },
+    ],
     audience: ["SRE, Engineering, Support Lead"],
     permissions: ["logs.read (everyone), logs.manage + logs.resolve (SRE, Support Lead)"],
     sections: [
