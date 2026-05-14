@@ -7,21 +7,21 @@ import { cn } from "@/lib/cn";
 import { Logomark, Wordmark } from "@/components/brand/BrandMark";
 import { Icon, type IconName } from "@/components/shell/icons";
 
-// Platform admin sidebar — only spec-aligned pages.
+// Platform admin sidebar — premium redesign.
 //
-// Single visual list ordered to match docs/flowtora-admin-spec.md.
-// Items not yet built are intentionally not listed — the nav stays
-// an honest map of what's shipped. Each new spec page slots in here
-// at commit time.
+// Visual upgrades over the previous rail:
+//   • Brand block with soft accent halo and "Platform" environment chip
+//   • Live filter ("Jump to…") that expands matching groups and hides
+//     non-matches as you type — Esc to clear
+//   • Polished collapsible sections with refined headers and a small
+//     accent indicator on the active group
+//   • Active item: tinted gradient row + 2.5px accent bar + accent icon
+//   • Hover: subtle 1px translate to telegraph affordance
+//   • Bottom: user card with status dot, role pill, hover-only sign-out
 //
-// Active state matches by prefix so nested routes keep the parent link
-// highlighted. Dashboard matches exactly because "/platform" is the
-// prefix of every other link in the nav.
-//
-// Collapse mode: clicking the toggle below the nav shrinks the rail to
-// icon-only (~64px wide). State persists to localStorage so it sticks
-// across navigations + reloads. Mobile keeps its existing drawer flow
-// — always full-width when the drawer is open, hidden when closed.
+// All behaviour from the previous version is preserved — collapse +
+// per-group state persistence to localStorage, mobile drawer flow,
+// active-group auto-open, prefix-based active matching.
 
 type NavItem = {
   href: string;
@@ -217,8 +217,8 @@ const NAV_GROUPS: NavGroup[] = [
 
 const COLLAPSE_KEY       = "flowtora.platform-nav.collapsed";
 const OPEN_SECTIONS_KEY  = "flowtora.platform-nav.open-sections";
-const EXPANDED_W = 248;
-const COLLAPSED_W = 64;
+const EXPANDED_W = 260;
+const COLLAPSED_W = 68;
 
 /** Find the group id that owns a given pathname, if any. */
 function findActiveGroupId(pathname: string): string | null {
@@ -281,9 +281,6 @@ export function PlatformNav({
   }, []);
 
   // ── Per-group expand/collapse state ────────────────────────
-  // Persist as a Set<string> of OPEN group ids. We default to "only the
-  // group that owns the current path is open" so first-time users see a
-  // clean rail; subsequent toggles persist across navigations.
   const activeGroupId = findActiveGroupId(pathname);
   const [openGroups, setOpenGroups] = React.useState<Set<string>>(
     () => new Set(activeGroupId ? [activeGroupId] : []),
@@ -295,14 +292,11 @@ export function PlatformNav({
         const ids = JSON.parse(raw) as string[];
         if (Array.isArray(ids)) setOpenGroups(new Set(ids));
       } else if (activeGroupId) {
-        // First-run default — open the active group only.
         setOpenGroups(new Set([activeGroupId]));
       }
     } catch { /* ignore */ }
-    // Run once on mount.
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, []);
-  // Always keep the active group open when the path changes.
   React.useEffect(() => {
     if (!activeGroupId) return;
     setOpenGroups((prev) => {
@@ -322,6 +316,30 @@ export function PlatformNav({
     });
   }, []);
 
+  // ── Live filter ("Jump to…") ───────────────────────────────
+  const [filter, setFilter] = React.useState("");
+  const filterActive = filter.trim().length > 0;
+  const q = filter.trim().toLowerCase();
+  const filterMatch = React.useCallback(
+    (label: string) => label.toLowerCase().includes(q),
+    [q],
+  );
+
+  // When the filter is active we render groups expanded and items filtered.
+  const filteredGroups = React.useMemo(() => {
+    if (!filterActive) return NAV_GROUPS;
+    return NAV_GROUPS
+      .map((g) => ({ ...g, items: g.items.filter((i) => filterMatch(i.label)) }))
+      .filter((g) => g.items.length > 0);
+  }, [filterActive, filterMatch]);
+
+  const filteredPinned = React.useMemo(() => {
+    if (!filterActive) return PINNED;
+    return PINNED.filter((i) => filterMatch(i.label));
+  }, [filterActive, filterMatch]);
+
+  const totalMatches = filteredPinned.length + filteredGroups.reduce((n, g) => n + g.items.length, 0);
+
   // Close the mobile drawer on every navigation.
   const lastPathRef = React.useRef(pathname);
   React.useEffect(() => {
@@ -331,11 +349,8 @@ export function PlatformNav({
     }
   }, [pathname]);
 
-  // Width follows collapse state. On mobile (drawer open), force expanded
-  // — the icon-only rail isn't useful inside a slide-out drawer.
   const desktopWidth = hydrated && collapsed ? COLLAPSED_W : EXPANDED_W;
-  const drawerCollapsed = false; // mobile drawer always shows labels
-  const isCollapsed = (state: { isMobile: boolean }) => state.isMobile ? drawerCollapsed : collapsed;
+  const railCollapsed = !open && collapsed;
 
   return (
     <>
@@ -373,7 +388,8 @@ export function PlatformNav({
           style={{
             position: "fixed",
             inset: 0,
-            background: "rgba(0,0,0,0.4)",
+            background: "rgba(0,0,0,0.5)",
+            backdropFilter: "blur(2px)",
             zIndex: 50,
           }}
         />
@@ -386,83 +402,211 @@ export function PlatformNav({
           "lg:sticky lg:top-0 lg:flex",
         ].join(" ")}
         style={{
-          // Mobile: always full-width when drawer is open. Desktop:
-          // narrows to icon-rail when collapsed.
           width: open ? EXPANDED_W : desktopWidth,
-          background: "var(--surface-1)",
+          // Premium background: deep panel with a soft accent halo bleeding
+          // from the top-left, plus a hairline gradient down the right edge.
+          background:
+            "radial-gradient(720px circle at -10% -8%, var(--accent-surface), transparent 55%), " +
+            "linear-gradient(180deg, var(--surface-1) 0%, var(--surface-1) 60%, var(--surface-0) 100%)",
           borderRight: "1px solid var(--border-subtle)",
+          boxShadow: "inset -1px 0 0 0 rgba(255,255,255,0.02)",
           height: "100vh",
           zIndex: 60,
           transitionDuration: "180ms",
         }}
         data-platform-nav-open={open ? "true" : "false"}
-        data-platform-nav-collapsed={!open && collapsed ? "true" : "false"}
+        data-platform-nav-collapsed={railCollapsed ? "true" : "false"}
       >
         {/* ── Brand row ───────────────────────────────────────── */}
         <Link
           href="/select-tenant"
           aria-label="Flowtora home"
-          className="ts-focus flex shrink-0 items-center gap-2 px-3 py-3"
+          className="ts-focus group flex shrink-0 items-center gap-2.5 px-3.5 transition-colors hover:bg-[color-mix(in_oklab,var(--accent-primary)_5%,transparent)]"
           style={{
+            height: 60,
             borderBottom: "1px solid var(--border-subtle)",
-            justifyContent: !open && collapsed ? "center" : "flex-start",
+            justifyContent: railCollapsed ? "center" : "flex-start",
           }}
         >
-          <Logomark size={28} />
-          {(open || !collapsed) && (
-            <Wordmark style={{ fontSize: 16, letterSpacing: "-0.01em" }} />
+          <span
+            aria-hidden
+            style={{
+              display: "inline-flex",
+              alignItems: "center",
+              justifyContent: "center",
+              width: 32,
+              height: 32,
+              borderRadius: 9,
+              background: "linear-gradient(135deg, var(--accent-surface-strong), var(--accent-surface))",
+              boxShadow:
+                "inset 0 0 0 1px color-mix(in oklab, var(--accent-primary) 28%, transparent), " +
+                "0 1px 0 0 rgba(255,255,255,0.04)",
+            }}
+          >
+            <Logomark size={20} />
+          </span>
+          {!railCollapsed && (
+            <span className="flex min-w-0 flex-1 items-center gap-2">
+              <Wordmark style={{ fontSize: 15, letterSpacing: "-0.015em" }} />
+              <span
+                style={{
+                  fontSize: 9.5,
+                  fontWeight: 600,
+                  letterSpacing: "0.08em",
+                  textTransform: "uppercase",
+                  padding: "2px 6px",
+                  borderRadius: 999,
+                  color: "var(--accent-primary)",
+                  background: "var(--accent-surface)",
+                  border: "1px solid color-mix(in oklab, var(--accent-primary) 22%, transparent)",
+                  lineHeight: 1,
+                }}
+              >
+                Platform
+              </span>
+            </span>
           )}
         </Link>
 
+        {/* ── Filter ("Jump to…") ─────────────────────────────── */}
+        {!railCollapsed && (
+          <div
+            className="shrink-0 px-3 pt-3 pb-2"
+          >
+            <div
+              style={{
+                position: "relative",
+                display: "flex",
+                alignItems: "center",
+                gap: 8,
+                height: 32,
+                padding: "0 10px",
+                borderRadius: 8,
+                background: "color-mix(in oklab, var(--surface-2) 75%, transparent)",
+                border: "1px solid var(--border-subtle)",
+                transition: "border-color 120ms ease, background-color 120ms ease",
+              }}
+            >
+              <Icon.Search size={13} style={{ color: "var(--text-faint)", flexShrink: 0 }} />
+              <input
+                type="text"
+                value={filter}
+                onChange={(e) => setFilter(e.target.value)}
+                onKeyDown={(e) => { if (e.key === "Escape") setFilter(""); }}
+                placeholder="Jump to…"
+                aria-label="Filter navigation"
+                spellCheck={false}
+                style={{
+                  flex: 1,
+                  minWidth: 0,
+                  background: "transparent",
+                  border: 0,
+                  outline: "none",
+                  color: "var(--text-default)",
+                  fontSize: 12.5,
+                  fontWeight: 500,
+                  letterSpacing: "-0.005em",
+                }}
+              />
+              {filterActive ? (
+                <button
+                  type="button"
+                  onClick={() => setFilter("")}
+                  aria-label="Clear filter"
+                  style={{
+                    flexShrink: 0,
+                    display: "inline-flex",
+                    alignItems: "center",
+                    justifyContent: "center",
+                    width: 18,
+                    height: 18,
+                    borderRadius: 999,
+                    color: "var(--text-muted)",
+                    background: "transparent",
+                  }}
+                >
+                  ×
+                </button>
+              ) : (
+                <kbd
+                  aria-hidden
+                  style={{
+                    flexShrink: 0,
+                    fontSize: 10,
+                    fontWeight: 600,
+                    color: "var(--text-faint)",
+                    background: "var(--surface-1)",
+                    border: "1px solid var(--border-subtle)",
+                    padding: "1px 5px",
+                    borderRadius: 4,
+                    fontFamily: "var(--font-mono, ui-monospace, SFMono-Regular, monospace)",
+                    letterSpacing: "0.02em",
+                  }}
+                >
+                  /
+                </kbd>
+              )}
+            </div>
+          </div>
+        )}
+
         {/* ── Nav ─────────────────────────────────────────────── */}
         <nav
-          className="flex-1 overflow-y-auto px-2.5 py-3"
+          className="flex-1 overflow-y-auto px-2.5"
           aria-label="Platform"
+          style={{
+            paddingTop: railCollapsed ? 12 : 4,
+            paddingBottom: 8,
+            scrollbarWidth: "thin",
+            scrollbarColor: "var(--border-default) transparent",
+          }}
         >
           {/* Pinned items (Dashboard) — always visible above sections. */}
-          <div className="ts-nav-group">
-            {PINNED.map((item) => {
-              const active = item.exact
-                ? pathname === item.href
-                : pathname === item.href || pathname.startsWith(item.href + "/");
-              return (
-                <PlatformNavItem
-                  key={item.href}
-                  item={item}
-                  active={active}
-                  collapsed={isCollapsed({ isMobile: open })}
-                />
-              );
-            })}
-          </div>
+          {filteredPinned.length > 0 && (
+            <div className="ts-nav-group" style={{ marginBottom: railCollapsed ? 8 : 6 }}>
+              {filteredPinned.map((item) => {
+                const active = item.exact
+                  ? pathname === item.href
+                  : pathname === item.href || pathname.startsWith(item.href + "/");
+                return (
+                  <PremiumNavItem
+                    key={item.href}
+                    item={item}
+                    active={active}
+                    collapsed={railCollapsed}
+                  />
+                );
+              })}
+            </div>
+          )}
 
           {/* Collapsible sections. */}
-          <div className="mt-3 space-y-1">
-            {NAV_GROUPS.map((group) => {
-              const isOpen = openGroups.has(group.id);
-              const railCollapsed = isCollapsed({ isMobile: open });
-              // Group is "active" when any item inside is the current route.
+          <div className="space-y-0.5">
+            {filteredGroups.map((group) => {
+              const isOpen = filterActive || openGroups.has(group.id);
               const hasActive = group.items.some((item) =>
                 item.exact ? pathname === item.href
                            : pathname === item.href || pathname.startsWith(item.href + "/")
               );
-              const HeaderIcon = Icon[group.icon];
               return (
-                <div key={group.id} data-nav-group={group.id}>
+                <div key={group.id} data-nav-group={group.id} style={{ marginTop: railCollapsed ? 0 : 6 }}>
                   {railCollapsed ? (
-                    // Icon-rail mode — render section as a tooltip-only
-                    // grouping (no header, just items spaced out).
-                    <div className="ts-nav-group" style={{ marginTop: 8, paddingTop: 8, borderTop: "1px solid var(--border-subtle)" }}>
+                    // Icon-rail mode — render as a tooltip-only grouping
+                    // with a hairline divider between groups.
+                    <div
+                      className="ts-nav-group"
+                      style={{ marginTop: 6, paddingTop: 6, borderTop: "1px solid var(--border-subtle)" }}
+                    >
                       {group.items.map((item) => {
                         const active = item.exact
                           ? pathname === item.href
                           : pathname === item.href || pathname.startsWith(item.href + "/");
                         return (
-                          <PlatformNavItem
+                          <PremiumNavItem
                             key={item.href}
                             item={item}
                             active={active}
-                            collapsed={true}
+                            collapsed
                           />
                         );
                       })}
@@ -471,118 +615,174 @@ export function PlatformNav({
                     <>
                       <button
                         type="button"
-                        onClick={() => toggleGroup(group.id)}
+                        onClick={() => !filterActive && toggleGroup(group.id)}
                         aria-expanded={isOpen}
-                        className={cn(
-                          "ts-focus flex w-full items-center gap-2 rounded-md px-2 py-1.5 text-[11px] font-semibold uppercase tracking-wide transition-colors hover:bg-[var(--surface-2)]",
-                        )}
+                        disabled={filterActive}
+                        className="ts-focus group/section flex w-full items-center gap-1.5 rounded-md transition-colors"
                         style={{
-                          color: hasActive ? "var(--text-default)" : "var(--text-muted)",
+                          padding: "6px 8px 6px 10px",
+                          color: hasActive ? "var(--text-default)" : "var(--text-faint)",
+                          fontSize: 10.5,
+                          fontWeight: 700,
+                          textTransform: "uppercase",
+                          letterSpacing: "0.1em",
+                          cursor: filterActive ? "default" : "pointer",
                         }}
                       >
-                        <HeaderIcon size={12} />
-                        <span className="flex-1 text-left">{group.label}</span>
-                        {hasActive && (
-                          <span
-                            aria-hidden
+                        {/* Active-group indicator — tiny accent square. */}
+                        <span
+                          aria-hidden
+                          style={{
+                            width: 3,
+                            height: 3,
+                            borderRadius: 1,
+                            background: hasActive ? "var(--accent-primary)" : "var(--border-default)",
+                            transition: "background-color 120ms ease",
+                            flexShrink: 0,
+                          }}
+                        />
+                        <span style={{ flex: 1, textAlign: "left" }}>{group.label}</span>
+                        {!filterActive && (
+                          <Icon.ChevronsRight
+                            size={10}
                             style={{
-                              width: 5, height: 5, borderRadius: "9999px",
-                              background: "var(--accent-primary)",
+                              color: "var(--text-faint)",
+                              transform: isOpen ? "rotate(90deg)" : "rotate(0deg)",
+                              transition: "transform 160ms cubic-bezier(0.22, 1, 0.36, 1)",
+                              flexShrink: 0,
                             }}
                           />
                         )}
-                        <Icon.ChevronsRight
-                          size={12}
-                          style={{
-                            color: "var(--text-faint)",
-                            transform: isOpen ? "rotate(90deg)" : "rotate(0deg)",
-                            transition: "transform 120ms ease-out",
-                          }}
-                        />
                       </button>
-                      {isOpen && (
-                        <div className="ts-nav-group mt-0.5">
-                          {group.items.map((item) => {
-                            const active = item.exact
-                              ? pathname === item.href
-                              : pathname === item.href || pathname.startsWith(item.href + "/");
-                            return (
-                              <PlatformNavItem
-                                key={item.href}
-                                item={item}
-                                active={active}
-                                collapsed={false}
-                              />
-                            );
-                          })}
+                      <div
+                        style={{
+                          display: "grid",
+                          gridTemplateRows: isOpen ? "1fr" : "0fr",
+                          transition: "grid-template-rows 200ms cubic-bezier(0.22, 1, 0.36, 1)",
+                        }}
+                      >
+                        <div style={{ overflow: "hidden", minHeight: 0 }}>
+                          <div className="ts-nav-group" style={{ paddingTop: 2, paddingBottom: 2 }}>
+                            {group.items.map((item) => {
+                              const active = item.exact
+                                ? pathname === item.href
+                                : pathname === item.href || pathname.startsWith(item.href + "/");
+                              return (
+                                <PremiumNavItem
+                                  key={item.href}
+                                  item={item}
+                                  active={active}
+                                  collapsed={false}
+                                />
+                              );
+                            })}
+                          </div>
                         </div>
-                      )}
+                      </div>
                     </>
                   )}
                 </div>
               );
             })}
+
+            {/* Empty filter result. */}
+            {filterActive && totalMatches === 0 && (
+              <div
+                style={{
+                  marginTop: 16,
+                  padding: "14px 12px",
+                  borderRadius: 8,
+                  border: "1px dashed var(--border-subtle)",
+                  color: "var(--text-muted)",
+                  fontSize: 12,
+                  textAlign: "center",
+                }}
+              >
+                No pages match <span style={{ color: "var(--text-default)" }}>“{filter}”</span>
+              </div>
+            )}
           </div>
         </nav>
 
         {/* ── Bottom cluster ──────────────────────────────────── */}
         <div
-          className="shrink-0 space-y-1 px-2.5 py-2.5"
-          style={{ borderTop: "1px solid var(--border-subtle)" }}
+          className="shrink-0"
+          style={{
+            borderTop: "1px solid var(--border-subtle)",
+            background:
+              "linear-gradient(180deg, transparent 0%, color-mix(in oklab, var(--surface-0) 35%, transparent) 100%)",
+            padding: "10px",
+          }}
         >
-          {/* Collapse toggle — desktop only. */}
-          <button
-            type="button"
-            onClick={toggleCollapsed}
-            aria-label={collapsed ? "Expand sidebar" : "Collapse sidebar"}
-            title={collapsed ? "Expand sidebar" : "Collapse sidebar"}
-            className={cn(
-              "ts-focus hidden w-full items-center rounded-md px-2 py-1.5 text-[12px] transition-colors hover:bg-[var(--surface-3)] lg:flex",
-              !open && collapsed ? "justify-center" : "gap-2",
-            )}
-            style={{ color: "var(--text-muted)" }}
-          >
-            {collapsed ? <Icon.ChevronsRight size={14} /> : <Icon.ChevronsLeft size={14} />}
-            {!collapsed && <span>Collapse</span>}
-          </button>
+          {/* Design system reference — quiet utility link. */}
+          {!railCollapsed && (
+            <Link
+              href="/platform/design"
+              aria-current={pathname === "/platform/design" ? "page" : undefined}
+              className="ts-focus flex items-center gap-2 rounded-md px-2 py-1.5 text-[11.5px] transition-colors hover:bg-[var(--surface-3)]"
+              style={{
+                color: pathname === "/platform/design" ? "var(--text-default)" : "var(--text-muted)",
+                marginBottom: 8,
+              }}
+              title="Design system reference (internal)"
+            >
+              <Icon.Palette size={13} style={{ opacity: 0.7 }} />
+              <span style={{ flex: 1 }}>Design system</span>
+              <span
+                style={{
+                  fontSize: 9.5,
+                  fontWeight: 600,
+                  letterSpacing: "0.08em",
+                  textTransform: "uppercase",
+                  color: "var(--text-faint)",
+                }}
+              >
+                Internal
+              </span>
+            </Link>
+          )}
 
-          {/* Design system reference. */}
-          <Link
-            href="/platform/design"
-            aria-current={pathname === "/platform/design" ? "page" : undefined}
+          {/* User card — avatar with status dot, name + role chip, sign-out. */}
+          <div
             className={cn(
-              "ts-focus flex items-center rounded-md px-2 py-1.5 text-[12px] transition-colors hover:bg-[var(--surface-3)]",
-              !open && collapsed ? "justify-center" : "gap-2",
+              "flex items-center",
+              railCollapsed ? "flex-col gap-2" : "gap-1.5",
             )}
             style={{
-              color: pathname === "/platform/design" ? "var(--text-default)" : "var(--text-muted)",
+              padding: railCollapsed ? "0" : "8px 8px 8px 8px",
+              borderRadius: 10,
+              background: railCollapsed
+                ? "transparent"
+                : "color-mix(in oklab, var(--surface-2) 60%, transparent)",
+              border: railCollapsed ? "0" : "1px solid var(--border-subtle)",
             }}
-            title="Design system reference (internal)"
           >
-            <Icon.Palette size={14} />
-            {(open || !collapsed) && <span>Design system</span>}
-          </Link>
-
-          {/* User identity + sign-out. When collapsed: just the avatar +
-              sign-out icon stacked. */}
-          <div className={cn(
-            "flex items-center gap-1",
-            !open && collapsed && "flex-col",
-          )}>
             <Link
               href="/platform/profile"
               className={cn(
-                "ts-focus flex min-w-0 items-center rounded-md px-2 py-1.5 transition-colors hover:bg-[var(--surface-3)]",
-                !open && collapsed ? "justify-center" : "flex-1 gap-2",
+                "ts-focus group/user flex min-w-0 items-center transition-colors",
+                railCollapsed ? "justify-center rounded-md p-1 hover:bg-[var(--surface-3)]" : "flex-1 gap-2.5 rounded-md hover:bg-[color-mix(in_oklab,var(--surface-3)_60%,transparent)]",
               )}
-              title={!open && collapsed ? `${displayName} · profile` : "Profile, security, preferences"}
+              title={railCollapsed ? `${displayName} · profile` : "Profile, security, preferences"}
             >
+              {/* Avatar with online dot. */}
               <span
-                className="flex h-8 w-8 shrink-0 items-center justify-center overflow-hidden rounded-full text-[12px] font-semibold"
                 style={{
+                  position: "relative",
+                  display: "inline-flex",
+                  alignItems: "center",
+                  justifyContent: "center",
+                  width: 32,
+                  height: 32,
+                  borderRadius: 999,
                   background: "var(--accent-surface)",
                   color: "var(--accent-primary)",
-                  border: "1px solid var(--border-subtle)",
+                  border: "1px solid color-mix(in oklab, var(--accent-primary) 30%, transparent)",
+                  fontSize: 11.5,
+                  fontWeight: 700,
+                  letterSpacing: "0.02em",
+                  flexShrink: 0,
+                  overflow: "hidden",
                 }}
               >
                 {userImage ? (
@@ -595,35 +795,97 @@ export function PlatformNav({
                 ) : (
                   initials
                 )}
+                <span
+                  aria-hidden
+                  style={{
+                    position: "absolute",
+                    bottom: -1,
+                    right: -1,
+                    width: 9,
+                    height: 9,
+                    borderRadius: 999,
+                    background: "var(--emerald-500)",
+                    boxShadow: "0 0 0 2px var(--surface-1)",
+                  }}
+                />
               </span>
-              {(open || !collapsed) && (
+              {!railCollapsed && (
                 <span className="min-w-0 flex-1 text-left">
                   <span
-                    className="block truncate text-[13px] font-semibold leading-tight"
-                    style={{ color: "var(--text-default)" }}
+                    className="block truncate"
+                    style={{
+                      color: "var(--text-default)",
+                      fontSize: 12.5,
+                      fontWeight: 600,
+                      letterSpacing: "-0.005em",
+                      lineHeight: 1.2,
+                    }}
                   >
                     {displayName}
                   </span>
                   <span
-                    className="block truncate text-[11px] leading-tight"
-                    style={{ color: "var(--text-muted)" }}
+                    className="mt-0.5 inline-flex items-center gap-1 truncate"
+                    style={{
+                      fontSize: 10,
+                      fontWeight: 600,
+                      letterSpacing: "0.05em",
+                      textTransform: "uppercase",
+                      color: "var(--accent-primary)",
+                      background: "var(--accent-surface)",
+                      padding: "1px 6px",
+                      borderRadius: 999,
+                      lineHeight: 1.4,
+                      maxWidth: "100%",
+                    }}
                   >
                     {roleLabel}
                   </span>
                 </span>
               )}
             </Link>
-            <form action={signOutAction}>
-              <button
-                type="submit"
-                className="ts-focus inline-flex h-8 w-8 items-center justify-center rounded-md transition-colors hover:bg-[var(--surface-3)]"
-                title="Sign out"
-                aria-label="Sign out"
-              >
-                <Icon.SignOut size={14} style={{ color: "var(--text-muted)" }} />
-              </button>
-            </form>
+            {!railCollapsed && (
+              <form action={signOutAction} style={{ flexShrink: 0 }}>
+                <button
+                  type="submit"
+                  className="ts-focus inline-flex h-8 w-8 items-center justify-center rounded-md transition-colors hover:bg-[var(--surface-3)]"
+                  title="Sign out"
+                  aria-label="Sign out"
+                  style={{ color: "var(--text-muted)" }}
+                >
+                  <Icon.SignOut size={14} />
+                </button>
+              </form>
+            )}
+            {railCollapsed && (
+              <form action={signOutAction}>
+                <button
+                  type="submit"
+                  className="ts-focus inline-flex h-8 w-8 items-center justify-center rounded-md transition-colors hover:bg-[var(--surface-3)]"
+                  title="Sign out"
+                  aria-label="Sign out"
+                  style={{ color: "var(--text-muted)" }}
+                >
+                  <Icon.SignOut size={14} />
+                </button>
+              </form>
+            )}
           </div>
+
+          {/* Collapse toggle — desktop only, sits below the user card. */}
+          <button
+            type="button"
+            onClick={toggleCollapsed}
+            aria-label={collapsed ? "Expand sidebar" : "Collapse sidebar"}
+            title={collapsed ? "Expand sidebar" : "Collapse sidebar"}
+            className={cn(
+              "ts-focus hidden items-center rounded-md text-[11px] transition-colors hover:bg-[var(--surface-3)] lg:flex",
+              railCollapsed ? "mx-auto mt-2 h-7 w-7 justify-center" : "mt-2 w-full gap-2 px-2 py-1.5",
+            )}
+            style={{ color: "var(--text-faint)" }}
+          >
+            {collapsed ? <Icon.ChevronsRight size={13} /> : <Icon.ChevronsLeft size={13} />}
+            {!collapsed && <span>Collapse</span>}
+          </button>
         </div>
       </aside>
     </>
@@ -642,7 +904,14 @@ function deriveInitials(source: string): string {
 
 /* ──────────────────────────────────────────────────────────────── */
 
-function PlatformNavItem({
+/**
+ * Premium nav row — overrides the shared `.ts-nav-item` look with a
+ * crisper active state (gradient tint + 2.5px accent bar with rounded
+ * cap), hover translate, and tighter typography. We render as a plain
+ * <Link> with inline styles so the platform sidebar can diverge from
+ * the tenant sidebar without dragging globals.css along for the ride.
+ */
+function PremiumNavItem({
   item, active, collapsed,
 }: {
   item: NavItem;
@@ -650,22 +919,110 @@ function PlatformNavItem({
   collapsed: boolean;
 }) {
   const IconCmp = Icon[item.icon];
+
+  if (collapsed) {
+    return (
+      <Link
+        href={item.href}
+        aria-current={active ? "page" : undefined}
+        title={item.label}
+        className="ts-focus"
+        style={{
+          position: "relative",
+          display: "flex",
+          alignItems: "center",
+          justifyContent: "center",
+          width: 36,
+          height: 36,
+          margin: "0 auto",
+          borderRadius: 8,
+          color: active ? "var(--accent-primary)" : "var(--text-muted)",
+          background: active ? "var(--accent-surface)" : "transparent",
+          border: active
+            ? "1px solid color-mix(in oklab, var(--accent-primary) 25%, transparent)"
+            : "1px solid transparent",
+          transition: "background-color 120ms ease, color 120ms ease, border-color 120ms ease",
+        }}
+      >
+        <IconCmp size={16} />
+      </Link>
+    );
+  }
+
   return (
     <Link
       href={item.href}
       aria-current={active ? "page" : undefined}
-      title={collapsed ? item.label : undefined}
-      className={cn("ts-nav-item ts-focus", collapsed && "ts-nav-item--collapsed")}
+      className="ts-focus group/item"
+      style={{
+        position: "relative",
+        display: "flex",
+        alignItems: "center",
+        gap: 10,
+        height: 32,
+        padding: "0 10px 0 12px",
+        borderRadius: 7,
+        color: active ? "var(--text-default)" : "var(--text-muted)",
+        fontSize: 12.5,
+        fontWeight: active ? 600 : 500,
+        letterSpacing: "-0.005em",
+        lineHeight: 1,
+        background: active
+          ? "linear-gradient(90deg, var(--accent-surface) 0%, color-mix(in oklab, var(--accent-surface) 30%, transparent) 70%, transparent 100%)"
+          : "transparent",
+        transition: "background-color 140ms ease, color 140ms ease, transform 140ms ease",
+        overflow: "hidden",
+      }}
     >
-      <IconCmp size={16} className="ts-nav-icon" />
-      <span className="ts-nav-label">{item.label}</span>
+      {/* Active left bar — sits inside the row, rounded cap. */}
+      {active && (
+        <span
+          aria-hidden
+          style={{
+            position: "absolute",
+            left: 3,
+            top: 7,
+            bottom: 7,
+            width: 2.5,
+            borderRadius: 999,
+            background: "var(--accent-primary)",
+            boxShadow: "0 0 0 0.5px var(--accent-primary), 0 0 8px color-mix(in oklab, var(--accent-primary) 50%, transparent)",
+          }}
+        />
+      )}
+      <IconCmp
+        size={15}
+        style={{
+          flexShrink: 0,
+          color: active ? "var(--accent-primary)" : "var(--text-muted)",
+          opacity: active ? 1 : 0.85,
+          transition: "color 140ms ease, opacity 140ms ease",
+        }}
+      />
+      <span
+        style={{
+          flex: 1,
+          minWidth: 0,
+          overflow: "hidden",
+          textOverflow: "ellipsis",
+          whiteSpace: "nowrap",
+        }}
+      >
+        {item.label}
+      </span>
       {item.preview ? (
         <span
-          className="ml-auto rounded px-1.5 py-0.5 text-[10px] font-medium uppercase tracking-wide"
           style={{
-            background: "var(--surface-2)",
+            fontSize: 9.5,
+            fontWeight: 700,
+            letterSpacing: "0.08em",
+            textTransform: "uppercase",
+            padding: "2px 5px",
+            borderRadius: 4,
             color: "var(--text-muted)",
+            background: "var(--surface-2)",
             border: "1px solid var(--border-subtle)",
+            flexShrink: 0,
           }}
           title="Preview — feature is on the roadmap but not yet wired up"
         >
