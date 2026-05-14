@@ -1159,6 +1159,18 @@ enum ThemePreference {
   DARK
 }
 
+// Page 72 — admin UI density preference.
+enum AdminDensity {
+  COMFORTABLE
+  COMPACT
+}
+
+// Page 72 — sidebar default state.
+enum SidebarDefault {
+  EXPANDED
+  COLLAPSED
+}
+
 enum Plan {
   STARTER
   GROWTH
@@ -1264,6 +1276,24 @@ model User {
   // UI preference; AUTO follows OS prefers-color-scheme.
   themePreference ThemePreference @default(AUTO)
 
+  // ── Page 72 — My Profile additions ──
+  firstName       String?
+  lastName        String?
+  pronouns        String?
+  title           String?
+  department      String?
+  slackHandle     String?
+  secondaryEmail  String?
+  dateFormat      String? // e.g. "MM/DD/YYYY"
+  timeFormat      String? // e.g. "h:mm A" or "HH:mm"
+  // Preferences
+  density         AdminDensity @default(COMFORTABLE)
+  sidebarDefault  SidebarDefault @default(EXPANDED)
+  defaultLanding  String?       // e.g. "/platform" or "/platform/tenants"
+  autoRefreshSec  Int @default(0) // 0 = off
+  currencyDisplay String? // ISO 4217 to display amounts in
+  betaFeaturesOptIn Boolean @default(false)
+
   // Page 9 — soft deactivation. When set, sign-in is refused and the
   // row drops off the default user-directory view. `deactivatedBy`
   // captures the admin user who flipped the switch; `deactivatedReason`
@@ -1314,6 +1344,12 @@ model User {
   palettePins            PalettePin[]
   savedViews             SavedView[]
   portalMessageReplies   PortalMessage[]          @relation("PortalMessageSender")
+
+  // Pages 73-75 — personal admin preferences + tokens.
+  adminNotificationPrefs    AdminNotificationPreference[]    @relation("AdminNotifPreferenceUser")
+  adminNotificationDelivery AdminNotificationDeliverySetup?  @relation("AdminNotifDeliveryUser")
+  personalApiTokens         PersonalApiToken[]               @relation("PersonalApiTokenUser")
+  keyboardShortcutOverrides KeyboardShortcutOverride[]       @relation("KeyboardShortcutUser")
 
   // Phase 1 — temporary platform-role elevation. A staff member can hold
   // a higher role for a bounded window (incident, on-call, vacation cover)
@@ -16551,4 +16587,151 @@ model LegalSettings {
   updatedById String?
   updatedAt   DateTime @updatedAt
   createdAt   DateTime @default(now())
+}
+
+// ────────────────────────────────────────────────────────────
+// Page 73 — My Notifications (per-admin preferences matrix).
+// ────────────────────────────────────────────────────────────
+
+enum AdminNotificationCategory {
+  TENANTS
+  BILLING
+  SUPPORT
+  SECURITY
+  SYSTEM
+  MARKETING
+  PERSONAL
+}
+
+enum AdminNotificationChannel {
+  EMAIL
+  IN_APP
+  SLACK
+  SMS
+  PUSH
+}
+
+enum AdminNotificationFrequency {
+  REAL_TIME
+  HOURLY_DIGEST
+  DAILY_DIGEST
+  WEEKLY_DIGEST
+  OFF
+}
+
+model AdminNotificationPreference {
+  id String @id @default(cuid())
+
+  userId   String
+  user     User @relation("AdminNotifPreferenceUser", fields: [userId], references: [id], onDelete: Cascade)
+  category AdminNotificationCategory
+  channel  AdminNotificationChannel
+  /** Off / Real-time / Hourly / Daily / Weekly. */
+  frequency AdminNotificationFrequency @default(REAL_TIME)
+
+  updatedAt DateTime @updatedAt
+  createdAt DateTime @default(now())
+
+  @@unique([userId, category, channel])
+  @@index([userId])
+}
+
+model AdminNotificationDeliverySetup {
+  id String @id @default(cuid())
+
+  userId String @unique
+  user   User @relation("AdminNotifDeliveryUser", fields: [userId], references: [id], onDelete: Cascade)
+
+  // Quiet hours stored as per-weekday JSON: { mon: { startHour, endHour }, ... }
+  quietHoursJson Json?
+  slackWorkspace String?
+  slackChannel   String?
+  smsPhone       String?
+  smsVerifiedAt  DateTime?
+  emailDigestSchedule String? // "08:00" Mon/Wed/Fri etc.
+  /** When set, all notifications are muted until this timestamp. */
+  snoozeUntil    DateTime?
+
+  updatedAt DateTime @updatedAt
+  createdAt DateTime @default(now())
+}
+
+// ────────────────────────────────────────────────────────────
+// Page 74 — Personal API tokens (admin-scope).
+// ────────────────────────────────────────────────────────────
+
+enum PersonalApiTokenStatus {
+  ACTIVE
+  EXPIRED
+  REVOKED
+}
+
+model PersonalApiToken {
+  id String @id @default(cuid())
+
+  userId String
+  user   User @relation("PersonalApiTokenUser", fields: [userId], references: [id], onDelete: Cascade)
+
+  /** Human label. */
+  name        String
+  description String?
+  /** First 8 characters displayed in lists. Full secret only revealed once. */
+  prefix      String
+  /** SHA-256 of the full token, used for auth checks. */
+  hash        String  @unique
+  scopes      String[] @default([])
+  ipAllowlist String[] @default([])
+
+  status      PersonalApiTokenStatus @default(ACTIVE)
+  expiresAt   DateTime?
+  lastUsedAt  DateTime?
+  /** Cached call count for the past 30 days — recomputed nightly. */
+  callsLast30d Int @default(0)
+  revokedAt   DateTime?
+  revokedReason String?
+
+  createdAt DateTime @default(now())
+  updatedAt DateTime @updatedAt
+
+  usageEvents PersonalApiTokenUsageEvent[]
+
+  @@index([userId, status])
+}
+
+model PersonalApiTokenUsageEvent {
+  id String @id @default(cuid())
+
+  tokenId  String
+  token    PersonalApiToken @relation(fields: [tokenId], references: [id], onDelete: Cascade)
+
+  endpoint   String
+  method     String
+  statusCode Int
+  ipAddress  String?
+  userAgent  String?
+
+  createdAt DateTime @default(now())
+
+  @@index([tokenId, createdAt])
+}
+
+// ────────────────────────────────────────────────────────────
+// Page 75 — Keyboard Shortcuts (per-user overrides).
+// ────────────────────────────────────────────────────────────
+
+model KeyboardShortcutOverride {
+  id String @id @default(cuid())
+
+  userId String
+  user   User @relation("KeyboardShortcutUser", fields: [userId], references: [id], onDelete: Cascade)
+
+  /** Slug like "navigation.command-palette", matches the static registry. */
+  actionKey String
+  /** The custom keybinding the user wants — e.g. "Cmd+Shift+P". */
+  binding   String
+
+  createdAt DateTime @default(now())
+  updatedAt DateTime @updatedAt
+
+  @@unique([userId, actionKey])
 }

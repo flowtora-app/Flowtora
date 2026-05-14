@@ -113,6 +113,11 @@ const NAV_ITEMS: NavItem[] = [
   { href: "/platform/settings/webhooks",            label: "Webhooks Catalog",     icon: "Pipeline" },
   { href: "/platform/settings/domains",             label: "Domains",              icon: "Globe" },
   { href: "/platform/settings/legal",               label: "Legal Documents",      icon: "Scale" },
+  // Pages 72-75 — Personal admin pages.
+  { href: "/platform/me/profile",                   label: "My Profile",           icon: "User" },
+  { href: "/platform/me/notifications",             label: "My Notifications",     icon: "Megaphone" },
+  { href: "/platform/me/api-keys",                  label: "My API Keys",          icon: "Shield" },
+  { href: "/platform/me/shortcuts",                 label: "Keyboard Shortcuts",   icon: "Sparkles" },
 ];
 
 const COLLAPSE_KEY = "flowtora.platform-nav.collapsed";
