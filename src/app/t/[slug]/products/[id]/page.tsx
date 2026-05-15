@@ -62,46 +62,165 @@ export default async function ProductDetailPage({
   const toggleActive = toggleProductActive.bind(null, slug, product.id);
 
   return (
-    <div className="space-y-6">
-      <div className="text-sm">
-        <Link href={`/t/${slug}/products`} className="underline" style={{ color: "var(--muted)" }}>
+    <div className="space-y-5">
+      <div style={{ fontSize: 12 }}>
+        <Link
+          href={`/t/${slug}/products`}
+          className="ts-focus inline-flex items-center gap-1 transition-colors hover:text-[var(--text-default)]"
+          style={{ color: "var(--text-muted)" }}
+        >
           ← Products
         </Link>
       </div>
 
-      <div className="flex items-start justify-between">
-        <div>
-          <div className="flex items-center gap-2">
-            <h1 className="text-2xl font-semibold">{product.name}</h1>
+      <header
+        className="relative overflow-hidden rounded-2xl"
+        style={{
+          padding: "18px 22px",
+          background:
+            "radial-gradient(720px circle at -8% -40%, var(--accent-surface), transparent 55%), " +
+            "linear-gradient(180deg, color-mix(in oklab, var(--surface-1) 92%, white 8%) 0%, var(--surface-1) 100%)",
+          border: "1px solid var(--border-subtle)",
+          boxShadow:
+            "inset 0 1px 0 0 color-mix(in oklab, white 4%, transparent), " +
+            "0 1px 2px 0 rgba(0,0,0,0.18)",
+        }}
+      >
+        <div className="flex flex-wrap items-start justify-between gap-4">
+          <div className="flex min-w-0 flex-1 items-start gap-3.5">
+            {/* Product icon tile. */}
             <span
-              className="inline-flex items-center rounded-full px-2 py-0.5 text-xs"
+              aria-hidden
               style={{
-                background: "var(--surface-2)",
-                color: "var(--text-muted)",
-                border: "1px solid var(--border-subtle)",
+                display: "inline-flex",
+                alignItems: "center",
+                justifyContent: "center",
+                width: 48,
+                height: 48,
+                borderRadius: 12,
+                background:
+                  "linear-gradient(135deg, var(--accent-surface-strong), var(--accent-surface))",
+                color: "var(--accent-primary)",
+                border:
+                  "1px solid color-mix(in oklab, var(--accent-primary) 30%, transparent)",
+                flexShrink: 0,
+                boxShadow:
+                  "inset 0 1px 0 0 color-mix(in oklab, white 6%, transparent)",
               }}
-              title={kindMeta(product.kind).hint}
             >
-              {kindMeta(product.kind).label}
+              <svg width="22" height="22" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="1.5">
+                <path d="M3 7l9-4 9 4-9 4-9-4z" />
+                <path d="M3 7v10l9 4 9-4V7M12 11v10" />
+              </svg>
             </span>
+            <div className="min-w-0 flex-1">
+              <div className="flex flex-wrap items-center gap-2">
+                <h1
+                  className="font-semibold"
+                  style={{
+                    color: "var(--text-default)",
+                    fontSize: 22,
+                    letterSpacing: "-0.018em",
+                    lineHeight: 1.2,
+                  }}
+                >
+                  {product.name}
+                </h1>
+                <span
+                  style={{
+                    fontSize: 9.5,
+                    fontWeight: 700,
+                    letterSpacing: "0.06em",
+                    textTransform: "uppercase",
+                    padding: "2px 7px",
+                    borderRadius: 999,
+                    color: "var(--accent-primary)",
+                    background: "var(--accent-surface)",
+                    border:
+                      "1px solid color-mix(in oklab, var(--accent-primary) 22%, transparent)",
+                    lineHeight: 1,
+                  }}
+                  title={kindMeta(product.kind).hint}
+                >
+                  {kindMeta(product.kind).label}
+                </span>
+                <span
+                  style={{
+                    display: "inline-flex",
+                    alignItems: "center",
+                    gap: 5,
+                    fontSize: 10,
+                    fontWeight: 700,
+                    letterSpacing: "0.04em",
+                    color: product.active
+                      ? "var(--emerald-500)"
+                      : "var(--text-muted)",
+                    background: product.active
+                      ? "color-mix(in oklab, var(--emerald-500) 14%, transparent)"
+                      : "var(--surface-2)",
+                    border: product.active
+                      ? "1px solid color-mix(in oklab, var(--emerald-500) 30%, transparent)"
+                      : "1px solid var(--border-subtle)",
+                    padding: "2px 7px",
+                    borderRadius: 999,
+                    textTransform: "uppercase",
+                    lineHeight: 1,
+                  }}
+                >
+                  <span
+                    aria-hidden
+                    style={{
+                      width: 5,
+                      height: 5,
+                      borderRadius: 999,
+                      background: product.active
+                        ? "var(--emerald-500)"
+                        : "var(--text-faint)",
+                    }}
+                  />
+                  {product.active ? "Active" : "Inactive"}
+                </span>
+              </div>
+              <div
+                className="mt-1.5 truncate"
+                style={{
+                  color: "var(--text-muted)",
+                  fontSize: 12.5,
+                  lineHeight: 1.4,
+                }}
+              >
+                {[product.sku, product.category]
+                  .filter(Boolean)
+                  .map((v, i, arr) => (
+                    <span key={i}>
+                      <span style={{ color: "var(--text-default)" }}>{v}</span>
+                      {i < arr.length - 1 && (
+                        <span style={{ color: "var(--text-faint)" }}> · </span>
+                      )}
+                    </span>
+                  ))}
+                {!product.sku && !product.category && (
+                  <span style={{ color: "var(--text-faint)" }}>
+                    No SKU or category set
+                  </span>
+                )}
+              </div>
+            </div>
           </div>
-          <div className="mt-1 text-sm" style={{ color: "var(--muted)" }}>
-            {[product.sku, product.category, humanize(product.active ? "ACTIVE" : "INACTIVE")].filter(Boolean).join(" · ")}
-          </div>
+          {canManage && (
+            <div className="flex items-center gap-2">
+              <form action={toggleActive}>
+                <Button type="submit" variant="secondary">
+                  {product.active ? "Deactivate" : "Activate"}
+                </Button>
+              </form>
+              <Link href={`/t/${slug}/products/${product.id}/edit`}>
+                <Button type="button">Edit</Button>
+              </Link>
+            </div>
+          )}
         </div>
-        {canManage && (
-          <div className="flex gap-2">
-            <form action={toggleActive}>
-              <Button type="submit" variant="secondary">
-                {product.active ? "Deactivate" : "Activate"}
-              </Button>
-            </form>
-            <Link href={`/t/${slug}/products/${product.id}/edit`}>
-              <Button type="button">Edit</Button>
-            </Link>
-          </div>
-        )}
-      </div>
+      </header>
 
       <div className="grid grid-cols-3 gap-4">
         <Card className="px-5 py-4">

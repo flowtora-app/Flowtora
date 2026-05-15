@@ -75,42 +75,136 @@ export default async function TenantSupportDetailPage({
   const rate  = rateSupportTicket.bind(null, slug, ticket.id);
 
   return (
-    <div className="mx-auto max-w-3xl space-y-6">
+    <div className="mx-auto max-w-3xl space-y-5">
       {/* ── Header ────────────────────────────────────────── */}
-      <div>
-        <div className="text-xs" style={{ color: "var(--text-muted)" }}>
-          <Link href={`/t/${slug}/support`} className="hover:underline">
-            Support
-          </Link>
-          <span className="mx-1.5">/</span>
-          <span className="font-mono">#{ticket.id.slice(0, 8)}</span>
-        </div>
-        <div className="mt-1 flex flex-wrap items-start justify-between gap-3">
-          <h1
-            className="flex items-center gap-3 text-2xl font-semibold tracking-tight"
-            style={{ color: "var(--text-default)" }}
+      <div style={{ fontSize: 12 }}>
+        <Link
+          href={`/t/${slug}/support`}
+          className="ts-focus inline-flex items-center gap-1 transition-colors hover:text-[var(--text-default)]"
+          style={{ color: "var(--text-muted)" }}
+        >
+          ← Support
+        </Link>
+        <span style={{ color: "var(--text-faint)", margin: "0 6px" }}>·</span>
+        <span
+          style={{
+            fontFamily: "var(--font-mono, ui-monospace, monospace)",
+            color: "var(--text-faint)",
+          }}
+        >
+          #{ticket.id.slice(0, 8)}
+        </span>
+      </div>
+
+      <header
+        className="relative overflow-hidden rounded-2xl"
+        style={{
+          padding: "18px 22px",
+          background:
+            "radial-gradient(720px circle at -8% -40%, var(--accent-surface), transparent 55%), " +
+            "linear-gradient(180deg, color-mix(in oklab, var(--surface-1) 92%, white 8%) 0%, var(--surface-1) 100%)",
+          border: "1px solid var(--border-subtle)",
+          boxShadow:
+            "inset 0 1px 0 0 color-mix(in oklab, white 4%, transparent), " +
+            "0 1px 2px 0 rgba(0,0,0,0.18)",
+        }}
+      >
+        <div className="flex flex-wrap items-start justify-between gap-4">
+          <div className="min-w-0 flex-1">
+            <div className="flex flex-wrap items-center gap-2">
+              {/* Priority dot. */}
+              <span
+                aria-hidden
+                style={{
+                  display: "inline-flex",
+                  alignItems: "center",
+                  justifyContent: "center",
+                  width: 24,
+                  height: 24,
+                  borderRadius: 7,
+                  background: `color-mix(in oklab, ${prio} 16%, transparent)`,
+                  border: `1px solid color-mix(in oklab, ${prio} 32%, transparent)`,
+                  flexShrink: 0,
+                }}
+                title={`Priority: ${ticket.priority}`}
+              >
+                <span
+                  style={{
+                    width: 8,
+                    height: 8,
+                    borderRadius: 999,
+                    background: prio,
+                    boxShadow: `0 0 0 1.5px color-mix(in oklab, ${prio} 25%, transparent)`,
+                  }}
+                />
+              </span>
+              <h1
+                className="font-semibold"
+                style={{
+                  color: "var(--text-default)",
+                  fontSize: 20,
+                  letterSpacing: "-0.018em",
+                  lineHeight: 1.25,
+                }}
+              >
+                {ticket.subject}
+              </h1>
+            </div>
+            <div
+              className="mt-2"
+              style={{
+                color: "var(--text-muted)",
+                fontSize: 12.5,
+                lineHeight: 1.4,
+              }}
+            >
+              <span style={{ color: "var(--text-default)", fontWeight: 500 }}>
+                {ticket.category.replace(/_/g, " ").toLowerCase()}
+              </span>
+              <span style={{ color: "var(--text-faint)" }}> · </span>
+              priority{" "}
+              <span style={{ color: "var(--text-default)" }}>
+                {ticket.priority.toLowerCase()}
+              </span>
+              <span style={{ color: "var(--text-faint)" }}> · </span>
+              opened{" "}
+              <span style={{ color: "var(--text-default)" }}>
+                {ticket.createdAt.toISOString().slice(0, 10)}
+              </span>
+            </div>
+          </div>
+          <span
+            style={{
+              display: "inline-flex",
+              alignItems: "center",
+              gap: 5,
+              fontSize: 10.5,
+              fontWeight: 700,
+              letterSpacing: "0.06em",
+              textTransform: "uppercase",
+              padding: "3px 9px",
+              borderRadius: 999,
+              color: status.fg,
+              background: `color-mix(in oklab, ${status.fg} 16%, transparent)`,
+              border: `1px solid color-mix(in oklab, ${status.fg} 32%, transparent)`,
+              lineHeight: 1,
+              whiteSpace: "nowrap",
+            }}
           >
             <span
               aria-hidden
-              className="inline-block h-2.5 w-2.5 rounded-full"
-              style={{ background: prio }}
-              title={`Priority: ${ticket.priority}`}
+              style={{
+                width: 5,
+                height: 5,
+                borderRadius: 999,
+                background: status.fg,
+                boxShadow: `0 0 0 1.5px color-mix(in oklab, ${status.fg} 25%, transparent)`,
+              }}
             />
-            {ticket.subject}
-          </h1>
-          <span
-            className="rounded-full px-2.5 py-0.5 text-xs font-semibold uppercase tracking-wide"
-            style={{ background: status.bg, color: status.fg, border: `1px solid ${status.fg}` }}
-          >
             {status.label}
           </span>
         </div>
-        <div className="mt-1 text-xs" style={{ color: "var(--text-muted)" }}>
-          {ticket.category.replace(/_/g, " ").toLowerCase()} ·
-          {" "}priority {ticket.priority.toLowerCase()} ·
-          {" "}opened {ticket.createdAt.toISOString().slice(0, 10)}
-        </div>
-      </div>
+      </header>
 
       {sp.error && (
         <div

@@ -62,40 +62,133 @@ export default async function VendorDetailPage({
   const deleteAction  = deleteVendor.bind(null, slug, vendor.id);
 
   return (
-    <div className="space-y-6">
-      <div className="mb-2 text-sm">
-        <Link href={`/t/${slug}/vendors`} className="underline" style={{ color: "var(--muted)" }}>
+    <div className="space-y-5">
+      <div style={{ fontSize: 12 }}>
+        <Link
+          href={`/t/${slug}/vendors`}
+          className="ts-focus inline-flex items-center gap-1 transition-colors hover:text-[var(--text-default)]"
+          style={{ color: "var(--text-muted)" }}
+        >
           ← Vendors
         </Link>
       </div>
 
-      <div className="flex items-start justify-between gap-3">
-        <div>
-          <h1 className="text-2xl font-semibold">
-            {vendor.name}
-            {!vendor.active && (
-              <span className="ml-2 align-middle rounded-full px-2 py-0.5 text-xs"
-                style={{ background: "#3f3f46", color: "white" }}>
-                archived
-              </span>
-            )}
-          </h1>
-          <p className="mt-1 text-sm" style={{ color: "var(--muted)" }}>
-            {vendor.category ?? "Uncategorized"} · {vendor._count.expenses} expense{vendor._count.expenses === 1 ? "" : "s"}
-          </p>
-        </div>
-        <div className="flex flex-wrap items-center gap-2">
+      <header
+        className="relative overflow-hidden rounded-2xl"
+        style={{
+          padding: "18px 22px",
+          background:
+            "radial-gradient(720px circle at -8% -40%, var(--accent-surface), transparent 55%), " +
+            "linear-gradient(180deg, color-mix(in oklab, var(--surface-1) 92%, white 8%) 0%, var(--surface-1) 100%)",
+          border: "1px solid var(--border-subtle)",
+          boxShadow:
+            "inset 0 1px 0 0 color-mix(in oklab, white 4%, transparent), " +
+            "0 1px 2px 0 rgba(0,0,0,0.18)",
+        }}
+      >
+        <div className="flex flex-wrap items-start justify-between gap-4">
+          <div className="flex min-w-0 flex-1 items-start gap-3.5">
+            <span
+              aria-hidden
+              style={{
+                display: "inline-flex",
+                alignItems: "center",
+                justifyContent: "center",
+                width: 48,
+                height: 48,
+                borderRadius: 12,
+                background:
+                  "linear-gradient(135deg, var(--accent-surface-strong), var(--accent-surface))",
+                color: "var(--accent-primary)",
+                border:
+                  "1px solid color-mix(in oklab, var(--accent-primary) 30%, transparent)",
+                fontSize: 18,
+                fontWeight: 700,
+                flexShrink: 0,
+                boxShadow:
+                  "inset 0 1px 0 0 color-mix(in oklab, white 6%, transparent)",
+              }}
+            >
+              {(vendor.name ?? "?").trim().charAt(0).toUpperCase() || "?"}
+            </span>
+            <div className="min-w-0 flex-1">
+              <div className="flex flex-wrap items-center gap-2">
+                <h1
+                  className="font-semibold"
+                  style={{
+                    color: "var(--text-default)",
+                    fontSize: 22,
+                    letterSpacing: "-0.018em",
+                    lineHeight: 1.2,
+                  }}
+                >
+                  {vendor.name}
+                </h1>
+                {!vendor.active && (
+                  <span
+                    style={{
+                      fontSize: 10,
+                      fontWeight: 700,
+                      letterSpacing: "0.06em",
+                      textTransform: "uppercase",
+                      padding: "2px 7px",
+                      borderRadius: 999,
+                      background: "var(--surface-2)",
+                      border: "1px solid var(--border-subtle)",
+                      color: "var(--text-muted)",
+                      lineHeight: 1,
+                    }}
+                  >
+                    Archived
+                  </span>
+                )}
+              </div>
+              <p
+                className="mt-1.5"
+                style={{
+                  color: "var(--text-muted)",
+                  fontSize: 12.5,
+                  lineHeight: 1.4,
+                }}
+              >
+                <span style={{ color: "var(--text-default)", fontWeight: 500 }}>
+                  {vendor.category ?? "Uncategorized"}
+                </span>
+                <span style={{ color: "var(--text-faint)" }}> · </span>
+                <span style={{ color: "var(--text-default)", fontFeatureSettings: "'tnum' 1" }}>
+                  {vendor._count.expenses}
+                </span>{" "}
+                expense{vendor._count.expenses === 1 ? "" : "s"}
+              </p>
+            </div>
+          </div>
           {canManage && (
             <Link
               href={`/t/${slug}/expenses/new?vendorId=${vendor.id}`}
-              className="rounded-md px-3 py-1.5 text-sm"
-              style={{ background: "var(--accent)", color: "white" }}
+              className="ts-focus inline-flex items-center gap-1.5 rounded-lg font-semibold transition-transform"
+              style={{
+                height: 32,
+                padding: "0 14px",
+                background:
+                  "linear-gradient(180deg, color-mix(in oklab, var(--accent-primary) 96%, white 4%) 0%, var(--accent-primary) 100%)",
+                color: "var(--accent-fg)",
+                border:
+                  "1px solid color-mix(in oklab, var(--accent-primary) 80%, black 20%)",
+                boxShadow:
+                  "0 1px 0 0 rgba(255,255,255,0.15) inset, " +
+                  "0 1px 2px 0 rgba(0,0,0,0.35)",
+                fontSize: 12.5,
+                letterSpacing: "-0.005em",
+              }}
             >
+              <svg width="13" height="13" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2.5">
+                <path d="M12 5v14M5 12h14" />
+              </svg>
               Log expense
             </Link>
           )}
         </div>
-      </div>
+      </header>
 
       {sp.error && (
         <div className="rounded-md px-3 py-2 text-sm"
