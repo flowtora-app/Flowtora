@@ -180,26 +180,84 @@ export default async function InstallsPage({
     byDay.set(key, arr);
   }
 
+  const weekNavBtn = {
+    height: 32,
+    padding: "0 12px",
+    background: "color-mix(in oklab, var(--surface-2) 75%, transparent)",
+    border: "1px solid var(--border-subtle)",
+    color: "var(--text-default)",
+    fontSize: 12.5,
+    fontWeight: 500,
+    letterSpacing: "-0.005em",
+    borderRadius: 8,
+    display: "inline-flex" as const,
+    alignItems: "center" as const,
+  };
   return (
-    <div className="space-y-6">
-      {/* Header */}
-      <div className="flex items-start justify-between">
-        <div>
-          <h1 className="text-2xl font-semibold">Install calendar</h1>
-          <p className="mt-1 text-sm" style={{ color: "var(--text-muted)" }}>
-            Week of {formatDate(weekStart)}
-          </p>
-        </div>
-        <div className="flex items-center gap-2">
-          <Link href={`/t/${slug}/installs?week=${prevWeek}`} className="rounded-md px-3 py-1.5 text-sm" style={{ border: "1px solid var(--border-subtle)" }}>
-            ← Prev
-          </Link>
-          <Link href={`/t/${slug}/installs?week=${thisWeek}`} className="rounded-md px-3 py-1.5 text-sm" style={{ border: "1px solid var(--border-subtle)" }}>
-            This week
-          </Link>
-          <Link href={`/t/${slug}/installs?week=${nextWeek}`} className="rounded-md px-3 py-1.5 text-sm" style={{ border: "1px solid var(--border-subtle)" }}>
-            Next →
-          </Link>
+    <div className="space-y-5">
+      <div
+        className="relative overflow-hidden rounded-2xl"
+        style={{
+          padding: "18px 22px",
+          background:
+            "radial-gradient(880px circle at -10% -50%, var(--accent-surface), transparent 55%), " +
+            "linear-gradient(180deg, color-mix(in oklab, var(--surface-1) 92%, white 8%) 0%, var(--surface-1) 100%)",
+          border: "1px solid var(--border-subtle)",
+          boxShadow:
+            "inset 0 1px 0 0 color-mix(in oklab, white 4%, transparent), " +
+            "0 1px 2px 0 rgba(0,0,0,0.18)",
+        }}
+      >
+        <div className="flex flex-wrap items-center justify-between gap-4">
+          <div className="min-w-0">
+            <h1
+              className="font-semibold"
+              style={{
+                color: "var(--text-default)",
+                fontSize: 24,
+                letterSpacing: "-0.02em",
+                lineHeight: 1.15,
+              }}
+            >
+              Install calendar
+            </h1>
+            <p
+              className="mt-1.5"
+              style={{
+                color: "var(--text-muted)",
+                fontSize: 12.5,
+                lineHeight: 1.45,
+              }}
+            >
+              Week of{" "}
+              <span style={{ color: "var(--text-default)", fontWeight: 600 }}>
+                {formatDate(weekStart)}
+              </span>{" "}
+              — installs scheduled across your shop&apos;s crews.
+            </p>
+          </div>
+          <div className="flex items-center gap-1.5">
+            <Link href={`/t/${slug}/installs?week=${prevWeek}`} className="ts-focus" style={weekNavBtn}>
+              ← Prev
+            </Link>
+            <Link
+              href={`/t/${slug}/installs?week=${thisWeek}`}
+              className="ts-focus"
+              style={{
+                ...weekNavBtn,
+                background: "var(--accent-surface)",
+                color: "var(--accent-primary)",
+                border:
+                  "1px solid color-mix(in oklab, var(--accent-primary) 28%, transparent)",
+                fontWeight: 700,
+              }}
+            >
+              This week
+            </Link>
+            <Link href={`/t/${slug}/installs?week=${nextWeek}`} className="ts-focus" style={weekNavBtn}>
+              Next →
+            </Link>
+          </div>
         </div>
       </div>
 

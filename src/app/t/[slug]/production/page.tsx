@@ -297,29 +297,121 @@ export default async function ProductionBoardPage({
   const deptHasNone   = departments.length === 0;
 
   return (
-    <div className="space-y-6">
-      {/* Header */}
-      <div className="flex items-start justify-between gap-4">
-        <div>
-          <h1 className="text-2xl font-semibold">Production board</h1>
-          <p className="mt-1 text-sm" style={{ color: "var(--text-muted)" }}>
-            {lensed.length} visible · {activeCount} active · {pendingCount} pending · {blockedCount} blocked
-          </p>
-        </div>
-        <div className="flex items-center gap-2">
-          <OrdersViewToggle slug={slug} active="board" />
-          <Link
-            href={`/t/${slug}/settings/production`}
-            className="rounded-md px-3 py-1.5 text-sm"
-            style={{ border: "1px solid var(--border)" }}
-          >
-            Settings
-          </Link>
+    <div className="space-y-5">
+      {/* Header — premium rounded-2xl card with accent halo, matching
+          the workspace-wide page-header pattern. */}
+      <div
+        className="relative overflow-hidden rounded-2xl"
+        style={{
+          padding: "18px 22px",
+          background:
+            "radial-gradient(880px circle at -10% -50%, var(--accent-surface), transparent 55%), " +
+            "linear-gradient(180deg, color-mix(in oklab, var(--surface-1) 92%, white 8%) 0%, var(--surface-1) 100%)",
+          border: "1px solid var(--border-subtle)",
+          boxShadow:
+            "inset 0 1px 0 0 color-mix(in oklab, white 4%, transparent), " +
+            "0 1px 2px 0 rgba(0,0,0,0.18)",
+        }}
+      >
+        <div className="flex flex-wrap items-center justify-between gap-4">
+          <div className="min-w-0">
+            <div className="flex items-center gap-2.5">
+              <h1
+                className="font-semibold"
+                style={{
+                  color: "var(--text-default)",
+                  fontSize: 24,
+                  letterSpacing: "-0.02em",
+                  lineHeight: 1.15,
+                }}
+              >
+                Production board
+              </h1>
+              <span
+                style={{
+                  display: "inline-flex",
+                  alignItems: "center",
+                  gap: 4,
+                  fontSize: 10.5,
+                  fontWeight: 700,
+                  letterSpacing: "0.04em",
+                  color: "var(--emerald-500)",
+                  background:
+                    "color-mix(in oklab, var(--emerald-500) 14%, transparent)",
+                  border:
+                    "1px solid color-mix(in oklab, var(--emerald-500) 30%, transparent)",
+                  padding: "3px 8px",
+                  borderRadius: 999,
+                  fontFeatureSettings: "'tnum' 1",
+                  lineHeight: 1,
+                }}
+              >
+                <span
+                  aria-hidden
+                  style={{
+                    width: 5,
+                    height: 5,
+                    borderRadius: 999,
+                    background: "var(--emerald-500)",
+                    boxShadow:
+                      "0 0 0 2px color-mix(in oklab, var(--emerald-500) 25%, transparent)",
+                  }}
+                />
+                LIVE
+              </span>
+            </div>
+            <p
+              className="mt-1.5"
+              style={{
+                color: "var(--text-muted)",
+                fontSize: 12.5,
+                lineHeight: 1.45,
+                fontFeatureSettings: "'tnum' 1",
+              }}
+            >
+              <span style={{ color: "var(--text-default)", fontWeight: 600 }}>{lensed.length}</span> visible
+              <span style={{ color: "var(--text-faint)" }}> · </span>
+              <span style={{ color: "var(--text-default)", fontWeight: 600 }}>{activeCount}</span> active
+              <span style={{ color: "var(--text-faint)" }}> · </span>
+              <span style={{ color: "var(--text-default)", fontWeight: 600 }}>{pendingCount}</span> pending
+              <span style={{ color: "var(--text-faint)" }}> · </span>
+              <span
+                style={{
+                  color: blockedCount > 0 ? "var(--danger-fg, var(--rose-500))" : "var(--text-default)",
+                  fontWeight: 600,
+                }}
+              >
+                {blockedCount}
+              </span> blocked
+            </p>
+          </div>
+          <div className="flex items-center gap-2">
+            <OrdersViewToggle slug={slug} active="board" />
+            <Link
+              href={`/t/${slug}/settings/production`}
+              className="ts-focus inline-flex items-center gap-1.5 rounded-lg transition-colors hover:bg-[var(--surface-3)]"
+              style={{
+                height: 32,
+                padding: "0 12px",
+                background: "color-mix(in oklab, var(--surface-2) 75%, transparent)",
+                border: "1px solid var(--border-subtle)",
+                color: "var(--text-default)",
+                fontSize: 12.5,
+                fontWeight: 500,
+                letterSpacing: "-0.005em",
+              }}
+            >
+              <svg width="13" height="13" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2">
+                <circle cx="12" cy="12" r="3" />
+                <path d="M19.4 15a1.65 1.65 0 0 0 .33 1.82l.06.06a2 2 0 0 1-2.83 2.83l-.06-.06a1.65 1.65 0 0 0-1.82-.33 1.65 1.65 0 0 0-1 1.51V21a2 2 0 0 1-4 0v-.09A1.65 1.65 0 0 0 9 19.4a1.65 1.65 0 0 0-1.82.33l-.06.06a2 2 0 0 1-2.83-2.83l.06-.06a1.65 1.65 0 0 0 .33-1.82 1.65 1.65 0 0 0-1.51-1H3a2 2 0 0 1 0-4h.09A1.65 1.65 0 0 0 4.6 9a1.65 1.65 0 0 0-.33-1.82l-.06-.06a2 2 0 0 1 2.83-2.83l.06.06a1.65 1.65 0 0 0 1.82.33H9a1.65 1.65 0 0 0 1-1.51V3a2 2 0 0 1 4 0v.09a1.65 1.65 0 0 0 1 1.51 1.65 1.65 0 0 0 1.82-.33l.06-.06a2 2 0 0 1 2.83 2.83l-.06.06a1.65 1.65 0 0 0-.33 1.82V9a1.65 1.65 0 0 0 1.51 1H21a2 2 0 0 1 0 4h-.09a1.65 1.65 0 0 0-1.51 1z" />
+              </svg>
+              Settings
+            </Link>
+          </div>
         </div>
       </div>
 
-      {/* Empty tenant state — no departments configured yet. Redirect to
-          settings where the one-click seed lives. */}
+      {/* Empty tenant state — no departments configured yet. */}
       {deptHasNone && (
         <Card>
           <EmptyState
@@ -331,10 +423,9 @@ export default async function ProductionBoardPage({
         </Card>
       )}
 
-      {/* Lens chips — mutually exclusive lenses that answer the three
-          shop-floor questions: what's due, what's stuck, what's mine. */}
+      {/* Lens chips — premium tinted pills with count badges. */}
       {!deptHasNone && (
-        <nav className="flex flex-wrap gap-1 text-sm">
+        <nav className="flex flex-wrap gap-1.5">
           {LENSES.map((l) => {
             const active = l.value === lens;
             const count  = lensCounts[l.value];
@@ -343,16 +434,40 @@ export default async function ProductionBoardPage({
                 key={l.value}
                 href={buildLensHref(l.value)}
                 title={l.hint}
-                className="rounded-md px-3 py-1.5"
+                className="ts-focus inline-flex items-center gap-1.5 rounded-lg transition-colors"
                 style={{
-                  background: active ? "var(--accent-surface)" : "transparent",
-                  border: "1px solid var(--border)",
-                  color: active ? "var(--accent-primary)" : "var(--text)",
-                  fontWeight: active ? 600 : undefined,
+                  background: active
+                    ? "var(--accent-surface)"
+                    : "color-mix(in oklab, var(--surface-2) 60%, transparent)",
+                  border: active
+                    ? "1px solid color-mix(in oklab, var(--accent-primary) 28%, transparent)"
+                    : "1px solid var(--border-subtle)",
+                  color: active ? "var(--accent-primary)" : "var(--text-muted)",
+                  fontWeight: active ? 700 : 500,
+                  fontSize: 12,
+                  letterSpacing: "-0.005em",
+                  padding: "6px 11px",
+                  height: 30,
                 }}
               >
                 {l.label}
-                <span className="ml-1.5 text-xs" style={{ color: active ? "var(--accent-primary)" : "var(--muted)" }}>
+                <span
+                  style={{
+                    color: active ? "var(--accent-primary)" : "var(--text-faint)",
+                    background: active
+                      ? "color-mix(in oklab, var(--accent-primary) 12%, transparent)"
+                      : "var(--surface-1)",
+                    border: active
+                      ? "1px solid color-mix(in oklab, var(--accent-primary) 22%, transparent)"
+                      : "1px solid var(--border-subtle)",
+                    fontSize: 10,
+                    fontWeight: 700,
+                    padding: "1px 5px",
+                    borderRadius: 4,
+                    fontFeatureSettings: "'tnum' 1",
+                    lineHeight: 1,
+                  }}
+                >
                   {count}
                 </span>
               </Link>

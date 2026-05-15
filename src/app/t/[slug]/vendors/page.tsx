@@ -86,22 +86,95 @@ export default async function VendorsPage({
 
   return (
     <div>
-      <div className="flex items-center justify-between">
-        <div>
-          <h1 className="text-2xl font-semibold">Vendors</h1>
-          <p className="mt-1 text-sm" style={{ color: "var(--muted)" }}>
-            {vendors.length} {vendors.length === 1 ? "vendor" : "vendors"}
-            {scope === "archived" && " · archived only"}
-          </p>
+      <div
+        className="relative overflow-hidden rounded-2xl"
+        style={{
+          padding: "18px 22px",
+          background:
+            "radial-gradient(880px circle at -10% -50%, var(--accent-surface), transparent 55%), " +
+            "linear-gradient(180deg, color-mix(in oklab, var(--surface-1) 92%, white 8%) 0%, var(--surface-1) 100%)",
+          border: "1px solid var(--border-subtle)",
+          boxShadow:
+            "inset 0 1px 0 0 color-mix(in oklab, white 4%, transparent), " +
+            "0 1px 2px 0 rgba(0,0,0,0.18)",
+        }}
+      >
+        <div className="flex flex-wrap items-center justify-between gap-4">
+          <div className="min-w-0">
+            <div className="flex items-center gap-2.5">
+              <h1
+                className="font-semibold"
+                style={{
+                  color: "var(--text-default)",
+                  fontSize: 24,
+                  letterSpacing: "-0.02em",
+                  lineHeight: 1.15,
+                }}
+              >
+                Vendors
+              </h1>
+              <span
+                style={{
+                  display: "inline-flex",
+                  alignItems: "center",
+                  fontSize: 11,
+                  fontWeight: 700,
+                  letterSpacing: "0.04em",
+                  color: "var(--accent-primary)",
+                  background: "var(--accent-surface)",
+                  border:
+                    "1px solid color-mix(in oklab, var(--accent-primary) 22%, transparent)",
+                  padding: "3px 8px",
+                  borderRadius: 999,
+                  fontFeatureSettings: "'tnum' 1",
+                  lineHeight: 1,
+                }}
+              >
+                {vendors.length}
+              </span>
+            </div>
+            <p
+              className="mt-1.5"
+              style={{
+                color: "var(--text-muted)",
+                fontSize: 12.5,
+                lineHeight: 1.45,
+              }}
+            >
+              {scope === "archived"
+                ? "Archived suppliers — kept for history and spend reporting."
+                : "Suppliers, contractors, and materials sources — track lifetime spend at a glance."}
+            </p>
+          </div>
+          {canManage && (
+            <Link
+              href={`/t/${slug}/vendors/new`}
+              className="ts-focus inline-flex items-center gap-1.5 rounded-lg font-semibold transition-transform"
+              style={{
+                height: 32,
+                padding: "0 14px",
+                background:
+                  "linear-gradient(180deg, color-mix(in oklab, var(--accent-primary) 96%, white 4%) 0%, var(--accent-primary) 100%)",
+                color: "var(--accent-fg)",
+                border:
+                  "1px solid color-mix(in oklab, var(--accent-primary) 80%, black 20%)",
+                boxShadow:
+                  "0 1px 0 0 rgba(255,255,255,0.15) inset, " +
+                  "0 1px 2px 0 rgba(0,0,0,0.35)",
+                fontSize: 12.5,
+                letterSpacing: "-0.005em",
+              }}
+            >
+              <svg width="13" height="13" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2.5">
+                <path d="M12 5v14M5 12h14" />
+              </svg>
+              New vendor
+            </Link>
+          )}
         </div>
-        {canManage && (
-          <Link href={`/t/${slug}/vendors/new`}>
-            <Button type="button">New vendor</Button>
-          </Link>
-        )}
       </div>
 
-      <nav className="mt-4 flex gap-1 text-sm">
+      <nav className="mt-5 flex flex-wrap gap-1.5">
         {([
           { k: "active",   label: "Active"   },
           { k: "archived", label: "Archived" },
@@ -112,11 +185,20 @@ export default async function VendorsPage({
             <Link
               key={t.k}
               href={t.k === "active" ? `/t/${slug}/vendors` : `/t/${slug}/vendors?scope=${t.k}`}
-              className="rounded-md px-3 py-1.5"
+              className="ts-focus inline-flex items-center rounded-md transition-colors"
               style={{
-                background: active ? "var(--panel)" : "transparent",
-                border: "1px solid var(--border)",
-                color: "var(--text)",
+                background: active
+                  ? "var(--accent-surface)"
+                  : "color-mix(in oklab, var(--surface-2) 60%, transparent)",
+                border: active
+                  ? "1px solid color-mix(in oklab, var(--accent-primary) 28%, transparent)"
+                  : "1px solid var(--border-subtle)",
+                color: active ? "var(--accent-primary)" : "var(--text-muted)",
+                fontWeight: active ? 700 : 500,
+                fontSize: 11.5,
+                letterSpacing: "-0.005em",
+                padding: "4px 12px",
+                height: 28,
               }}
             >
               {t.label}

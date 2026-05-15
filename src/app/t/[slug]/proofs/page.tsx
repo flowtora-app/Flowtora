@@ -147,16 +147,64 @@ export default async function ProofsPage({
 
   return (
     <div>
-      <div className="flex items-center justify-between">
-        <div>
-          <h1 className="text-2xl font-semibold">Proofs</h1>
-          <p className="mt-1 text-sm" style={{ color: "var(--text-muted)" }}>
-            {proofs.length} {proofs.length === 1 ? "proof" : "proofs"} · Design approvals across every open order
-          </p>
+      <div
+        className="relative overflow-hidden rounded-2xl"
+        style={{
+          padding: "18px 22px",
+          background:
+            "radial-gradient(880px circle at -10% -50%, var(--accent-surface), transparent 55%), " +
+            "linear-gradient(180deg, color-mix(in oklab, var(--surface-1) 92%, white 8%) 0%, var(--surface-1) 100%)",
+          border: "1px solid var(--border-subtle)",
+          boxShadow:
+            "inset 0 1px 0 0 color-mix(in oklab, white 4%, transparent), " +
+            "0 1px 2px 0 rgba(0,0,0,0.18)",
+        }}
+      >
+        <div className="flex items-center gap-2.5">
+          <h1
+            className="font-semibold"
+            style={{
+              color: "var(--text-default)",
+              fontSize: 24,
+              letterSpacing: "-0.02em",
+              lineHeight: 1.15,
+            }}
+          >
+            Proofs
+          </h1>
+          <span
+            style={{
+              display: "inline-flex",
+              alignItems: "center",
+              fontSize: 11,
+              fontWeight: 700,
+              letterSpacing: "0.04em",
+              color: "var(--accent-primary)",
+              background: "var(--accent-surface)",
+              border:
+                "1px solid color-mix(in oklab, var(--accent-primary) 22%, transparent)",
+              padding: "3px 8px",
+              borderRadius: 999,
+              fontFeatureSettings: "'tnum' 1",
+              lineHeight: 1,
+            }}
+          >
+            {proofs.length}
+          </span>
         </div>
+        <p
+          className="mt-1.5"
+          style={{
+            color: "var(--text-muted)",
+            fontSize: 12.5,
+            lineHeight: 1.45,
+          }}
+        >
+          Design approvals across every open order — keep customer sign-offs moving.
+        </p>
       </div>
 
-      <nav className="mt-4 flex flex-wrap gap-1 text-sm" aria-label="View">
+      <nav className="mt-5 flex flex-wrap gap-1.5" aria-label="View">
         {VIEWS.map((v) => {
           const active = view === v.value;
           return (
@@ -164,12 +212,20 @@ export default async function ProofsPage({
               key={v.value}
               href={viewHref(v.value)}
               title={v.hint}
-              className="ts-focus rounded-md px-3 py-1.5 transition-colors"
+              className="ts-focus inline-flex items-center rounded-md transition-colors"
               style={{
-                background: active ? "var(--surface-2)" : "transparent",
-                border: `1px solid ${active ? "var(--border-default)" : "var(--border-subtle)"}`,
-                color: active ? "var(--text-default)" : "var(--text-muted)",
-                fontWeight: active ? 600 : 500,
+                background: active
+                  ? "var(--accent-surface)"
+                  : "color-mix(in oklab, var(--surface-2) 60%, transparent)",
+                border: active
+                  ? "1px solid color-mix(in oklab, var(--accent-primary) 28%, transparent)"
+                  : "1px solid var(--border-subtle)",
+                color: active ? "var(--accent-primary)" : "var(--text-muted)",
+                fontWeight: active ? 700 : 500,
+                fontSize: 11.5,
+                letterSpacing: "-0.005em",
+                padding: "4px 12px",
+                height: 28,
               }}
             >
               {v.label}
