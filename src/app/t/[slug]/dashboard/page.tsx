@@ -1,4 +1,6 @@
 import Link from "next/link";
+import { db } from "@/lib/db";
+import { auth } from "@/auth";
 import { requireTenant } from "@/lib/tenant";
 import { listActiveLocations } from "@/lib/locations";
 import { loadActivationReport } from "@/lib/activation";
@@ -94,6 +96,16 @@ export default async function DashboardPage({
   const persona = dashboardPersona(role);
   const config = PERSONA_CONFIG[persona];
 
+  // Pull the user's first name for a warmer greeting. Cheap and safe —
+  // we fall back to their email handle when the name field is empty.
+  const sessionPeek = await auth();
+  const userRow = await db.user.findUnique({
+    where: { id: userId },
+    select: { name: true, email: true },
+  });
+  const rawName = userRow?.name?.trim() || sessionPeek?.user?.name?.trim() || "";
+  const firstName = deriveFirstName(rawName, userRow?.email ?? sessionPeek?.user?.email ?? "");
+
   const branches = await listActiveLocations(tenant.id);
   const branchChoices =
     branchScope === null ? branches : branches.filter((b) => branchScope.includes(b.id));
@@ -155,6 +167,7 @@ export default async function DashboardPage({
       greeting={
         <DashboardHeader
           tenantName={tenant.name}
+          firstName={firstName}
           persona={persona}
           role={role}
           branches={branchChoices}
@@ -284,6 +297,7 @@ function PersonaView({
 
 function DashboardHeader({
   tenantName,
+  firstName,
   persona,
   role,
   branches,
@@ -291,6 +305,7 @@ function DashboardHeader({
   branchScoped,
 }: {
   tenantName: string;
+  firstName: string;
   persona: DashboardPersona;
   role: string;
   branches: { id: string; name: string }[];
@@ -303,64 +318,189 @@ function DashboardHeader({
     : branchScoped
       ? "scoped to your branches"
       : null;
+  const today = formatLongDate(new Date());
 
   return (
-    <header className="flex flex-wrap items-start justify-between gap-4">
-      <div>
-        <div
-          className="text-xs font-semibold uppercase tracking-wider"
-          style={{ color: "var(--accent-primary)" }}
-        >
-          {PERSONA_LABEL[persona]}
-        </div>
-        <h1
-          className="mt-1 text-2xl font-semibold tracking-tight"
-          style={{ color: "var(--text-default)" }}
-        >
-          {tenantName}
-        </h1>
-        <p className="mt-1 text-sm" style={{ color: "var(--text-muted)" }}>
-          {PERSONA_SUBTITLE[persona]}{" "}
-          <span style={{ color: "var(--text-faint)" }}>
-            · signed in as {roleLabel}
-            {scopeLabel ? ` · ${scopeLabel}` : ""}
-          </span>
-        </p>
-      </div>
+    <header
+      className="relative overflow-hidden rounded-2xl"
+      style={{
+        padding: "22px 24px",
+        background:
+          "radial-gradient(880px circle at -10% -40%, var(--accent-surface), transparent 55%), " +
+          "linear-gradient(180deg, color-mix(in oklab, var(--surface-1) 92%, white 8%) 0%, var(--surface-1) 100%)",
+        border: "1px solid var(--border-subtle)",
+        boxShadow:
+          "inset 0 1px 0 0 color-mix(in oklab, white 4%, transparent), " +
+          "0 1px 2px 0 rgba(0,0,0,0.18)",
+      }}
+    >
+      <div className="flex flex-wrap items-start justify-between gap-5">
+        <div className="min-w-0 flex-1">
+          {/* Persona overline + workspace name chip on one line. */}
+          <div className="flex flex-wrap items-center gap-2">
+            <span
+              style={{
+                display: "inline-flex",
+                alignItems: "center",
+                gap: 6,
+                color: "var(--accent-primary)",
+                background: "var(--accent-surface)",
+                border:
+                  "1px solid color-mix(in oklab, var(--accent-primary) 22%, transparent)",
+                fontSize: 10,
+                fontWeight: 700,
+                letterSpacing: "0.08em",
+                textTransform: "uppercase",
+                padding: "3px 8px",
+                borderRadius: 999,
+                lineHeight: 1,
+              }}
+            >
+              <span
+                aria-hidden
+                style={{
+                  width: 5,
+                  height: 5,
+                  borderRadius: 999,
+                  background: "var(--accent-primary)",
+                  boxShadow:
+                    "0 0 0 2px color-mix(in oklab, var(--accent-primary) 22%, transparent)",
+                }}
+              />
+              {PERSONA_LABEL[persona]}
+            </span>
+            <span
+              style={{
+                color: "var(--text-faint)",
+                fontSize: 12,
+                lineHeight: 1,
+              }}
+            >
+              {tenantName}
+            </span>
+          </div>
 
-      {branches.length > 1 && (
-        <form className="flex items-center gap-2 text-sm" method="get">
-          <select
-            name="branch"
-            defaultValue={branchFilter ?? ""}
-            className="ts-focus rounded-md px-3 py-1.5 text-sm outline-none"
+          {/* Greeting — large, tracking-tight, signature line of the page. */}
+          <h1
+            className="mt-3 font-semibold"
             style={{
-              background: "var(--surface-1)",
-              border: "1px solid var(--border-default)",
               color: "var(--text-default)",
+              fontSize: 30,
+              letterSpacing: "-0.022em",
+              lineHeight: 1.15,
             }}
           >
-            <option value="">All branches</option>
-            {branches.map((b) => (
-              <option key={b.id} value={b.id}>
-                {b.name}
-              </option>
-            ))}
-          </select>
-          <button
-            type="submit"
-            className="ts-focus rounded-md px-3 py-1.5 text-sm font-medium"
+            Welcome{firstName ? `, ${firstName}` : ""}.
+          </h1>
+
+          <p
+            className="mt-1.5"
             style={{
-              background: "var(--accent-primary)",
-              color: "var(--accent-fg)",
+              color: "var(--text-muted)",
+              fontSize: 13.5,
+              lineHeight: 1.45,
             }}
           >
-            Filter
-          </button>
-        </form>
-      )}
+            <span style={{ color: "var(--text-default)", fontWeight: 500 }}>
+              {today}
+            </span>
+            <span style={{ color: "var(--text-faint)" }}> · </span>
+            <span>{PERSONA_SUBTITLE[persona]}</span>
+            <span style={{ color: "var(--text-faint)" }}>
+              {" · "}
+              {roleLabel}
+              {scopeLabel ? ` · ${scopeLabel}` : ""}
+            </span>
+          </p>
+        </div>
+
+        {branches.length > 1 && (
+          <form className="flex items-center gap-2" method="get">
+            <span
+              style={{
+                fontSize: 11,
+                fontWeight: 600,
+                color: "var(--text-muted)",
+                textTransform: "uppercase",
+                letterSpacing: "0.06em",
+              }}
+            >
+              Branch
+            </span>
+            <select
+              name="branch"
+              defaultValue={branchFilter ?? ""}
+              className="ts-focus rounded-lg outline-none"
+              style={{
+                background: "var(--surface-2)",
+                border: "1px solid var(--border-subtle)",
+                color: "var(--text-default)",
+                fontSize: 12.5,
+                fontWeight: 500,
+                padding: "6px 10px",
+                height: 32,
+              }}
+            >
+              <option value="">All branches</option>
+              {branches.map((b) => (
+                <option key={b.id} value={b.id}>
+                  {b.name}
+                </option>
+              ))}
+            </select>
+            <button
+              type="submit"
+              className="ts-focus inline-flex h-8 items-center rounded-lg font-semibold transition-transform"
+              style={{
+                background:
+                  "linear-gradient(180deg, color-mix(in oklab, var(--accent-primary) 96%, white 4%) 0%, var(--accent-primary) 100%)",
+                color: "var(--accent-fg)",
+                border:
+                  "1px solid color-mix(in oklab, var(--accent-primary) 80%, black 20%)",
+                boxShadow:
+                  "0 1px 0 0 rgba(255,255,255,0.15) inset, " +
+                  "0 1px 2px 0 rgba(0,0,0,0.35)",
+                padding: "0 12px",
+                fontSize: 12.5,
+                letterSpacing: "-0.005em",
+              }}
+            >
+              Filter
+            </button>
+          </form>
+        )}
+      </div>
     </header>
   );
+}
+
+/** First name from a "Sarah Johnson" style display name. Falls back to
+ *  the email handle's capitalized form when the name field is empty. */
+function deriveFirstName(name: string, email: string): string {
+  const trimmed = name.trim();
+  if (trimmed) {
+    const first = trimmed.split(/\s+/)[0]!;
+    return first.length > 18 ? first.slice(0, 18) : first;
+  }
+  const handle = email.split("@")[0] ?? "";
+  if (!handle) return "";
+  // "sarah.johnson" → "Sarah"; "sj42" → "Sj42"
+  const stem = handle.split(/[._-]/)[0] ?? handle;
+  return stem.charAt(0).toUpperCase() + stem.slice(1);
+}
+
+/** "Wednesday, May 15" — server-rendered, server timezone. We avoid
+ *  including a time-of-day so we don't lie about the user's clock. */
+function formatLongDate(d: Date): string {
+  try {
+    return new Intl.DateTimeFormat("en-US", {
+      weekday: "long",
+      month: "long",
+      day: "numeric",
+    }).format(d);
+  } catch {
+    return d.toDateString();
+  }
 }
 
 // ────────────────────────────────────────────────────────────
@@ -369,26 +509,87 @@ function DashboardHeader({
 
 function TrialBanner({ daysLeft, slug }: { daysLeft: number; slug: string }) {
   const tight = daysLeft <= 3;
+  const accent = tight ? "var(--danger-fg, var(--rose-500))" : "var(--accent-primary)";
   return (
     <div
-      className="flex flex-wrap items-center justify-between gap-3 rounded-lg px-4 py-3 text-sm"
+      className="relative flex flex-wrap items-center justify-between gap-3 overflow-hidden rounded-xl px-4 py-3.5"
       style={{
-        background: tight ? "var(--danger-surface)" : "var(--accent-surface)",
-        border: `1px solid ${tight ? "var(--danger-fg)" : "var(--accent-surface-strong)"}`,
+        background: tight
+          ? "radial-gradient(540px circle at 0% 0%, color-mix(in oklab, var(--rose-500) 14%, transparent), transparent 55%), color-mix(in oklab, var(--surface-1) 80%, transparent)"
+          : "radial-gradient(540px circle at 0% 0%, var(--accent-surface), transparent 55%), color-mix(in oklab, var(--surface-1) 80%, transparent)",
+        border: `1px solid ${tight ? "color-mix(in oklab, var(--rose-500) 35%, transparent)" : "color-mix(in oklab, var(--accent-primary) 28%, transparent)"}`,
         color: "var(--text-default)",
+        boxShadow: "inset 0 1px 0 0 color-mix(in oklab, white 4%, transparent)",
       }}
     >
-      <span>
-        You&apos;re on a free trial.{" "}
-        <strong style={{ color: tight ? "var(--danger-fg)" : "var(--accent-primary)" }}>
-          {daysLeft} {daysLeft === 1 ? "day" : "days"} remaining
-        </strong>
-        .
-      </span>
+      {/* Left content with icon. */}
+      <div className="flex min-w-0 items-center gap-3">
+        <span
+          aria-hidden
+          style={{
+            display: "inline-flex",
+            alignItems: "center",
+            justifyContent: "center",
+            width: 32,
+            height: 32,
+            borderRadius: 9,
+            background: tight
+              ? "color-mix(in oklab, var(--rose-500) 22%, transparent)"
+              : "var(--accent-surface)",
+            color: accent,
+            border: `1px solid color-mix(in oklab, ${accent} 30%, transparent)`,
+            fontSize: 14,
+            fontWeight: 700,
+          }}
+        >
+          {tight ? "!" : "★"}
+        </span>
+        <div className="min-w-0">
+          <div
+            style={{
+              fontSize: 13,
+              fontWeight: 600,
+              letterSpacing: "-0.005em",
+              color: "var(--text-default)",
+              lineHeight: 1.3,
+            }}
+          >
+            You&apos;re on a free trial.{" "}
+            <span style={{ color: accent }}>
+              {daysLeft} {daysLeft === 1 ? "day" : "days"} remaining
+            </span>
+            .
+          </div>
+          <div
+            style={{
+              fontSize: 11.5,
+              color: "var(--text-muted)",
+              marginTop: 2,
+              lineHeight: 1.4,
+            }}
+          >
+            {tight
+              ? "Your workspace pauses at the end of the trial. Upgrade to keep all your data."
+              : "Add a payment method any time to keep your workspace running without interruption."}
+          </div>
+        </div>
+      </div>
       <Link
         href={`/t/${slug}/settings/billing`}
-        className="inline-flex h-8 items-center rounded-md px-3 text-xs font-medium"
-        style={{ background: "var(--accent-primary)", color: "var(--accent-fg)" }}
+        className="ts-focus inline-flex h-9 shrink-0 items-center rounded-lg font-semibold transition-transform"
+        style={{
+          background: tight
+            ? "linear-gradient(180deg, color-mix(in oklab, var(--rose-500) 96%, white 4%) 0%, var(--rose-500) 100%)"
+            : "linear-gradient(180deg, color-mix(in oklab, var(--accent-primary) 96%, white 4%) 0%, var(--accent-primary) 100%)",
+          color: "var(--accent-fg)",
+          border: `1px solid color-mix(in oklab, ${accent} 80%, black 20%)`,
+          boxShadow:
+            "0 1px 0 0 rgba(255,255,255,0.15) inset, " +
+            "0 1px 2px 0 rgba(0,0,0,0.35)",
+          padding: "0 14px",
+          fontSize: 12.5,
+          letterSpacing: "-0.005em",
+        }}
       >
         Upgrade now →
       </Link>
