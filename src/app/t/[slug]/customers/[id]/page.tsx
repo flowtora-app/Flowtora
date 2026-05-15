@@ -253,85 +253,248 @@ export default async function CustomerDetailPage({
   );
 
   // ─── Sticky status row ─────────────────────────────────────────
+  const customerInitial = (customer.name ?? "?").trim().charAt(0).toUpperCase() || "?";
+  const stageHex = stageColor(customer.stage);
   const statusRow = (
     <header
-      className="sticky top-0 z-10 rounded-lg"
+      className="sticky top-0 z-10 overflow-hidden rounded-2xl"
       style={{
-        background: "var(--surface-0)",
+        background:
+          "radial-gradient(720px circle at -8% -40%, var(--accent-surface), transparent 55%), " +
+          "linear-gradient(180deg, color-mix(in oklab, var(--surface-1) 92%, white 8%) 0%, var(--surface-1) 100%)",
         border: "1px solid var(--border-subtle)",
-        boxShadow: "0 1px 2px rgb(0 0 0 / 0.04)",
+        boxShadow:
+          "inset 0 1px 0 0 color-mix(in oklab, white 4%, transparent), " +
+          "0 2px 8px -2px rgba(0,0,0,0.25)",
+        backdropFilter: "saturate(140%) blur(2px)",
       }}
     >
       <div className="flex flex-wrap items-start justify-between gap-4 px-5 py-4">
-        <div className="min-w-0 flex-1">
-          <div className="flex flex-wrap items-center gap-2.5">
-            <h1 className="text-xl font-semibold" style={{ color: "var(--text-default)" }}>
-              {customer.name}
-            </h1>
-            <span
-              className="rounded-full px-2 py-0.5 text-[11px] font-medium"
-              style={{ background: stageColor(customer.stage), color: "white" }}
-            >
-              {stageLabel(customer.stage)}
-            </span>
-            {healthReport && (
-              <HealthBadge
-                tier={healthReport.tier}
-                score={healthReport.score}
-                atRisk={healthReport.atRisk}
-              />
-            )}
-            {customer.status !== "ACTIVE" && (
-              <span
-                className="rounded-full px-2 py-0.5 text-[11px]"
+        <div className="flex min-w-0 flex-1 items-start gap-3.5">
+          {/* Avatar — 48px gradient tile with accent ring. */}
+          <span
+            aria-hidden
+            style={{
+              display: "inline-flex",
+              alignItems: "center",
+              justifyContent: "center",
+              width: 48,
+              height: 48,
+              borderRadius: 12,
+              background:
+                "linear-gradient(135deg, var(--accent-surface-strong), var(--accent-surface))",
+              color: "var(--accent-primary)",
+              border:
+                "1px solid color-mix(in oklab, var(--accent-primary) 30%, transparent)",
+              fontSize: 18,
+              fontWeight: 700,
+              letterSpacing: "0.02em",
+              flexShrink: 0,
+              boxShadow:
+                "inset 0 1px 0 0 color-mix(in oklab, white 6%, transparent)",
+            }}
+          >
+            {customerInitial}
+          </span>
+
+          <div className="min-w-0 flex-1">
+            <div className="flex flex-wrap items-center gap-2">
+              <h1
+                className="font-semibold"
                 style={{
-                  background: "var(--surface-1)",
-                  border: "1px solid var(--border-subtle)",
-                  color: "var(--text-muted)",
+                  color: "var(--text-default)",
+                  fontSize: 22,
+                  letterSpacing: "-0.018em",
+                  lineHeight: 1.2,
                 }}
               >
-                {humanize(customer.status)}
-              </span>
-            )}
-            {unreadPortalMessages > 0 && (
-              <a
-                href="#activity"
-                className="rounded-full px-2 py-0.5 text-[11px] font-bold text-white"
-                style={{ background: "var(--danger-fg)" }}
+                {customer.name}
+              </h1>
+              {/* Stage pill — tinted using the existing stage color. */}
+              <span
+                style={{
+                  display: "inline-flex",
+                  alignItems: "center",
+                  gap: 4,
+                  fontSize: 10,
+                  fontWeight: 700,
+                  letterSpacing: "0.06em",
+                  textTransform: "uppercase",
+                  padding: "2px 7px",
+                  borderRadius: 999,
+                  color: stageHex,
+                  background: `color-mix(in oklab, ${stageHex} 16%, transparent)`,
+                  border: `1px solid color-mix(in oklab, ${stageHex} 32%, transparent)`,
+                  lineHeight: 1,
+                  whiteSpace: "nowrap",
+                }}
               >
-                {unreadPortalMessages} unread portal
-              </a>
-            )}
-          </div>
-          <div className="mt-1 text-sm" style={{ color: "var(--text-muted)" }}>
-            {humanize(customer.kind)}
-            {ownerName && <> · owner {ownerName}</>}
-            {customer.source && <> · source {customer.source}</>}
-            {customer.email && <> · {customer.email}</>}
+                <span
+                  aria-hidden
+                  style={{
+                    width: 4,
+                    height: 4,
+                    borderRadius: 999,
+                    background: stageHex,
+                    boxShadow: `0 0 0 1.5px color-mix(in oklab, ${stageHex} 25%, transparent)`,
+                  }}
+                />
+                {stageLabel(customer.stage)}
+              </span>
+              {healthReport && (
+                <HealthBadge
+                  tier={healthReport.tier}
+                  score={healthReport.score}
+                  atRisk={healthReport.atRisk}
+                />
+              )}
+              {customer.status !== "ACTIVE" && (
+                <span
+                  style={{
+                    fontSize: 10,
+                    fontWeight: 700,
+                    letterSpacing: "0.06em",
+                    textTransform: "uppercase",
+                    padding: "2px 7px",
+                    borderRadius: 999,
+                    background: "var(--surface-2)",
+                    border: "1px solid var(--border-subtle)",
+                    color: "var(--text-muted)",
+                    lineHeight: 1,
+                  }}
+                >
+                  {humanize(customer.status)}
+                </span>
+              )}
+              {unreadPortalMessages > 0 && (
+                <a
+                  href="#activity"
+                  className="ts-focus inline-flex items-center gap-1.5"
+                  style={{
+                    fontSize: 10.5,
+                    fontWeight: 700,
+                    letterSpacing: "0.04em",
+                    padding: "2px 8px",
+                    borderRadius: 999,
+                    color: "var(--danger-fg, var(--rose-500))",
+                    background:
+                      "color-mix(in oklab, var(--rose-500) 14%, transparent)",
+                    border:
+                      "1px solid color-mix(in oklab, var(--rose-500) 30%, transparent)",
+                    lineHeight: 1,
+                  }}
+                >
+                  <span
+                    aria-hidden
+                    style={{
+                      width: 5,
+                      height: 5,
+                      borderRadius: 999,
+                      background: "var(--danger-fg, var(--rose-500))",
+                      boxShadow:
+                        "0 0 0 2px color-mix(in oklab, var(--rose-500) 25%, transparent)",
+                    }}
+                  />
+                  {unreadPortalMessages} unread portal
+                </a>
+              )}
+            </div>
+            <div
+              className="mt-1.5 truncate"
+              style={{
+                color: "var(--text-muted)",
+                fontSize: 12.5,
+                lineHeight: 1.4,
+              }}
+            >
+              <span style={{ color: "var(--text-default)", fontWeight: 500 }}>
+                {humanize(customer.kind)}
+              </span>
+              {ownerName && (
+                <>
+                  <span style={{ color: "var(--text-faint)" }}> · </span>
+                  owner <span style={{ color: "var(--text-default)" }}>{ownerName}</span>
+                </>
+              )}
+              {customer.source && (
+                <>
+                  <span style={{ color: "var(--text-faint)" }}> · </span>
+                  source {customer.source}
+                </>
+              )}
+              {customer.email && (
+                <>
+                  <span style={{ color: "var(--text-faint)" }}> · </span>
+                  {customer.email}
+                </>
+              )}
+            </div>
           </div>
         </div>
-        <div className="flex items-center gap-5 shrink-0">
+        <div className="flex items-center gap-4 shrink-0">
           {customer.estimatedValue && (
             <div className="text-right">
-              <div className="text-[10px] uppercase tracking-wide" style={{ color: "var(--text-muted)" }}>
+              <div
+                style={{
+                  color: "var(--text-faint)",
+                  fontSize: 10,
+                  fontWeight: 700,
+                  letterSpacing: "0.08em",
+                  textTransform: "uppercase",
+                  lineHeight: 1.1,
+                }}
+              >
                 Est. value
               </div>
               <div
-                className="text-2xl font-bold tabular-nums leading-tight"
-                style={{ color: "var(--text-default)" }}
+                className="mt-1 font-semibold"
+                style={{
+                  color: "var(--text-default)",
+                  fontSize: 22,
+                  letterSpacing: "-0.018em",
+                  lineHeight: 1.1,
+                  fontFeatureSettings: "'tnum' 1",
+                }}
               >
                 {formatMoney(customer.estimatedValue.toString(), ctx.tenant.currency)}
               </div>
               {customer.closeProbability != null && (
-                <div className="text-[11px] tabular-nums" style={{ color: "var(--text-muted)" }}>
+                <div
+                  className="mt-0.5"
+                  style={{
+                    color: "var(--text-muted)",
+                    fontSize: 11,
+                    fontFeatureSettings: "'tnum' 1",
+                  }}
+                >
                   {customer.closeProbability}% close probability
                 </div>
               )}
             </div>
           )}
           {canQuote && (
-            <Link href={`/t/${slug}/quotes/new?customerId=${customer.id}`}>
-              <Button type="button">New quote</Button>
+            <Link
+              href={`/t/${slug}/quotes/new?customerId=${customer.id}`}
+              className="ts-focus inline-flex items-center gap-1.5 rounded-lg font-semibold transition-transform"
+              style={{
+                height: 34,
+                padding: "0 14px",
+                background:
+                  "linear-gradient(180deg, color-mix(in oklab, var(--accent-primary) 96%, white 4%) 0%, var(--accent-primary) 100%)",
+                color: "var(--accent-fg)",
+                border:
+                  "1px solid color-mix(in oklab, var(--accent-primary) 80%, black 20%)",
+                boxShadow:
+                  "0 1px 0 0 rgba(255,255,255,0.15) inset, " +
+                  "0 1px 2px 0 rgba(0,0,0,0.35)",
+                fontSize: 12.5,
+                letterSpacing: "-0.005em",
+              }}
+            >
+              <svg width="13" height="13" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2.5">
+                <path d="M12 5v14M5 12h14" />
+              </svg>
+              New quote
             </Link>
           )}
           {canDelete && (

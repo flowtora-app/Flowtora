@@ -84,17 +84,40 @@ export function DetailSection({
           heading so fragment navigation clears the sticky status row. */}
       <span id={id} aria-hidden className="block" style={{ scrollMarginTop: 92 }} />
       <header className="flex items-end justify-between gap-4">
-        <div>
+        <div className="flex min-w-0 items-center gap-2">
+          {/* Accent indicator — matches the sidebar section header dot. */}
+          <span
+            aria-hidden
+            style={{
+              width: 4,
+              height: 4,
+              borderRadius: 1,
+              background: "var(--accent-primary)",
+              flexShrink: 0,
+            }}
+          />
           <h2
-            className="text-xs font-semibold uppercase tracking-wider"
-            style={{ color: "var(--text-faint)" }}
+            style={{
+              color: "var(--text-default)",
+              fontSize: 11,
+              fontWeight: 700,
+              textTransform: "uppercase",
+              letterSpacing: "0.1em",
+              lineHeight: 1.2,
+            }}
           >
             {title}
           </h2>
           {description && (
-            <p className="mt-0.5 text-sm" style={{ color: "var(--muted)" }}>
+            <span
+              style={{
+                color: "var(--text-muted)",
+                fontSize: 12,
+                fontWeight: 500,
+              }}
+            >
               {description}
-            </p>
+            </span>
           )}
         </div>
         {right && <div className="shrink-0">{right}</div>}
@@ -106,10 +129,10 @@ export function DetailSection({
 
 // ─── Section-nav chip row ─────────────────────────────────────────
 //
-// Lightweight anchor-link row for the four main sections. Renders
-// under the status row on pages that opt-in — helps the reader jump
-// without scrolling, and substitutes for the old tab bar without
-// reintroducing mode-switching.
+// Premium anchor-link row for the main sections. Renders under the
+// status row on pages that opt-in — helps the reader jump without
+// scrolling, and substitutes for the old tab bar without reintroducing
+// mode-switching.
 
 export type SectionAnchor = { id: string; label: string; count?: number };
 
@@ -117,19 +140,49 @@ export function SectionNav({ anchors }: { anchors: SectionAnchor[] }) {
   return (
     <nav
       aria-label="Sections"
-      className="flex flex-wrap items-center gap-2 rounded-md px-3 py-2"
-      style={{ background: "var(--panel)", border: "1px solid var(--border)" }}
+      className="flex flex-wrap items-center gap-1.5"
+      style={{
+        padding: "8px 12px",
+        background:
+          "linear-gradient(180deg, color-mix(in oklab, var(--surface-1) 60%, transparent) 0%, transparent 100%)",
+        border: "1px solid var(--border-subtle)",
+        borderRadius: 10,
+      }}
     >
       {anchors.map((a) => (
         <a
           key={a.id}
           href={`#${a.id}`}
-          className="inline-flex items-center gap-1.5 rounded-full px-2.5 py-0.5 text-xs"
-          style={{ background: "var(--surface-2)", color: "var(--text)" }}
+          className="ts-focus inline-flex items-center gap-1.5 transition-colors"
+          style={{
+            padding: "5px 11px",
+            background: "color-mix(in oklab, var(--surface-2) 60%, transparent)",
+            border: "1px solid var(--border-subtle)",
+            color: "var(--text-muted)",
+            fontSize: 11.5,
+            fontWeight: 600,
+            letterSpacing: "-0.005em",
+            borderRadius: 999,
+            lineHeight: 1.2,
+          }}
         >
           {a.label}
           {typeof a.count === "number" && (
-            <span className="tabular-nums" style={{ color: "var(--muted)" }}>
+            <span
+              style={{
+                color: "var(--accent-primary)",
+                background: "var(--accent-surface)",
+                border:
+                  "1px solid color-mix(in oklab, var(--accent-primary) 22%, transparent)",
+                fontSize: 10,
+                fontWeight: 700,
+                padding: "1px 5px",
+                borderRadius: 4,
+                fontFeatureSettings: "'tnum' 1",
+                marginLeft: 2,
+                lineHeight: 1,
+              }}
+            >
               {a.count}
             </span>
           )}
