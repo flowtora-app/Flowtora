@@ -86,15 +86,24 @@ export function ShortcutsDialog({ open, onOpenChange }: ShortcutsDialogProps) {
       aria-modal
       aria-label="Keyboard shortcuts"
       className="fixed inset-0 flex items-start justify-center pt-[8vh]"
-      style={{ background: "rgba(0,0,0,0.55)", zIndex: "var(--z-modal)" }}
+      style={{
+        background: "rgba(0,0,0,0.55)",
+        backdropFilter: "blur(6px) saturate(140%)",
+        zIndex: "var(--z-modal)",
+      }}
       onClick={() => onOpenChange(false)}
     >
       <div
-        className="w-full max-w-2xl overflow-hidden rounded-xl"
+        className="w-full max-w-2xl overflow-hidden rounded-2xl"
         style={{
-          background: "var(--surface-2)",
+          background:
+            "radial-gradient(640px circle at -10% -30%, var(--accent-surface), transparent 60%), " +
+            "linear-gradient(180deg, color-mix(in oklab, var(--surface-1) 92%, white 8%) 0%, var(--surface-1) 100%)",
           border: "1px solid var(--border-default)",
-          boxShadow: "var(--shadow-lg)",
+          boxShadow:
+            "inset 0 1px 0 0 color-mix(in oklab, white 6%, transparent), " +
+            "0 24px 60px -12px rgba(0,0,0,0.6), " +
+            "0 0 0 1px color-mix(in oklab, var(--accent-primary) 8%, transparent)",
         }}
         onClick={(e) => e.stopPropagation()}
       >
@@ -102,9 +111,36 @@ export function ShortcutsDialog({ open, onOpenChange }: ShortcutsDialogProps) {
           className="flex items-center justify-between px-5 py-3.5"
           style={{ borderBottom: "1px solid var(--border-subtle)" }}
         >
-          <div className="flex items-center gap-2">
-            <Icon.Keyboard size={16} style={{ color: "var(--text-muted)" }} />
-            <h2 className="text-sm font-semibold" style={{ color: "var(--text-default)" }}>
+          <div className="flex items-center gap-2.5">
+            <span
+              aria-hidden
+              style={{
+                display: "inline-flex",
+                alignItems: "center",
+                justifyContent: "center",
+                width: 28,
+                height: 28,
+                borderRadius: 7,
+                background:
+                  "linear-gradient(135deg, var(--accent-surface-strong), var(--accent-surface))",
+                color: "var(--accent-primary)",
+                border:
+                  "1px solid color-mix(in oklab, var(--accent-primary) 22%, transparent)",
+                boxShadow:
+                  "inset 0 1px 0 0 color-mix(in oklab, white 6%, transparent)",
+              }}
+            >
+              <Icon.Keyboard size={14} />
+            </span>
+            <h2
+              style={{
+                color: "var(--text-default)",
+                fontSize: 15,
+                fontWeight: 600,
+                letterSpacing: "-0.005em",
+                lineHeight: 1.2,
+              }}
+            >
               Keyboard shortcuts
             </h2>
           </div>
@@ -112,49 +148,90 @@ export function ShortcutsDialog({ open, onOpenChange }: ShortcutsDialogProps) {
             type="button"
             onClick={() => onOpenChange(false)}
             aria-label="Close"
-            className="ts-focus rounded p-1 transition-colors hover:brightness-110"
+            className="ts-focus inline-flex h-7 w-7 items-center justify-center rounded-md transition-colors hover:bg-[var(--surface-3)]"
             style={{ color: "var(--text-muted)" }}
           >
             <Icon.X size={14} />
           </button>
         </div>
 
-        <div className="grid grid-cols-1 gap-x-6 gap-y-4 px-5 py-4 md:grid-cols-2">
+        <div className="grid grid-cols-1 gap-x-6 gap-y-5 px-5 py-5 md:grid-cols-2">
           {SHORTCUT_GROUPS.map((group) => (
             <div key={group.label}>
               <div
-                className="mb-2 text-[10px] font-semibold uppercase tracking-wider"
-                style={{ color: "var(--text-faint)" }}
+                className="mb-2.5 flex items-center gap-1.5"
+                style={{
+                  color: "var(--text-default)",
+                  fontSize: 10.5,
+                  fontWeight: 700,
+                  textTransform: "uppercase",
+                  letterSpacing: "0.1em",
+                  lineHeight: 1.2,
+                }}
               >
+                <span
+                  aria-hidden
+                  style={{
+                    width: 3,
+                    height: 3,
+                    borderRadius: 1,
+                    background: "var(--accent-primary)",
+                  }}
+                />
                 {group.label}
               </div>
-              <ul className="flex flex-col gap-1.5">
+              <ul className="flex flex-col gap-2">
                 {group.items.map((s, i) => (
-                  <li key={i} className="flex items-center gap-2 text-xs">
+                  <li key={i} className="flex items-center gap-3">
                     <span className="flex shrink-0 items-center gap-1">
                       {s.keys.map((k, j) => (
                         <kbd
                           key={j}
-                          className="rounded px-1.5 py-0.5 text-[10px] font-semibold"
                           style={{
-                            background: "var(--surface-3)",
-                            border: "1px solid var(--border-default)",
+                            display: "inline-flex",
+                            alignItems: "center",
+                            justifyContent: "center",
+                            background:
+                              "linear-gradient(180deg, color-mix(in oklab, var(--surface-2) 92%, white 8%) 0%, var(--surface-2) 100%)",
+                            border: "1px solid var(--border-subtle)",
                             color: "var(--text-default)",
-                            minWidth: 18,
-                            textAlign: "center",
+                            minWidth: 22,
+                            height: 22,
+                            padding: "0 6px",
+                            borderRadius: 5,
+                            fontSize: 10.5,
+                            fontWeight: 700,
+                            letterSpacing: "0.02em",
+                            fontFamily:
+                              "var(--font-mono, ui-monospace, SFMono-Regular, monospace)",
+                            boxShadow:
+                              "inset 0 1px 0 0 color-mix(in oklab, white 6%, transparent), " +
+                              "0 1px 0 0 rgba(0,0,0,0.25)",
+                            lineHeight: 1,
                           }}
                         >
                           {k}
                         </kbd>
                       ))}
                     </span>
-                    <span className="flex-1" style={{ color: "var(--text-default)" }}>
+                    <span
+                      className="flex-1"
+                      style={{
+                        color: "var(--text-default)",
+                        fontSize: 12.5,
+                        fontWeight: 500,
+                        letterSpacing: "-0.005em",
+                      }}
+                    >
                       {s.label}
                     </span>
                     {s.hint && (
                       <span
-                        className="text-[10px]"
-                        style={{ color: "var(--text-faint)" }}
+                        style={{
+                          color: "var(--text-faint)",
+                          fontSize: 10.5,
+                          lineHeight: 1.3,
+                        }}
                       >
                         {s.hint}
                       </span>
@@ -167,22 +244,52 @@ export function ShortcutsDialog({ open, onOpenChange }: ShortcutsDialogProps) {
         </div>
 
         <div
-          className="px-5 py-2 text-[10px]"
-          style={{ borderTop: "1px solid var(--border-subtle)", color: "var(--text-faint)" }}
+          className="flex items-center gap-2 px-5 py-2.5"
+          style={{
+            borderTop: "1px solid var(--border-subtle)",
+            color: "var(--text-faint)",
+            fontSize: 10.5,
+            background:
+              "linear-gradient(180deg, transparent 0%, color-mix(in oklab, var(--surface-0) 35%, transparent) 100%)",
+          }}
         >
-          Shortcuts marked with a hint aren&apos;t bound to a literal
-          key combo yet — use the command palette to trigger them. Press{" "}
+          <span>Shortcuts with a hint use the command palette · </span>
           <kbd
-            className="rounded px-1 py-0.5"
             style={{
-              background: "var(--surface-3)",
-              border: "1px solid var(--border-default)",
+              display: "inline-flex",
+              alignItems: "center",
+              justifyContent: "center",
+              background: "var(--surface-2)",
+              border: "1px solid var(--border-subtle)",
               color: "var(--text-default)",
+              padding: "1px 5px",
+              borderRadius: 4,
+              fontSize: 9.5,
+              fontWeight: 700,
+              fontFamily: "var(--font-mono, ui-monospace, monospace)",
             }}
           >
             ?
-          </kbd>{" "}
-          to toggle this sheet · Esc to close.
+          </kbd>
+          <span>toggle ·</span>
+          <kbd
+            style={{
+              display: "inline-flex",
+              alignItems: "center",
+              justifyContent: "center",
+              background: "var(--surface-2)",
+              border: "1px solid var(--border-subtle)",
+              color: "var(--text-default)",
+              padding: "1px 5px",
+              borderRadius: 4,
+              fontSize: 9.5,
+              fontWeight: 700,
+              fontFamily: "var(--font-mono, ui-monospace, monospace)",
+            }}
+          >
+            Esc
+          </kbd>
+          <span>close</span>
         </div>
       </div>
     </div>
