@@ -205,28 +205,25 @@ export default async function TenantLayout({
 
   const collapsedInitial = jar.get("ts_shell_collapsed")?.value === "1";
 
-  // Sidebar structured around the sales-to-cash lifecycle — five
-  // clusters that mirror how a shop actually moves through a job:
-  //   Inbox    — what needs me today
-  //   Sell     — pre-commitment: lead → customer → quote
-  //   Produce  — the work: order → proofs → shop floor → install
-  //   Collect  — invoices & cash
-  //   Manage   — catalog, costs, reporting, admin
+  // Sidebar organized to match the tenant spec (Page T-shell):
+  //   Workspace        — daily landing + unified inbox
+  //   Sales            — pre-commitment funnel + A/R: leads, customers,
+  //                       quotes, invoices, payments
+  //   Production       — execution: orders, proofs, shop floor, installs
+  //   Catalog          — what we sell
+  //   Finance          — costs + suppliers (extras not in spec but
+  //                       essential to running a shop)
+  //   Reports          — analytics
+  //   Help & Settings  — anchored at the bottom per the spec
   //
-  // Rationale: Quotes sit with Customers (pre-sale funnel), Orders lead
-  // Produce (pivot from sales to execution), Payments gets its own line
-  // in Collect (A/R is a daily concern), Proofs is promoted out of the
-  // order-detail nesting because design approval is a frequent task.
+  // Sections that don't have shipped pages yet (Calendar, Kanban,
+  // Equipment, Material orders, Storefront, Reviews, Marketing, Forms)
+  // are intentionally omitted — the sidebar stays an honest map of
+  // what's live. They'll slot in as we build them out.
   const base = `/t/${slug}`;
   const sections: SidebarSection[] = [
     {
-      // Sprint 1 (Inbox consolidation): the five legacy inbox entries
-      // (attention/approvals/messages/tasks + notifications popover target)
-      // are now a single "Inbox" link. Chips inside the page handle the
-      // per-surface navigation. Badge sums action-items only — attention
-      // + messages + approvals — matching the pre-consolidation UX where
-      // tasks never surfaced a sidebar count.
-      label: "Inbox",
+      label: "Workspace",
       items: [
         { href: `${base}/dashboard`, label: "Dashboard", icon: "Dashboard" },
         {
@@ -238,15 +235,17 @@ export default async function TenantLayout({
       ],
     },
     {
-      label: "Sell",
+      label: "Sales",
       items: [
         { href: `${base}/leads`,     label: "Pipeline",  icon: "Pipeline"  },
         { href: `${base}/customers`, label: "Customers", icon: "Customers" },
         { href: `${base}/quotes`,    label: "Quotes",    icon: "Quotes"    },
+        { href: `${base}/invoices`,  label: "Invoices",  icon: "Invoices"  },
+        { href: `${base}/payments`,  label: "Payments",  icon: "Payments"  },
       ],
     },
     {
-      label: "Produce",
+      label: "Production",
       items: [
         { href: `${base}/orders`,     label: "Orders",     icon: "Orders"     },
         { href: `${base}/proofs`,     label: "Proofs",     icon: "Proofs"     },
@@ -255,19 +254,27 @@ export default async function TenantLayout({
       ],
     },
     {
-      label: "Collect",
+      label: "Catalog",
       items: [
-        { href: `${base}/invoices`, label: "Invoices", icon: "Invoices" },
-        { href: `${base}/payments`, label: "Payments", icon: "Payments" },
+        { href: `${base}/products`, label: "Products", icon: "Products" },
       ],
     },
     {
-      label: "Manage",
+      label: "Finance",
       items: [
-        { href: `${base}/products`, label: "Products", icon: "Products" },
-        { href: `${base}/vendors`,  label: "Vendors",  icon: "Vendors"  },
         { href: `${base}/expenses`, label: "Expenses", icon: "Expenses" },
-        { href: `${base}/reports`,  label: "Reports",  icon: "Reports"  },
+        { href: `${base}/vendors`,  label: "Vendors",  icon: "Vendors"  },
+      ],
+    },
+    {
+      label: "Reports",
+      items: [
+        { href: `${base}/reports`, label: "Reports", icon: "Reports" },
+      ],
+    },
+    {
+      label: "Help & Settings",
+      items: [
         { href: `${base}/support`,  label: "Support",  icon: "Support"  },
         { href: `${base}/settings`, label: "Settings", icon: "Settings" },
       ],
