@@ -87,23 +87,49 @@ export default async function WelcomePage({
     : "Set up your workspace";
 
   return (
-    <main className="mx-auto flex min-h-screen max-w-xl items-center px-6 py-16">
-      <div className="w-full space-y-6">
-        {/* Success glyph — a simple check inside a tinted circle.
-            Using inline SVG keeps the page dep-free and renders
-            consistently across themes via currentColor. */}
+    <main
+      className="relative mx-auto flex min-h-screen max-w-xl items-center px-6 py-16"
+      style={{
+        // Soft radial accent at the top to celebrate the moment without
+        // overwhelming the white space the page relies on.
+      }}
+    >
+      {/* Background accent halo — fixed so it stays put as the page renders. */}
+      <div
+        aria-hidden
+        style={{
+          position: "fixed",
+          inset: 0,
+          background:
+            "radial-gradient(900px circle at 50% -10%, var(--accent-surface), transparent 50%), " +
+            "radial-gradient(620px circle at 50% 110%, color-mix(in oklab, var(--emerald-500) 8%, transparent), transparent 55%)",
+          pointerEvents: "none",
+          zIndex: 0,
+        }}
+      />
+      <div className="relative z-10 w-full space-y-6">
+        {/* Success glyph — gradient emerald tile with glow. */}
         <div
-          className="mx-auto flex h-14 w-14 items-center justify-center rounded-full"
+          className="mx-auto flex items-center justify-center"
           style={{
-            background: "var(--success-surface)",
-            color: "var(--success-fg)",
-            border: "1px solid var(--success-fg)",
+            width: 72,
+            height: 72,
+            borderRadius: 18,
+            background:
+              "linear-gradient(135deg, color-mix(in oklab, var(--emerald-500) 28%, transparent), color-mix(in oklab, var(--emerald-500) 14%, transparent))",
+            color: "var(--emerald-500)",
+            border:
+              "1px solid color-mix(in oklab, var(--emerald-500) 35%, transparent)",
+            boxShadow:
+              "inset 0 1px 0 0 color-mix(in oklab, white 8%, transparent), " +
+              "0 0 32px -4px color-mix(in oklab, var(--emerald-500) 35%, transparent), " +
+              "0 4px 14px -2px rgba(0,0,0,0.25)",
           }}
           aria-hidden
         >
           <svg
-            width="28"
-            height="28"
+            width="36"
+            height="36"
             viewBox="0 0 24 24"
             fill="none"
             stroke="currentColor"
@@ -117,22 +143,31 @@ export default async function WelcomePage({
 
         <div className="text-center">
           <h1
-            className="text-3xl font-semibold tracking-tight"
-            style={{ color: "var(--text-default)" }}
+            className="font-semibold"
+            style={{
+              color: "var(--text-default)",
+              fontSize: 32,
+              letterSpacing: "-0.022em",
+              lineHeight: 1.15,
+            }}
           >
             {onboarded
               ? `You're on Flowtora ${planLabel}.`
-              : `Welcome to Flowtora ${planLabel}!`}
+              : `Welcome to Flowtora ${planLabel}.`}
           </h1>
           <p
-            className="mx-auto mt-3 max-w-md text-sm"
-            style={{ color: "var(--text-muted)" }}
+            className="mx-auto mt-3 max-w-md"
+            style={{
+              color: "var(--text-muted)",
+              fontSize: 14,
+              lineHeight: 1.5,
+            }}
           >
             Your subscription is active.
             {user?.email && (
               <>
                 {" "}A receipt is on its way to{" "}
-                <span style={{ color: "var(--text-default)" }}>
+                <span style={{ color: "var(--text-default)", fontWeight: 500 }}>
                   {user.email}
                 </span>
                 .
@@ -141,41 +176,76 @@ export default async function WelcomePage({
           </p>
         </div>
 
-        {/* Plan summary chip. Only renders if we got a valid plan from
-            the URL — otherwise we keep the page clean rather than
-            invent data. */}
+        {/* Plan summary card — premium rounded-2xl with accent halo. */}
         {planKey && (
           <div
-            className="mx-auto flex max-w-sm items-center justify-between rounded-xl px-5 py-4 text-sm"
+            className="mx-auto flex max-w-sm items-center justify-between overflow-hidden rounded-2xl"
             style={{
-              background: "var(--surface-1)",
+              padding: "16px 20px",
+              background:
+                "radial-gradient(540px circle at -10% -40%, var(--accent-surface), transparent 60%), " +
+                "linear-gradient(180deg, color-mix(in oklab, var(--surface-1) 92%, white 8%) 0%, var(--surface-1) 100%)",
               border: "1px solid var(--border-subtle)",
+              boxShadow:
+                "inset 0 1px 0 0 color-mix(in oklab, white 4%, transparent), " +
+                "0 1px 2px 0 rgba(0,0,0,0.18)",
             }}
           >
             <div>
               <div
-                className="text-xs uppercase tracking-wide"
-                style={{ color: "var(--text-muted)" }}
+                style={{
+                  color: "var(--text-faint)",
+                  fontSize: 10,
+                  fontWeight: 700,
+                  letterSpacing: "0.08em",
+                  textTransform: "uppercase",
+                  lineHeight: 1.1,
+                }}
               >
                 Plan
               </div>
               <div
-                className="mt-0.5 font-semibold"
-                style={{ color: "var(--text-default)" }}
+                className="mt-1"
+                style={{
+                  color: "var(--text-default)",
+                  fontSize: 16,
+                  fontWeight: 600,
+                  letterSpacing: "-0.01em",
+                  lineHeight: 1.2,
+                }}
               >
                 Flowtora {planLabel}
               </div>
             </div>
             {cycle && (
               <span
-                className="rounded-full px-2.5 py-0.5 text-xs font-medium"
                 style={{
-                  background: "var(--accent-surface)",
+                  display: "inline-flex",
+                  alignItems: "center",
+                  gap: 5,
+                  fontSize: 11,
+                  fontWeight: 700,
+                  letterSpacing: "0.04em",
+                  textTransform: "uppercase",
                   color: "var(--accent-primary)",
-                  border: "1px solid var(--accent-surface-strong)",
+                  background: "var(--accent-surface)",
+                  border:
+                    "1px solid color-mix(in oklab, var(--accent-primary) 28%, transparent)",
+                  padding: "4px 10px",
+                  borderRadius: 999,
+                  lineHeight: 1,
                 }}
               >
-                Billed {cycle === "annual" ? "annually" : "monthly"}
+                <span
+                  aria-hidden
+                  style={{
+                    width: 5,
+                    height: 5,
+                    borderRadius: 999,
+                    background: "var(--accent-primary)",
+                  }}
+                />
+                {cycle === "annual" ? "Annual" : "Monthly"}
               </span>
             )}
           </div>
@@ -184,33 +254,51 @@ export default async function WelcomePage({
         <div className="pt-2">
           <a
             href={primaryHref}
-            className="ts-focus inline-flex h-12 w-full items-center justify-center gap-2 rounded-md text-sm font-semibold transition-colors hover:brightness-110"
+            className="ts-focus inline-flex h-12 w-full items-center justify-center gap-2 rounded-xl font-semibold transition-transform"
             style={{
-              background: "var(--accent-primary)",
+              background:
+                "linear-gradient(180deg, color-mix(in oklab, var(--accent-primary) 96%, white 4%) 0%, var(--accent-primary) 100%)",
               color: "var(--accent-fg)",
+              border:
+                "1px solid color-mix(in oklab, var(--accent-primary) 80%, black 20%)",
+              boxShadow:
+                "0 1px 0 0 rgba(255,255,255,0.18) inset, " +
+                "0 4px 14px -2px color-mix(in oklab, var(--accent-primary) 40%, transparent), " +
+                "0 1px 2px 0 rgba(0,0,0,0.35)",
+              fontSize: 14,
+              letterSpacing: "-0.005em",
             }}
           >
             {primaryLabel}
-            <span aria-hidden>→</span>
+            <svg width="15" height="15" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2.5">
+              <path d="M5 12h14M12 5l7 7-7 7" />
+            </svg>
           </a>
           {!onboarded && (
             <p
-              className="mt-3 text-center text-xs"
-              style={{ color: "var(--text-muted)" }}
+              className="mt-3 text-center"
+              style={{
+                color: "var(--text-muted)",
+                fontSize: 12,
+                lineHeight: 1.4,
+              }}
             >
               Takes about 5 minutes — you can pick up where you left off anytime.
             </p>
           )}
         </div>
 
-        {/* Escape hatch for users who want to look around first.
-            Not prominent; the primary CTA is onboarding. */}
+        {/* Escape hatch. */}
         {!onboarded && (
-          <p className="text-center text-xs">
+          <p className="text-center">
             <a
               href={`/t/${slug}/dashboard`}
-              className="underline"
-              style={{ color: "var(--text-muted)" }}
+              className="ts-focus inline-block transition-colors hover:text-[var(--text-default)]"
+              style={{
+                color: "var(--text-faint)",
+                fontSize: 11.5,
+                fontWeight: 500,
+              }}
             >
               Skip for now — go to dashboard
             </a>
