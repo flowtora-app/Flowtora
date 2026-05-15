@@ -914,85 +914,227 @@ export default async function QuoteDetailPage({
         </div>
       )}
 
-      {/* STICKY HEADER — ID + status + customer/rep/expiry + total + primary actions. */}
+      {/* STICKY HEADER — ID + status + customer/rep/expiry + total + primary actions.
+          Premium-redesigned to match the customer detail status row pattern:
+          rounded-2xl card, accent halo, frosted-blur backdrop, 48px customer
+          avatar tile, tinted status pill, 22px tabular total. */}
       <header
-        className="sticky top-0 z-10 rounded-lg"
+        className="sticky top-0 z-10 overflow-hidden rounded-2xl"
         style={{
-          background: "var(--surface-0)",
+          background:
+            "radial-gradient(720px circle at -8% -40%, var(--accent-surface), transparent 55%), " +
+            "linear-gradient(180deg, color-mix(in oklab, var(--surface-1) 92%, white 8%) 0%, var(--surface-1) 100%)",
           border: "1px solid var(--border-subtle)",
-          boxShadow: "0 1px 2px rgb(0 0 0 / 0.04)",
+          boxShadow:
+            "inset 0 1px 0 0 color-mix(in oklab, white 4%, transparent), " +
+            "0 2px 8px -2px rgba(0,0,0,0.25)",
+          backdropFilter: "saturate(140%) blur(2px)",
         }}
       >
         <div className="flex flex-wrap items-start justify-between gap-4 px-5 py-4">
-          <div className="min-w-0 flex-1">
-            <div className="flex flex-wrap items-center gap-2.5">
-              <h1 className="text-xl font-semibold" style={{ color: "var(--text-default)" }}>
-                {quote.number}
-              </h1>
-              <span
-                className="rounded-full px-2 py-0.5 text-[11px] font-medium"
-                style={{ background: statusColor(quote.status), color: "white" }}
-              >
-                {statusLabel(quote.status)}
-              </span>
-              {hasRevisions && (
-                <span
-                  className="rounded-full px-2 py-0.5 text-[11px]"
+          <div className="flex min-w-0 flex-1 items-start gap-3.5">
+            {/* Customer avatar — 48px gradient tile + accent ring. */}
+            <Link
+              href={`/t/${slug}/customers/${quote.customer.id}`}
+              aria-label={`View ${quote.customer.name}`}
+              style={{
+                display: "inline-flex",
+                alignItems: "center",
+                justifyContent: "center",
+                width: 48,
+                height: 48,
+                borderRadius: 12,
+                background:
+                  "linear-gradient(135deg, var(--accent-surface-strong), var(--accent-surface))",
+                color: "var(--accent-primary)",
+                border:
+                  "1px solid color-mix(in oklab, var(--accent-primary) 30%, transparent)",
+                fontSize: 18,
+                fontWeight: 700,
+                letterSpacing: "0.02em",
+                flexShrink: 0,
+                boxShadow:
+                  "inset 0 1px 0 0 color-mix(in oklab, white 6%, transparent)",
+              }}
+            >
+              {(quote.customer.name ?? "?").trim().charAt(0).toUpperCase() || "?"}
+            </Link>
+
+            <div className="min-w-0 flex-1">
+              <div className="flex flex-wrap items-center gap-2">
+                <h1
+                  className="font-semibold"
                   style={{
-                    background: "var(--surface-1)",
-                    border: "1px solid var(--border-subtle)",
-                    color: "var(--text-muted)",
+                    color: "var(--text-default)",
+                    fontSize: 22,
+                    letterSpacing: "-0.018em",
+                    lineHeight: 1.2,
+                    fontFeatureSettings: "'tnum' 1",
                   }}
-                  title="Part of a revision chain"
                 >
-                  Rev {quote.revisionNumber} of {revisionChain.length}
-                </span>
-              )}
-              {expiringSoon && (
-                <span
-                  className="rounded-full px-2 py-0.5 text-[11px] font-medium"
-                  style={{
-                    background: "var(--warning-surface, #3a2e15)",
-                    color: "var(--warning-fg, #ffd27a)",
-                  }}
-                  title={`Expires in ${expiryDaysLeft} day${expiryDaysLeft === 1 ? "" : "s"}`}
-                >
-                  ⌛ Expires in {expiryDaysLeft}d
-                </span>
-              )}
-            </div>
-            <div className="mt-1 text-sm" style={{ color: "var(--text-muted)" }}>
-              For{" "}
-              <Link
-                href={`/t/${slug}/customers/${quote.customer.id}`}
-                className="underline"
-                style={{ color: "var(--text-default)" }}
+                  {quote.number}
+                </h1>
+                {/* Status pill — tinted using the existing status hex. */}
+                {(() => {
+                  const sc = statusColor(quote.status);
+                  return (
+                    <span
+                      style={{
+                        display: "inline-flex",
+                        alignItems: "center",
+                        gap: 4,
+                        fontSize: 10,
+                        fontWeight: 700,
+                        letterSpacing: "0.06em",
+                        textTransform: "uppercase",
+                        padding: "2px 7px",
+                        borderRadius: 999,
+                        color: sc,
+                        background: `color-mix(in oklab, ${sc} 16%, transparent)`,
+                        border: `1px solid color-mix(in oklab, ${sc} 32%, transparent)`,
+                        lineHeight: 1,
+                        whiteSpace: "nowrap",
+                      }}
+                    >
+                      <span
+                        aria-hidden
+                        style={{
+                          width: 4,
+                          height: 4,
+                          borderRadius: 999,
+                          background: sc,
+                          boxShadow: `0 0 0 1.5px color-mix(in oklab, ${sc} 25%, transparent)`,
+                        }}
+                      />
+                      {statusLabel(quote.status)}
+                    </span>
+                  );
+                })()}
+                {hasRevisions && (
+                  <span
+                    style={{
+                      fontSize: 9.5,
+                      fontWeight: 700,
+                      letterSpacing: "0.08em",
+                      textTransform: "uppercase",
+                      padding: "2px 6px",
+                      borderRadius: 4,
+                      color: "var(--text-muted)",
+                      background: "var(--surface-2)",
+                      border: "1px solid var(--border-subtle)",
+                      lineHeight: 1,
+                    }}
+                    title="Part of a revision chain"
+                  >
+                    Rev {quote.revisionNumber} of {revisionChain.length}
+                  </span>
+                )}
+                {expiringSoon && (
+                  <span
+                    className="inline-flex items-center gap-1.5"
+                    style={{
+                      fontSize: 10.5,
+                      fontWeight: 700,
+                      letterSpacing: "0.04em",
+                      padding: "2px 8px",
+                      borderRadius: 999,
+                      color: "var(--warning-fg, var(--amber-500))",
+                      background:
+                        "color-mix(in oklab, var(--amber-500) 14%, transparent)",
+                      border:
+                        "1px solid color-mix(in oklab, var(--amber-500) 30%, transparent)",
+                      lineHeight: 1,
+                    }}
+                    title={`Expires in ${expiryDaysLeft} day${expiryDaysLeft === 1 ? "" : "s"}`}
+                  >
+                    <span
+                      aria-hidden
+                      style={{
+                        width: 5,
+                        height: 5,
+                        borderRadius: 999,
+                        background: "var(--warning-fg, var(--amber-500))",
+                        boxShadow:
+                          "0 0 0 2px color-mix(in oklab, var(--amber-500) 25%, transparent)",
+                      }}
+                    />
+                    Expires in {expiryDaysLeft}d
+                  </span>
+                )}
+              </div>
+              <div
+                className="mt-1.5 truncate"
+                style={{
+                  color: "var(--text-muted)",
+                  fontSize: 12.5,
+                  lineHeight: 1.4,
+                }}
               >
-                {quote.customer.name}
-              </Link>
-              {" · "}Rep {quote.salesRepId ? (memberMap.get(quote.salesRepId)?.name ?? "—") : "—"}
-              {" · "}Expires {quote.expiresAt ? formatDate(quote.expiresAt) : "—"}
-              {quote.order && (
-                <>
-                  {" · "}Order{" "}
-                  <Link href={`/t/${slug}/orders/${quote.order.id}`} className="underline">
-                    {quote.order.number}
-                  </Link>
-                </>
-              )}
+                For{" "}
+                <Link
+                  href={`/t/${slug}/customers/${quote.customer.id}`}
+                  style={{
+                    color: "var(--text-default)",
+                    fontWeight: 500,
+                    textDecoration: "none",
+                  }}
+                  className="hover:underline"
+                >
+                  {quote.customer.name}
+                </Link>
+                <span style={{ color: "var(--text-faint)" }}> · </span>
+                Rep{" "}
+                <span style={{ color: "var(--text-default)" }}>
+                  {quote.salesRepId ? (memberMap.get(quote.salesRepId)?.name ?? "—") : "—"}
+                </span>
+                <span style={{ color: "var(--text-faint)" }}> · </span>
+                Expires{" "}
+                <span style={{ color: "var(--text-default)" }}>
+                  {quote.expiresAt ? formatDate(quote.expiresAt) : "—"}
+                </span>
+                {quote.order && (
+                  <>
+                    <span style={{ color: "var(--text-faint)" }}> · </span>
+                    Order{" "}
+                    <Link
+                      href={`/t/${slug}/orders/${quote.order.id}`}
+                      style={{
+                        color: "var(--accent-primary)",
+                        fontWeight: 500,
+                        textDecoration: "none",
+                      }}
+                      className="hover:underline"
+                    >
+                      {quote.order.number}
+                    </Link>
+                  </>
+                )}
+              </div>
             </div>
           </div>
-          <div className="flex items-center gap-5 shrink-0">
+          <div className="flex items-center gap-4 shrink-0">
             <div className="text-right">
               <div
-                className="text-[10px] uppercase tracking-wide"
-                style={{ color: "var(--text-muted)" }}
+                style={{
+                  color: "var(--text-faint)",
+                  fontSize: 10,
+                  fontWeight: 700,
+                  letterSpacing: "0.08em",
+                  textTransform: "uppercase",
+                  lineHeight: 1.1,
+                }}
               >
                 Total
               </div>
               <div
-                className="text-2xl font-bold tabular-nums leading-tight"
-                style={{ color: "var(--text-default)" }}
+                className="mt-1 font-semibold"
+                style={{
+                  color: "var(--text-default)",
+                  fontSize: 22,
+                  letterSpacing: "-0.018em",
+                  lineHeight: 1.1,
+                  fontFeatureSettings: "'tnum' 1",
+                }}
               >
                 {formatMoney(quote.total.toString(), ctx.tenant.currency)}
               </div>
