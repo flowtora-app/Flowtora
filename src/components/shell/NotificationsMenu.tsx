@@ -53,18 +53,30 @@ export function NotificationsMenu({
           aria-label="Notifications"
           title={unread > 0 ? `${unread} unread` : "Notifications"}
           onClick={() => onOpenChange(!open)}
-          className="ts-focus relative inline-flex h-8 w-8 items-center justify-center rounded-md transition-colors hover:brightness-110"
+          className="ts-focus relative inline-flex h-9 w-9 items-center justify-center rounded-lg transition-colors"
           style={{
-            border: "1px solid var(--border-subtle)",
+            border: open ? "1px solid var(--border-default)" : "1px solid transparent",
             color: "var(--text-muted)",
-            background: "var(--surface-1)",
+            background: open ? "var(--surface-2)" : "transparent",
           }}
         >
           <Icon.Bell size={15} />
           {unread > 0 && (
             <span
-              className="absolute -right-1 -top-1 flex h-4 min-w-[1rem] items-center justify-center rounded-full px-1 text-[10px] font-semibold"
-              style={{ background: "var(--danger)", color: "white" }}
+              className="absolute -right-1 -top-1 inline-flex h-[18px] min-w-[18px] items-center justify-center rounded-full px-1"
+              style={{
+                background:
+                  "linear-gradient(180deg, color-mix(in oklab, var(--rose-500) 96%, white 4%) 0%, var(--rose-500) 100%)",
+                color: "white",
+                fontSize: 9.5,
+                fontWeight: 700,
+                letterSpacing: "-0.005em",
+                border: "1.5px solid var(--surface-0)",
+                boxShadow:
+                  "0 0 0 1px color-mix(in oklab, var(--rose-500) 50%, transparent), " +
+                  "0 1px 2px 0 rgba(0,0,0,0.35)",
+                fontFeatureSettings: "'tnum' 1",
+              }}
             >
               {unread > 99 ? "99+" : unread}
             </span>
@@ -73,20 +85,91 @@ export function NotificationsMenu({
       }
     >
       <div
-        className="flex items-center justify-between px-3 py-2"
+        className="flex items-center justify-between px-3.5 py-3"
         style={{ borderBottom: "1px solid var(--border-subtle)" }}
       >
-        <span className="text-sm font-medium" style={{ color: "var(--text-default)" }}>
-          Notifications
-        </span>
-        <span className="text-[11px]" style={{ color: "var(--text-muted)" }}>
-          {unread} unread
-        </span>
+        <div className="flex items-center gap-1.5">
+          <span
+            aria-hidden
+            style={{
+              width: 3,
+              height: 3,
+              borderRadius: 1,
+              background: "var(--accent-primary)",
+            }}
+          />
+          <span
+            style={{
+              color: "var(--text-default)",
+              fontSize: 12,
+              fontWeight: 700,
+              textTransform: "uppercase",
+              letterSpacing: "0.08em",
+              lineHeight: 1.2,
+            }}
+          >
+            Notifications
+          </span>
+        </div>
+        {unread > 0 ? (
+          <span
+            style={{
+              fontSize: 10.5,
+              fontWeight: 700,
+              color: "var(--rose-500)",
+              background:
+                "color-mix(in oklab, var(--rose-500) 14%, transparent)",
+              border:
+                "1px solid color-mix(in oklab, var(--rose-500) 30%, transparent)",
+              padding: "2px 7px",
+              borderRadius: 999,
+              letterSpacing: "0.04em",
+              fontFeatureSettings: "'tnum' 1",
+              lineHeight: 1,
+            }}
+          >
+            {unread} unread
+          </span>
+        ) : (
+          <span
+            style={{
+              fontSize: 10.5,
+              color: "var(--text-faint)",
+              letterSpacing: "0.04em",
+            }}
+          >
+            All caught up
+          </span>
+        )}
       </div>
 
       {recent.length === 0 ? (
-        <div className="px-3 py-6 text-center text-xs" style={{ color: "var(--text-muted)" }}>
-          You&rsquo;re all caught up.
+        <div
+          className="px-4 py-8 text-center"
+          style={{ color: "var(--text-muted)", fontSize: 12.5 }}
+        >
+          <div
+            aria-hidden
+            className="mx-auto mb-2 flex items-center justify-center"
+            style={{
+              width: 36,
+              height: 36,
+              borderRadius: 10,
+              background:
+                "linear-gradient(135deg, var(--accent-surface-strong), var(--accent-surface))",
+              color: "var(--accent-primary)",
+              border:
+                "1px solid color-mix(in oklab, var(--accent-primary) 22%, transparent)",
+            }}
+          >
+            <Icon.Bell size={16} />
+          </div>
+          <div style={{ fontWeight: 600, color: "var(--text-default)" }}>
+            You&rsquo;re all caught up
+          </div>
+          <div className="mt-0.5" style={{ fontSize: 11.5 }}>
+            New activity will appear here.
+          </div>
         </div>
       ) : (
         <ul className="max-h-[420px] overflow-y-auto">
@@ -97,27 +180,46 @@ export function NotificationsMenu({
       )}
 
       <PopoverSection>
-        <div className="flex items-center justify-between gap-2 px-3 py-2">
+        <div
+          className="flex items-center justify-between gap-2 px-3.5 py-2.5"
+          style={{
+            background:
+              "linear-gradient(180deg, transparent 0%, color-mix(in oklab, var(--surface-0) 35%, transparent) 100%)",
+          }}
+        >
           {unread > 0 ? (
             <form action={markAll}>
               <button
                 type="submit"
-                className="text-xs underline"
-                style={{ color: "var(--text-muted)" }}
+                className="ts-focus transition-colors hover:text-[color:var(--text-default)]"
+                style={{
+                  color: "var(--text-muted)",
+                  fontSize: 11,
+                  fontWeight: 500,
+                  letterSpacing: "-0.005em",
+                }}
               >
                 Mark all read
               </button>
             </form>
           ) : (
-            <span className="text-xs" style={{ color: "var(--text-faint)" }}>&nbsp;</span>
+            <span style={{ fontSize: 11, color: "var(--text-faint)" }}>&nbsp;</span>
           )}
           <Link
             href={`/t/${slug}/inbox?chip=notifications`}
-            className="text-xs font-medium underline"
-            style={{ color: "var(--accent-primary)" }}
+            className="ts-focus inline-flex items-center gap-1 transition-colors hover:underline"
+            style={{
+              color: "var(--accent-primary)",
+              fontSize: 11.5,
+              fontWeight: 600,
+              letterSpacing: "-0.005em",
+            }}
             onClick={() => onOpenChange(false)}
           >
-            See all →
+            See all
+            <svg width="11" height="11" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2.5">
+              <path d="M5 12h14M12 5l7 7-7 7" />
+            </svg>
           </Link>
         </div>
       </PopoverSection>
@@ -138,30 +240,60 @@ function NotificationRow({
   const markRead = markNotificationRead.bind(null, slug, n.id);
   const when = shortRelativeTime(n.createdAt);
 
+  const nType = notificationColor(n.type);
   const inner = (
     <div className="flex items-start gap-2.5">
       <span
-        className="mt-1.5 h-1.5 w-1.5 shrink-0 rounded-full"
-        style={{ background: unread ? notificationColor(n.type) : "transparent" }}
+        className="mt-1.5 shrink-0"
+        style={{
+          width: 6,
+          height: 6,
+          borderRadius: 999,
+          background: unread ? nType : "transparent",
+          boxShadow: unread
+            ? `0 0 0 1.5px color-mix(in oklab, ${nType} 25%, transparent)`
+            : "none",
+        }}
         aria-hidden
       />
       <div className="min-w-0 flex-1">
         <div className="flex items-center gap-1.5">
           <span
-            className="rounded-full px-1.5 py-0.5 text-[10px] font-medium"
-            style={{ background: notificationColor(n.type), color: "white" }}
+            style={{
+              display: "inline-flex",
+              alignItems: "center",
+              fontSize: 9.5,
+              fontWeight: 700,
+              letterSpacing: "0.06em",
+              textTransform: "uppercase",
+              padding: "2px 6px",
+              borderRadius: 999,
+              color: nType,
+              background: `color-mix(in oklab, ${nType} 16%, transparent)`,
+              border: `1px solid color-mix(in oklab, ${nType} 32%, transparent)`,
+              lineHeight: 1,
+            }}
           >
             {notificationLabel(n.type)}
           </span>
-          <span className="text-[10px]" style={{ color: "var(--text-faint)" }}>
+          <span
+            style={{
+              color: "var(--text-faint)",
+              fontSize: 10.5,
+              fontFeatureSettings: "'tnum' 1",
+            }}
+          >
             {when}
           </span>
         </div>
         <div
-          className="mt-0.5 line-clamp-2 text-sm"
+          className="mt-1 line-clamp-2"
           style={{
             color: unread ? "var(--text-default)" : "var(--text-muted)",
-            fontWeight: unread ? 500 : 400,
+            fontWeight: unread ? 600 : 500,
+            fontSize: 12.5,
+            lineHeight: 1.4,
+            letterSpacing: "-0.005em",
           }}
         >
           {n.title}
@@ -172,10 +304,13 @@ function NotificationRow({
 
   return (
     <li
-      className="px-3 py-2 transition-colors hover:bg-[color:var(--surface-3)]"
+      className="relative transition-colors hover:bg-[color-mix(in_oklab,var(--surface-3)_50%,transparent)]"
       style={{
+        padding: "10px 14px 10px 14px",
         borderBottom: "1px solid var(--border-subtle)",
-        background: unread ? "var(--accent-surface)" : "transparent",
+        background: unread
+          ? "linear-gradient(90deg, var(--accent-surface) 0%, color-mix(in oklab, var(--accent-surface) 30%, transparent) 75%, transparent 100%)"
+          : "transparent",
       }}
     >
       {/* Wrap in link if available; otherwise just render the content */}

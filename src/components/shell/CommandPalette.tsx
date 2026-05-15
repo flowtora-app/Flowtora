@@ -289,48 +289,145 @@ export function CommandPalette({
       aria-modal
       aria-label="Command palette"
       className="fixed inset-0 flex items-start justify-center pt-[12vh]"
-      style={{ background: "rgba(0,0,0,0.55)", zIndex: "var(--z-modal)" }}
+      style={{
+        background: "rgba(0,0,0,0.55)",
+        backdropFilter: "blur(6px) saturate(140%)",
+        zIndex: "var(--z-modal)",
+      }}
       onClick={() => onOpenChange(false)}
     >
       <div
-        className="w-full max-w-xl overflow-hidden rounded-xl"
+        className="w-full max-w-xl overflow-hidden rounded-2xl"
         style={{
-          background: "var(--surface-2)",
+          background:
+            "radial-gradient(640px circle at -10% -30%, var(--accent-surface), transparent 60%), " +
+            "linear-gradient(180deg, color-mix(in oklab, var(--surface-1) 92%, white 8%) 0%, var(--surface-1) 100%)",
           border: "1px solid var(--border-default)",
-          boxShadow: "var(--shadow-lg)",
+          boxShadow:
+            "inset 0 1px 0 0 color-mix(in oklab, white 6%, transparent), " +
+            "0 24px 60px -12px rgba(0,0,0,0.6), " +
+            "0 0 0 1px color-mix(in oklab, var(--accent-primary) 8%, transparent)",
         }}
         onClick={(e) => e.stopPropagation()}
       >
         {/* Search row */}
         <div
-          className="flex items-center gap-2 px-4"
+          className="flex items-center gap-2.5 px-4"
           style={{ borderBottom: "1px solid var(--border-subtle)" }}
         >
-          <Icon.Search size={14} style={{ color: "var(--text-muted)", flexShrink: 0 }} />
+          <span
+            aria-hidden
+            style={{
+              display: "inline-flex",
+              alignItems: "center",
+              justifyContent: "center",
+              width: 26,
+              height: 26,
+              borderRadius: 7,
+              background:
+                "linear-gradient(135deg, var(--accent-surface-strong), var(--accent-surface))",
+              color: "var(--accent-primary)",
+              border:
+                "1px solid color-mix(in oklab, var(--accent-primary) 22%, transparent)",
+              flexShrink: 0,
+            }}
+          >
+            <Icon.Search size={13} />
+          </span>
           <input
             ref={inputRef}
             value={query}
             onChange={(e) => setQuery(e.target.value)}
             onKeyDown={onKeyDown}
             placeholder="Search customers, quotes, orders… or jump to an action"
-            className="flex-1 bg-transparent py-3 text-sm outline-none placeholder:text-[color:var(--text-faint)]"
-            style={{ color: "var(--text-default)" }}
+            className="flex-1 bg-transparent py-3.5 outline-none placeholder:text-[color:var(--text-faint)]"
+            style={{
+              color: "var(--text-default)",
+              fontSize: 14,
+              letterSpacing: "-0.005em",
+              fontWeight: 500,
+            }}
             autoComplete="off"
             spellCheck={false}
           />
-          <span
-            className="hidden shrink-0 text-[10px] uppercase tracking-wider md:inline"
-            style={{ color: "var(--text-faint)" }}
-          >
-            {loading ? "Searching…" : "Esc"}
-          </span>
+          {loading ? (
+            <span
+              className="hidden shrink-0 items-center gap-1.5 md:inline-flex"
+              style={{ color: "var(--accent-primary)" }}
+            >
+              <span
+                aria-hidden
+                style={{
+                  width: 6,
+                  height: 6,
+                  borderRadius: 999,
+                  background: "var(--accent-primary)",
+                  animation: "pulse 1.2s ease-in-out infinite",
+                }}
+              />
+              <span
+                style={{
+                  fontSize: 10,
+                  fontWeight: 700,
+                  letterSpacing: "0.06em",
+                  textTransform: "uppercase",
+                }}
+              >
+                Searching
+              </span>
+            </span>
+          ) : (
+            <kbd
+              className="hidden shrink-0 md:inline-flex"
+              style={{
+                fontSize: 10,
+                fontWeight: 600,
+                color: "var(--text-faint)",
+                background: "var(--surface-2)",
+                border: "1px solid var(--border-subtle)",
+                padding: "2px 6px",
+                borderRadius: 4,
+                fontFamily: "var(--font-mono, ui-monospace, SFMono-Regular, monospace)",
+                alignItems: "center",
+              }}
+            >
+              Esc
+            </kbd>
+          )}
         </div>
 
         {/* Results */}
-        <div className="max-h-[60vh] overflow-y-auto py-1">
+        <div className="max-h-[60vh] overflow-y-auto px-2 py-2">
           {flat.length === 0 ? (
-            <div className="px-4 py-8 text-center text-xs" style={{ color: "var(--text-muted)" }}>
-              {query ? "No matches." : "Start typing to search…"}
+            <div
+              className="px-4 py-10 text-center"
+              style={{ color: "var(--text-muted)", fontSize: 13 }}
+            >
+              {query ? (
+                <>
+                  <div style={{ fontWeight: 600, color: "var(--text-default)" }}>
+                    No matches
+                  </div>
+                  <div className="mt-1" style={{ fontSize: 12 }}>
+                    Try a different keyword, or use{" "}
+                    <kbd
+                      style={{
+                        fontSize: 10,
+                        fontWeight: 600,
+                        color: "var(--text-default)",
+                        background: "var(--surface-2)",
+                        border: "1px solid var(--border-subtle)",
+                        padding: "1px 5px",
+                        borderRadius: 4,
+                        fontFamily: "var(--font-mono, ui-monospace, monospace)",
+                      }}
+                    >Shift+Enter</kbd>{" "}
+                    for full search.
+                  </div>
+                </>
+              ) : (
+                "Start typing to search…"
+              )}
             </div>
           ) : (
             flat.map((row, i) => {
@@ -338,9 +435,24 @@ export function CommandPalette({
                 return (
                   <div
                     key={`s-${row.label}-${i}`}
-                    className="px-4 py-1.5 text-[10px] font-semibold uppercase tracking-wider"
-                    style={{ color: "var(--text-faint)" }}
+                    className="flex items-center gap-1.5 px-3 pb-1 pt-3"
+                    style={{
+                      color: "var(--text-faint)",
+                      fontSize: 10,
+                      fontWeight: 700,
+                      textTransform: "uppercase",
+                      letterSpacing: "0.1em",
+                    }}
                   >
+                    <span
+                      aria-hidden
+                      style={{
+                        width: 3,
+                        height: 3,
+                        borderRadius: 1,
+                        background: "var(--border-default)",
+                      }}
+                    />
                     {row.label}
                   </div>
                 );
@@ -353,23 +465,57 @@ export function CommandPalette({
                   onMouseEnter={() => setHighlight(i)}
                   onClick={() => go(row)}
                   className={cn(
-                    "flex w-full items-center gap-3 px-4 py-2 text-left text-sm transition-colors",
+                    "relative flex w-full items-center gap-2.5 text-left transition-colors",
                   )}
                   style={{
-                    background: isActive ? "var(--accent-surface)" : "transparent",
-                    color: isActive ? "var(--text-default)" : "var(--text-default)",
+                    padding: "8px 10px 8px 14px",
+                    borderRadius: 8,
+                    background: isActive
+                      ? "linear-gradient(90deg, var(--accent-surface) 0%, color-mix(in oklab, var(--accent-surface) 30%, transparent) 75%, transparent 100%)"
+                      : "transparent",
+                    color: "var(--text-default)",
+                    fontSize: 13,
+                    fontWeight: isActive ? 600 : 500,
+                    letterSpacing: "-0.005em",
                   }}
                 >
+                  {isActive && (
+                    <span
+                      aria-hidden
+                      style={{
+                        position: "absolute",
+                        left: 4,
+                        top: 8,
+                        bottom: 8,
+                        width: 2.5,
+                        borderRadius: 999,
+                        background: "var(--accent-primary)",
+                        boxShadow:
+                          "0 0 0 0.5px var(--accent-primary), 0 0 8px color-mix(in oklab, var(--accent-primary) 50%, transparent)",
+                      }}
+                    />
+                  )}
                   {row.icon ? (
-                    <span style={{ color: "var(--text-muted)" }}>
+                    <span
+                      style={{
+                        color: isActive ? "var(--accent-primary)" : "var(--text-muted)",
+                        flexShrink: 0,
+                        display: "inline-flex",
+                        alignItems: "center",
+                        justifyContent: "center",
+                        width: 16,
+                        height: 16,
+                      }}
+                    >
                       {renderIcon(row.icon)}
                     </span>
                   ) : (
                     <span
-                      className="flex h-4 w-4 items-center justify-center rounded text-[9px] font-semibold uppercase"
+                      className="flex h-4 w-4 items-center justify-center rounded text-[9px] font-bold uppercase"
                       style={{
                         background: "var(--surface-3)",
                         color: "var(--text-muted)",
+                        flexShrink: 0,
                       }}
                     >
                       {row.kind.slice(0, 1)}
@@ -377,12 +523,34 @@ export function CommandPalette({
                   )}
                   <span className="flex-1 truncate">{row.label}</span>
                   {row.sub && (
-                    <span className="truncate text-xs" style={{ color: "var(--text-muted)" }}>
+                    <span
+                      className="truncate"
+                      style={{
+                        color: isActive ? "var(--text-muted)" : "var(--text-faint)",
+                        fontSize: 11.5,
+                        fontWeight: 500,
+                      }}
+                    >
                       {row.sub}
                     </span>
                   )}
                   {isActive && (
-                    <span className="text-[10px]" style={{ color: "var(--text-faint)" }}>↵</span>
+                    <kbd
+                      style={{
+                        fontSize: 9.5,
+                        fontWeight: 700,
+                        color: "var(--accent-primary)",
+                        background: "color-mix(in oklab, var(--accent-primary) 14%, transparent)",
+                        border:
+                          "1px solid color-mix(in oklab, var(--accent-primary) 30%, transparent)",
+                        padding: "1px 5px",
+                        borderRadius: 4,
+                        fontFamily: "var(--font-mono, ui-monospace, monospace)",
+                        flexShrink: 0,
+                      }}
+                    >
+                      ↵
+                    </kbd>
                   )}
                 </button>
               );
@@ -392,10 +560,31 @@ export function CommandPalette({
 
         {/* Footer hint */}
         <div
-          className="flex items-center justify-between px-4 py-2 text-[10px]"
-          style={{ borderTop: "1px solid var(--border-subtle)", color: "var(--text-faint)" }}
+          className="flex items-center justify-between px-4 py-2.5"
+          style={{
+            borderTop: "1px solid var(--border-subtle)",
+            color: "var(--text-faint)",
+            background:
+              "linear-gradient(180deg, transparent 0%, color-mix(in oklab, var(--surface-0) 35%, transparent) 100%)",
+          }}
         >
-          <span>↑ ↓ to navigate · ↵ to open · Esc to close</span>
+          <span className="inline-flex items-center gap-3" style={{ fontSize: 10.5 }}>
+            <span className="inline-flex items-center gap-1">
+              <FooterKbd>↑</FooterKbd>
+              <FooterKbd>↓</FooterKbd>
+              navigate
+            </span>
+            <span style={{ color: "var(--border-default)" }}>·</span>
+            <span className="inline-flex items-center gap-1">
+              <FooterKbd>↵</FooterKbd>
+              open
+            </span>
+            <span style={{ color: "var(--border-default)" }}>·</span>
+            <span className="inline-flex items-center gap-1">
+              <FooterKbd>Esc</FooterKbd>
+              close
+            </span>
+          </span>
           {onOpenShortcuts ? (
             <button
               type="button"
@@ -403,17 +592,46 @@ export function CommandPalette({
                 onOpenChange(false);
                 onOpenShortcuts();
               }}
-              className="underline decoration-dotted underline-offset-2 hover:text-[color:var(--text-muted)]"
-              style={{ color: "var(--text-faint)" }}
+              className="ts-focus inline-flex items-center gap-1 transition-colors hover:text-[color:var(--text-muted)]"
+              style={{
+                color: "var(--text-faint)",
+                fontSize: 10.5,
+                fontWeight: 600,
+                letterSpacing: "0.02em",
+              }}
             >
-              Shortcuts (?)
+              Shortcuts
+              <FooterKbd>?</FooterKbd>
             </button>
           ) : (
-            <span>⌘K</span>
+            <FooterKbd>⌘K</FooterKbd>
           )}
         </div>
       </div>
     </div>
+  );
+}
+
+function FooterKbd({ children }: { children: React.ReactNode }) {
+  return (
+    <kbd
+      style={{
+        fontSize: 9.5,
+        fontWeight: 600,
+        color: "var(--text-default)",
+        background: "var(--surface-2)",
+        border: "1px solid var(--border-subtle)",
+        padding: "1px 5px",
+        borderRadius: 4,
+        fontFamily: "var(--font-mono, ui-monospace, SFMono-Regular, monospace)",
+        letterSpacing: "0.02em",
+        lineHeight: 1.2,
+        display: "inline-flex",
+        alignItems: "center",
+      }}
+    >
+      {children}
+    </kbd>
   );
 }
 
