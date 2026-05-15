@@ -51,17 +51,18 @@ export function SettingsShell({ slug, tabs, children }: SettingsShellProps) {
 
   return (
     <div>
+      {/* Premium horizontal tab bar — refined typography, accent
+          underline + tinted active surface for the current tab. */}
       <nav
         aria-label="Settings sections"
-        className="mb-6 overflow-x-auto"
-        style={{ borderBottom: "1px solid var(--border)" }}
+        className="mb-5 overflow-x-auto"
+        style={{
+          borderBottom: "1px solid var(--border-subtle)",
+        }}
       >
-        <ul className="flex gap-1 whitespace-nowrap">
+        <ul className="flex items-end gap-0.5 whitespace-nowrap">
           {tabs.map((t) => {
             const firstItem = t.items[0];
-            // A tab with no visible items (every sub-section filtered out by
-            // RBAC) wouldn't have somewhere to land — skip its link and
-            // render a disabled pill so we don't blow up navigation.
             const href = firstItem ? `${base}/${firstItem.slug}` : base;
             const isActive = activeTab?.id === t.id;
             return (
@@ -69,16 +70,41 @@ export function SettingsShell({ slug, tabs, children }: SettingsShellProps) {
                 <Link
                   href={href}
                   className={cn(
-                    "inline-flex items-center border-b-2 px-3 py-2.5 text-sm transition-colors",
+                    "ts-focus relative inline-flex items-center transition-colors",
                   )}
                   style={{
-                    borderColor: isActive ? "var(--accent-primary)" : "transparent",
+                    padding: "8px 14px",
+                    fontSize: 12.5,
+                    letterSpacing: "-0.005em",
                     color: isActive ? "var(--text-default)" : "var(--text-muted)",
-                    fontWeight: isActive ? 600 : 500,
+                    fontWeight: isActive ? 700 : 500,
+                    background: isActive
+                      ? "linear-gradient(180deg, var(--accent-surface) 0%, transparent 100%)"
+                      : "transparent",
+                    borderTopLeftRadius: 8,
+                    borderTopRightRadius: 8,
                   }}
                   aria-current={isActive ? "page" : undefined}
                 >
                   {t.label}
+                  <span
+                    aria-hidden
+                    style={{
+                      position: "absolute",
+                      left: 14,
+                      right: 14,
+                      bottom: -1,
+                      height: 2,
+                      borderRadius: 2,
+                      background: isActive
+                        ? "var(--accent-primary)"
+                        : "transparent",
+                      transition: "background-color 140ms ease",
+                      boxShadow: isActive
+                        ? "0 0 6px color-mix(in oklab, var(--accent-primary) 50%, transparent)"
+                        : "none",
+                    }}
+                  />
                 </Link>
               </li>
             );
@@ -86,7 +112,7 @@ export function SettingsShell({ slug, tabs, children }: SettingsShellProps) {
         </ul>
       </nav>
 
-      <div className="grid gap-8 lg:grid-cols-[220px_minmax(0,1fr)]">
+      <div className="grid gap-6 lg:grid-cols-[228px_minmax(0,1fr)]">
         <aside className="lg:sticky lg:top-6 lg:self-start">
           {activeTab ? (
             <SubSectionNav slug={slug} tab={activeTab} />
@@ -112,18 +138,46 @@ function SubSectionNav({
   const base = `/t/${slug}/settings`;
 
   return (
-    <nav aria-label={`${tab.label} — sections`} className="flex flex-col gap-1">
+    <nav
+      aria-label={`${tab.label} — sections`}
+      className="flex flex-col gap-0.5"
+      style={{
+        padding: 10,
+        background:
+          "linear-gradient(180deg, color-mix(in oklab, var(--surface-1) 92%, white 8%) 0%, var(--surface-1) 100%)",
+        border: "1px solid var(--border-subtle)",
+        borderRadius: 12,
+        boxShadow:
+          "inset 0 1px 0 0 color-mix(in oklab, white 4%, transparent), " +
+          "0 1px 2px 0 rgba(0,0,0,0.18)",
+      }}
+    >
       <div
-        className="mb-1 px-2 text-[10px] font-semibold uppercase tracking-wider"
-        style={{ color: "var(--text-faint)" }}
+        className="flex items-center gap-1.5 px-2 pb-1"
+        style={{
+          color: "var(--text-default)",
+          fontSize: 10.5,
+          fontWeight: 700,
+          textTransform: "uppercase",
+          letterSpacing: "0.1em",
+          lineHeight: 1.2,
+        }}
       >
+        <span
+          aria-hidden
+          style={{
+            width: 3,
+            height: 3,
+            borderRadius: 1,
+            background: "var(--accent-primary)",
+            flexShrink: 0,
+          }}
+        />
         {tab.label}
       </div>
       {tab.items.map((item) => {
         const href = `${base}/${item.slug}`;
         const aliasMatch =
-          // /settings/message-templates lights up the Templates row
-          // because the two lists share one section in the new IA.
           item.slug === "templates" &&
           (pathname === `${base}/message-templates` ||
             pathname.startsWith(`${base}/message-templates/`));
@@ -133,14 +187,36 @@ function SubSectionNav({
           <Link
             key={item.slug}
             href={href}
-            className="block rounded-md px-3 py-1.5 text-sm transition-colors"
+            className="ts-focus relative block transition-colors"
             style={{
-              background: active ? "var(--accent-surface)" : "transparent",
-              color: active ? "var(--accent-primary)" : "var(--text-muted)",
+              padding: "7px 12px 7px 14px",
+              fontSize: 12.5,
               fontWeight: active ? 600 : 500,
+              letterSpacing: "-0.005em",
+              color: active ? "var(--text-default)" : "var(--text-muted)",
+              background: active
+                ? "linear-gradient(90deg, var(--accent-surface) 0%, color-mix(in oklab, var(--accent-surface) 30%, transparent) 75%, transparent 100%)"
+                : "transparent",
+              borderRadius: 7,
             }}
             aria-current={active ? "page" : undefined}
           >
+            {active && (
+              <span
+                aria-hidden
+                style={{
+                  position: "absolute",
+                  left: 4,
+                  top: 8,
+                  bottom: 8,
+                  width: 2.5,
+                  borderRadius: 999,
+                  background: "var(--accent-primary)",
+                  boxShadow:
+                    "0 0 0 0.5px var(--accent-primary), 0 0 8px color-mix(in oklab, var(--accent-primary) 50%, transparent)",
+                }}
+              />
+            )}
             {item.label}
           </Link>
         );
