@@ -29,9 +29,15 @@ export function InboxSummary({
 
   if (total === 0) {
     return (
-      <p className="mt-1 text-sm" style={{ color: "var(--text-muted)" }}>
-        You're all caught up.{" "}
-        <span style={{ color: "var(--text-faint)" }}>Nothing needs your attention right now.</span>
+      <p
+        className="mt-2"
+        style={{
+          color: "var(--text-muted)",
+          fontSize: 12.5,
+          lineHeight: 1.45,
+        }}
+      >
+        Nothing needs your attention right now — check back when work moves through the pipeline.
       </p>
     );
   }
@@ -44,18 +50,41 @@ export function InboxSummary({
   ].filter((f) => f.count > 0);
 
   return (
-    <p className="mt-1 text-sm" style={{ color: "var(--text-muted)" }}>
+    <p
+      className="mt-2 flex flex-wrap items-center gap-x-1 gap-y-1"
+      style={{
+        color: "var(--text-muted)",
+        fontSize: 12.5,
+        lineHeight: 1.4,
+      }}
+    >
       {fragments.map((f, i) => (
-        <span key={f.chip}>
+        <span key={f.chip} className="inline-flex items-center gap-1">
           <Link
             href={`/t/${slug}/inbox?chip=${f.chip}`}
-            className="underline"
-            style={{ color: "var(--text-default)", textDecorationColor: "var(--border-default)" }}
+            className="ts-focus inline-flex items-center gap-1.5 rounded-md transition-colors hover:bg-[var(--accent-surface)]"
+            style={{
+              padding: "2px 6px",
+              margin: "-2px -6px",
+              fontWeight: 500,
+              color: "var(--text-default)",
+              letterSpacing: "-0.005em",
+            }}
           >
-            <span className="font-semibold">{f.count}</span>{" "}
+            <span
+              style={{
+                fontWeight: 700,
+                color: "var(--accent-primary)",
+                fontFeatureSettings: "'tnum' 1",
+              }}
+            >
+              {f.count}
+            </span>
             <span>{f.label}</span>
           </Link>
-          {i < fragments.length - 1 && <span style={{ color: "var(--text-faint)" }}>{"  ·  "}</span>}
+          {i < fragments.length - 1 && (
+            <span style={{ color: "var(--text-faint)" }}>·</span>
+          )}
         </span>
       ))}
     </p>

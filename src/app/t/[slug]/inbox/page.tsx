@@ -94,11 +94,103 @@ export default async function InboxPage({
     tasks:         tasksMineOpen,
   };
 
+  const grandTotal = attentionCount + messagesUnread + approvalsPending + tasksMineOpen;
+
   // ── Header + chip row ───────────────────────────────────────────────────
   return (
     <div>
-      <div>
-        <h1 className="text-2xl font-semibold">Inbox</h1>
+      <div
+        className="relative overflow-hidden rounded-2xl"
+        style={{
+          padding: "18px 22px",
+          background:
+            "radial-gradient(880px circle at -10% -50%, var(--accent-surface), transparent 55%), " +
+            "linear-gradient(180deg, color-mix(in oklab, var(--surface-1) 92%, white 8%) 0%, var(--surface-1) 100%)",
+          border: "1px solid var(--border-subtle)",
+          boxShadow:
+            "inset 0 1px 0 0 color-mix(in oklab, white 4%, transparent), " +
+            "0 1px 2px 0 rgba(0,0,0,0.18)",
+        }}
+      >
+        <div className="flex items-center gap-2.5">
+          <h1
+            className="font-semibold"
+            style={{
+              color: "var(--text-default)",
+              fontSize: 24,
+              letterSpacing: "-0.02em",
+              lineHeight: 1.15,
+            }}
+          >
+            Inbox
+          </h1>
+          {grandTotal > 0 ? (
+            <span
+              style={{
+                display: "inline-flex",
+                alignItems: "center",
+                gap: 5,
+                fontSize: 11,
+                fontWeight: 700,
+                letterSpacing: "0.04em",
+                color: "var(--danger-fg, var(--rose-500))",
+                background:
+                  "color-mix(in oklab, var(--rose-500) 14%, transparent)",
+                border:
+                  "1px solid color-mix(in oklab, var(--rose-500) 30%, transparent)",
+                padding: "3px 8px",
+                borderRadius: 999,
+                fontFeatureSettings: "'tnum' 1",
+                lineHeight: 1,
+              }}
+            >
+              <span
+                aria-hidden
+                style={{
+                  width: 5,
+                  height: 5,
+                  borderRadius: 999,
+                  background: "var(--danger-fg, var(--rose-500))",
+                  boxShadow:
+                    "0 0 0 2px color-mix(in oklab, var(--rose-500) 25%, transparent)",
+                }}
+              />
+              {grandTotal} need you
+            </span>
+          ) : (
+            <span
+              style={{
+                display: "inline-flex",
+                alignItems: "center",
+                gap: 5,
+                fontSize: 11,
+                fontWeight: 700,
+                letterSpacing: "0.04em",
+                color: "var(--emerald-500)",
+                background:
+                  "color-mix(in oklab, var(--emerald-500) 14%, transparent)",
+                border:
+                  "1px solid color-mix(in oklab, var(--emerald-500) 30%, transparent)",
+                padding: "3px 8px",
+                borderRadius: 999,
+                lineHeight: 1,
+              }}
+            >
+              <span
+                aria-hidden
+                style={{
+                  width: 5,
+                  height: 5,
+                  borderRadius: 999,
+                  background: "var(--emerald-500)",
+                  boxShadow:
+                    "0 0 0 2px color-mix(in oklab, var(--emerald-500) 25%, transparent)",
+                }}
+              />
+              All caught up
+            </span>
+          )}
+        </div>
         <InboxSummary
           slug={slug}
           attention={attentionCount}
@@ -108,7 +200,7 @@ export default async function InboxPage({
         />
       </div>
 
-      <div className="mt-4">
+      <div className="mt-5">
         <InboxChips slug={slug} active={chip} counts={counts} />
       </div>
 

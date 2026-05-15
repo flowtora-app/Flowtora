@@ -40,11 +40,14 @@ export function InboxChips({
   counts: Partial<Record<InboxChip, number>>;
 }) {
   return (
-    <nav className="flex flex-wrap gap-1 text-sm" aria-label="Inbox sections">
+    <nav
+      className="flex flex-wrap gap-1.5"
+      aria-label="Inbox sections"
+    >
       {INBOX_CHIPS.map((c) => {
         const isActive = active === c.value;
         const count = counts[c.value] ?? 0;
-        // "All" never shows a count — the summary line below handles the
+        // "All" never shows a count — the summary line above handles the
         // grand total; a number next to "All" would double-count.
         const showCount = c.value !== "all" && count > 0;
         return (
@@ -55,22 +58,44 @@ export function InboxChips({
                 ? `/t/${slug}/inbox`
                 : `/t/${slug}/inbox?chip=${c.value}`
             }
-            className="ts-focus rounded-md px-3 py-1.5 transition-colors"
+            className="ts-focus inline-flex items-center gap-1.5 rounded-lg transition-colors"
             style={{
-              background: isActive ? "var(--surface-2)" : "transparent",
-              border: `1px solid ${isActive ? "var(--border-default)" : "var(--border-subtle)"}`,
-              color: isActive ? "var(--text-default)" : "var(--text-muted)",
-              fontWeight: isActive ? 600 : 500,
+              background: isActive
+                ? "var(--accent-surface)"
+                : "color-mix(in oklab, var(--surface-2) 60%, transparent)",
+              border: isActive
+                ? "1px solid color-mix(in oklab, var(--accent-primary) 28%, transparent)"
+                : "1px solid var(--border-subtle)",
+              color: isActive ? "var(--accent-primary)" : "var(--text-muted)",
+              fontWeight: isActive ? 700 : 500,
+              fontSize: 12,
+              letterSpacing: "-0.005em",
+              padding: "6px 12px",
+              height: 30,
             }}
           >
             {c.label}
             {showCount && (
               <span
-                className="ml-2 inline-flex h-5 min-w-[20px] items-center justify-center rounded-full px-1.5 text-[10px] font-semibold"
                 style={{
-                  background: isActive ? "var(--surface-0)" : "var(--surface-1)",
-                  color: "var(--text-muted)",
-                  border: "1px solid var(--border-subtle)",
+                  display: "inline-flex",
+                  alignItems: "center",
+                  justifyContent: "center",
+                  minWidth: 18,
+                  height: 18,
+                  padding: "0 5px",
+                  borderRadius: 4,
+                  fontSize: 10,
+                  fontWeight: 700,
+                  fontFeatureSettings: "'tnum' 1",
+                  lineHeight: 1,
+                  color: isActive ? "var(--accent-primary)" : "var(--text-faint)",
+                  background: isActive
+                    ? "color-mix(in oklab, var(--accent-primary) 12%, transparent)"
+                    : "var(--surface-1)",
+                  border: isActive
+                    ? "1px solid color-mix(in oklab, var(--accent-primary) 22%, transparent)"
+                    : "1px solid var(--border-subtle)",
                 }}
               >
                 {count > 99 ? "99+" : count}
