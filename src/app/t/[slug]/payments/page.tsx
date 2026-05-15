@@ -148,54 +148,93 @@ export default async function PaymentsPage({
 
   return (
     <div>
-      <div className="flex items-center justify-between">
-        <div>
-          <h1 className="text-2xl font-semibold">Payments</h1>
-          <p className="mt-1 text-sm" style={{ color: "var(--text-muted)" }}>
-            Collections snapshot · A/R aging, overdue chase list, and recent cash in.
-          </p>
-        </div>
+      <div
+        className="relative overflow-hidden rounded-2xl"
+        style={{
+          padding: "18px 22px",
+          background:
+            "radial-gradient(880px circle at -10% -50%, var(--accent-surface), transparent 55%), " +
+            "linear-gradient(180deg, color-mix(in oklab, var(--surface-1) 92%, white 8%) 0%, var(--surface-1) 100%)",
+          border: "1px solid var(--border-subtle)",
+          boxShadow:
+            "inset 0 1px 0 0 color-mix(in oklab, white 4%, transparent), " +
+            "0 1px 2px 0 rgba(0,0,0,0.18)",
+        }}
+      >
+        <h1
+          className="font-semibold"
+          style={{
+            color: "var(--text-default)",
+            fontSize: 24,
+            letterSpacing: "-0.02em",
+            lineHeight: 1.15,
+          }}
+        >
+          Payments
+        </h1>
+        <p
+          className="mt-1.5"
+          style={{
+            color: "var(--text-muted)",
+            fontSize: 12.5,
+            lineHeight: 1.45,
+          }}
+        >
+          Collections snapshot — A/R aging, the chase list, and recent cash in.
+        </p>
       </div>
 
-      {/* Headline KPIs */}
-      <div className="mt-6 grid grid-cols-1 gap-3 sm:grid-cols-3">
+      {/* Headline KPIs — premium tiles matching DashboardStat. */}
+      <div className="mt-5 grid grid-cols-1 gap-3 sm:grid-cols-3">
         <KpiCard
           label="Outstanding"
           value={formatMoney(outstanding, currency)}
           hint={`${openRows.length} open ${openRows.length === 1 ? "invoice" : "invoices"}`}
-          accent="var(--accent-primary)"
+          tone="accent"
         />
         <KpiCard
           label="Overdue"
           value={formatMoney(overdueTotal, currency)}
           hint={`${overdueCount} past due`}
-          accent={overdueTotal > 0 ? "#ef4444" : "var(--text-muted)"}
+          tone={overdueTotal > 0 ? "danger" : "default"}
         />
         <KpiCard
-          label="Collected (last 7 days)"
+          label="Collected (7d)"
           value={formatMoney(last7, currency)}
           hint={`${recentPayments.filter((p) => p.receivedAt >= sevenDaysAgo).length} payments`}
-          accent="#10b981"
+          tone="success"
         />
       </div>
 
-      {/* A/R aging tiles */}
+      {/* A/R aging tiles — premium tinted cards. */}
       <section className="mt-8">
         <div className="mb-3 flex items-center justify-between">
-          <h2 className="text-sm font-semibold" style={{ color: "var(--text-default)" }}>
+          <h2
+            style={{
+              color: "var(--text-default)",
+              fontSize: 12,
+              fontWeight: 700,
+              letterSpacing: "0.08em",
+              textTransform: "uppercase",
+            }}
+          >
             A/R aging
           </h2>
           {sp.bucket && (
             <Link
               href={`/t/${slug}/payments`}
-              className="text-xs underline"
-              style={{ color: "var(--text-muted)" }}
+              className="ts-focus inline-flex items-center gap-1"
+              style={{
+                fontSize: 11,
+                color: "var(--accent-primary)",
+                fontWeight: 500,
+              }}
             >
-              Clear bucket filter
+              Clear bucket ×
             </Link>
           )}
         </div>
-        <div className="grid grid-cols-2 gap-2 sm:grid-cols-5">
+        <div className="grid grid-cols-2 gap-3 sm:grid-cols-5">
           {AGING_BUCKETS.map((b) => {
             const active = sp.bucket === b.value;
             const qs = new URLSearchParams();
@@ -207,25 +246,61 @@ export default async function PaymentsPage({
               <Link
                 key={b.value}
                 href={href}
-                className="ts-focus rounded-lg px-3 py-3 transition-colors"
+                className="ts-focus group/aging relative overflow-hidden rounded-xl px-4 py-3.5 transition-all hover:-translate-y-px"
                 style={{
-                  background: active ? b.color : "var(--surface-1)",
-                  color: active ? "white" : "var(--text-default)",
-                  border: `1px solid ${active ? b.color : "var(--border-subtle)"}`,
+                  background: active
+                    ? `radial-gradient(280px circle at 100% -10%, color-mix(in oklab, ${b.color} 35%, transparent), transparent 60%), color-mix(in oklab, ${b.color} 18%, var(--surface-1))`
+                    : `radial-gradient(280px circle at 100% -10%, color-mix(in oklab, ${b.color} 10%, transparent), transparent 60%), color-mix(in oklab, var(--surface-1) 92%, white 8%)`,
+                  border: active
+                    ? `1px solid color-mix(in oklab, ${b.color} 45%, transparent)`
+                    : `1px solid var(--border-subtle)`,
+                  boxShadow:
+                    "inset 0 1px 0 0 color-mix(in oklab, white 4%, transparent), 0 1px 2px 0 rgba(0,0,0,0.18)",
                 }}
               >
-                <div
-                  className="text-[11px] font-medium uppercase tracking-wider"
-                  style={{ color: active ? "white" : b.color, opacity: active ? 0.9 : 1 }}
-                >
-                  {b.label}
+                <div className="flex items-center gap-1.5">
+                  <span
+                    aria-hidden
+                    style={{
+                      width: 6,
+                      height: 6,
+                      borderRadius: 999,
+                      background: b.color,
+                      boxShadow: `0 0 0 2px color-mix(in oklab, ${b.color} 25%, transparent)`,
+                      flexShrink: 0,
+                    }}
+                  />
+                  <span
+                    style={{
+                      fontSize: 10,
+                      fontWeight: 700,
+                      letterSpacing: "0.08em",
+                      textTransform: "uppercase",
+                      color: b.color,
+                    }}
+                  >
+                    {b.label}
+                  </span>
                 </div>
-                <div className="mt-1 text-lg font-semibold">
+                <div
+                  className="mt-1.5"
+                  style={{
+                    color: "var(--text-default)",
+                    fontSize: 20,
+                    fontWeight: 600,
+                    letterSpacing: "-0.015em",
+                    fontFeatureSettings: "'tnum' 1",
+                  }}
+                >
                   {formatMoney(total, currency)}
                 </div>
                 <div
-                  className="text-[11px]"
-                  style={{ color: active ? "white" : "var(--text-muted)", opacity: active ? 0.85 : 1 }}
+                  className="mt-0.5"
+                  style={{
+                    fontSize: 11,
+                    color: "var(--text-muted)",
+                    fontFeatureSettings: "'tnum' 1",
+                  }}
                 >
                   {count} {count === 1 ? "invoice" : "invoices"}
                 </div>
@@ -418,35 +493,72 @@ export default async function PaymentsPage({
   );
 }
 
+type KpiTone = "default" | "accent" | "success" | "danger";
+const KPI_COLOR: Record<KpiTone, string> = {
+  default: "var(--text-default)",
+  accent:  "var(--accent-primary)",
+  success: "var(--success-fg, var(--emerald-500))",
+  danger:  "var(--danger-fg, var(--rose-500))",
+};
+const KPI_HALO: Record<KpiTone, string> = {
+  default: "transparent",
+  accent:  "radial-gradient(420px circle at 100% -20%, var(--accent-surface), transparent 55%)",
+  success: "radial-gradient(420px circle at 100% -20%, color-mix(in oklab, var(--emerald-500) 12%, transparent), transparent 55%)",
+  danger:  "radial-gradient(420px circle at 100% -20%, color-mix(in oklab, var(--rose-500) 14%, transparent), transparent 55%)",
+};
+
 function KpiCard({
   label,
   value,
   hint,
-  accent,
+  tone = "default",
 }: {
   label: string;
   value: string;
   hint: string;
-  accent: string;
+  tone?: KpiTone;
 }) {
   return (
     <div
-      className="rounded-lg px-4 py-3.5"
+      className="relative overflow-hidden rounded-xl px-5 py-5"
       style={{
-        background: "var(--surface-1)",
+        background:
+          `${KPI_HALO[tone]}, linear-gradient(180deg, color-mix(in oklab, var(--surface-1) 92%, white 8%) 0%, var(--surface-1) 100%)`,
         border: "1px solid var(--border-subtle)",
+        boxShadow:
+          "inset 0 1px 0 0 color-mix(in oklab, white 4%, transparent), " +
+          "0 1px 2px 0 rgba(0,0,0,0.18)",
       }}
     >
       <div
-        className="text-[11px] font-medium uppercase tracking-wider"
-        style={{ color: "var(--text-faint)" }}
+        style={{
+          color: "var(--text-muted)",
+          fontSize: 10.5,
+          fontWeight: 700,
+          letterSpacing: "0.08em",
+          textTransform: "uppercase",
+          lineHeight: 1.1,
+        }}
       >
         {label}
       </div>
-      <div className="mt-1 text-2xl font-semibold" style={{ color: accent }}>
+      <div
+        className="mt-2"
+        style={{
+          color: KPI_COLOR[tone],
+          fontSize: 28,
+          fontWeight: 600,
+          letterSpacing: "-0.02em",
+          lineHeight: 1.1,
+          fontFeatureSettings: "'tnum' 1",
+        }}
+      >
         {value}
       </div>
-      <div className="mt-0.5 text-xs" style={{ color: "var(--text-muted)" }}>
+      <div
+        className="mt-2"
+        style={{ color: "var(--text-faint)", fontSize: 11.5, lineHeight: 1.35 }}
+      >
         {hint}
       </div>
     </div>

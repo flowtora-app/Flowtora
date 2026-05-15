@@ -180,31 +180,60 @@ export default async function InvoicesPage({
   const listNode = (
     <>
       <div
-        className="flex flex-col gap-2 px-3 py-3"
-        style={{ borderBottom: "1px solid var(--border-subtle)" }}
+        className="flex flex-col gap-3 px-3 py-3"
+        style={{
+          borderBottom: "1px solid var(--border-subtle)",
+          background:
+            "linear-gradient(180deg, color-mix(in oklab, var(--surface-1) 60%, transparent) 0%, transparent 100%)",
+        }}
       >
-        <form className="flex flex-col gap-2" method="get">
+        <form className="flex flex-col gap-2.5" method="get">
           {view !== "all" && <input type="hidden" name="view" value={view} />}
           {sp.bucket && <input type="hidden" name="bucket" value={sp.bucket} />}
-          <div className="flex gap-2">
+          <div
+            style={{
+              position: "relative",
+              display: "flex",
+              alignItems: "center",
+              gap: 8,
+              height: 34,
+              padding: "0 10px",
+              borderRadius: 8,
+              background: "color-mix(in oklab, var(--surface-2) 75%, transparent)",
+              border: "1px solid var(--border-subtle)",
+            }}
+          >
+            <svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" style={{ color: "var(--text-faint)", flexShrink: 0 }}>
+              <circle cx="11" cy="11" r="7" />
+              <path d="m21 21-4.3-4.3" />
+            </svg>
             <input
               name="q"
               defaultValue={sp.q ?? ""}
               placeholder="Search invoice # or customer…"
-              className="flex-1 rounded-md px-3 py-1.5 text-sm outline-none"
               style={{
-                background: "var(--surface-1)",
-                border: "1px solid var(--border-subtle)",
+                flex: 1,
+                minWidth: 0,
+                background: "transparent",
+                border: 0,
+                outline: "none",
                 color: "var(--text-default)",
+                fontSize: 12.5,
+                fontWeight: 500,
+                letterSpacing: "-0.005em",
               }}
             />
             <button
               type="submit"
-              className="rounded-md px-3 py-1.5 text-sm"
               style={{
-                border: "1px solid var(--border-subtle)",
-                color: "var(--text-default)",
+                flexShrink: 0,
+                fontSize: 11,
+                fontWeight: 600,
+                color: "var(--text-muted)",
                 background: "var(--surface-1)",
+                border: "1px solid var(--border-subtle)",
+                padding: "3px 8px",
+                borderRadius: 5,
               }}
             >
               Go
@@ -214,11 +243,15 @@ export default async function InvoicesPage({
             <select
               name="status"
               defaultValue={sp.status ?? ""}
-              className="rounded-md px-2 py-1 outline-none"
+              className="ts-focus rounded-md outline-none"
               style={{
-                background: "var(--surface-1)",
+                background: "var(--surface-2)",
                 border: "1px solid var(--border-subtle)",
                 color: "var(--text-default)",
+                fontSize: 11.5,
+                fontWeight: 500,
+                padding: "4px 8px",
+                height: 28,
               }}
             >
               <option value="">All statuses</option>
@@ -230,11 +263,15 @@ export default async function InvoicesPage({
               <select
                 name="branch"
                 defaultValue={sp.branch ?? ""}
-                className="rounded-md px-2 py-1 outline-none"
+                className="ts-focus rounded-md outline-none"
                 style={{
-                  background: "var(--surface-1)",
+                  background: "var(--surface-2)",
                   border: "1px solid var(--border-subtle)",
                   color: "var(--text-default)",
+                  fontSize: 11.5,
+                  fontWeight: 500,
+                  padding: "4px 8px",
+                  height: 28,
                 }}
               >
                 <option value="">All branches</option>
@@ -254,12 +291,20 @@ export default async function InvoicesPage({
                 key={v.value}
                 href={buildHref(v.value)}
                 title={v.hint}
-                className="rounded-md px-2 py-1 text-xs"
+                className="ts-focus inline-flex items-center rounded-md transition-colors"
                 style={{
-                  background: active ? "var(--accent-surface)" : "transparent",
-                  border: "1px solid var(--border-subtle)",
+                  background: active
+                    ? "var(--accent-surface)"
+                    : "color-mix(in oklab, var(--surface-2) 60%, transparent)",
+                  border: active
+                    ? "1px solid color-mix(in oklab, var(--accent-primary) 28%, transparent)"
+                    : "1px solid var(--border-subtle)",
                   color: active ? "var(--accent-primary)" : "var(--text-muted)",
-                  fontWeight: active ? 600 : undefined,
+                  fontWeight: active ? 700 : 500,
+                  fontSize: 11.5,
+                  letterSpacing: "-0.005em",
+                  padding: "4px 10px",
+                  height: 26,
                 }}
               >
                 {v.label}
@@ -269,62 +314,97 @@ export default async function InvoicesPage({
         </div>
 
         {outstanding > 0 && (
-          <div className="flex flex-wrap gap-1 text-[11px]">
-            {AGING_BUCKETS.map((b) => {
-              const total = bucketTotals[b.value];
-              if (total <= 0) return null;
-              const active = sp.bucket === b.value;
-              const p = new URLSearchParams(baseParams);
-              if (view !== "all") p.set("view", view);
-              if (!active) p.set("bucket", b.value);
-              else p.delete("bucket");
-              const href = `/t/${slug}/invoices${p.toString() ? `?${p.toString()}` : ""}`;
-              return (
-                <Link
-                  key={b.value}
-                  href={href}
-                  className="rounded-md px-2 py-0.5"
-                  style={{
-                    background: active ? b.color : "var(--surface-1)",
-                    color: active ? "white" : "var(--text-muted)",
-                    border: `1px solid ${active ? b.color : "var(--border-subtle)"}`,
-                  }}
-                  title={`${b.label} — ${formatMoney(total, ctx.tenant.currency)}`}
-                >
-                  <span className="font-medium">{b.label}</span>
-                  <span className="ml-1 tabular-nums">
-                    {formatMoney(total, ctx.tenant.currency)}
-                  </span>
-                </Link>
-              );
-            })}
+          <div className="flex flex-col gap-1.5">
+            <span
+              style={{
+                color: "var(--text-faint)",
+                fontSize: 10,
+                fontWeight: 700,
+                letterSpacing: "0.08em",
+                textTransform: "uppercase",
+              }}
+            >
+              Aging
+            </span>
+            <div className="flex flex-wrap gap-1">
+              {AGING_BUCKETS.map((b) => {
+                const total = bucketTotals[b.value];
+                if (total <= 0) return null;
+                const active = sp.bucket === b.value;
+                const p = new URLSearchParams(baseParams);
+                if (view !== "all") p.set("view", view);
+                if (!active) p.set("bucket", b.value);
+                else p.delete("bucket");
+                const href = `/t/${slug}/invoices${p.toString() ? `?${p.toString()}` : ""}`;
+                return (
+                  <Link
+                    key={b.value}
+                    href={href}
+                    className="ts-focus inline-flex items-center gap-1.5 rounded-md transition-colors"
+                    style={{
+                      background: active
+                        ? b.color
+                        : `color-mix(in oklab, ${b.color} 14%, transparent)`,
+                      color: active ? "white" : b.color,
+                      border: active
+                        ? `1px solid ${b.color}`
+                        : `1px solid color-mix(in oklab, ${b.color} 28%, transparent)`,
+                      padding: "3px 8px",
+                      fontSize: 10.5,
+                      fontWeight: 700,
+                      letterSpacing: "0.02em",
+                      lineHeight: 1.2,
+                    }}
+                    title={`${b.label} — ${formatMoney(total, ctx.tenant.currency)}`}
+                  >
+                    <span style={{ textTransform: "uppercase", letterSpacing: "0.04em" }}>
+                      {b.label}
+                    </span>
+                    <span style={{ fontFeatureSettings: "'tnum' 1", opacity: active ? 1 : 0.85 }}>
+                      {formatMoney(total, ctx.tenant.currency)}
+                    </span>
+                  </Link>
+                );
+              })}
+            </div>
           </div>
         )}
 
         <div
-          className="flex items-center justify-between text-[11px]"
-          style={{ color: "var(--text-muted)" }}
+          className="flex items-center justify-between"
+          style={{ color: "var(--text-faint)", fontSize: 10.5 }}
         >
-          <span>
+          <span style={{ fontWeight: 600, letterSpacing: "0.02em" }}>
             {invoices.length} {invoices.length === 1 ? "invoice" : "invoices"}
-            {overdueTotal > 0 && (
-              <>
-                {" · "}
-                <span style={{ color: "var(--danger-fg)" }}>
-                  {formatMoney(overdueTotal, ctx.tenant.currency)} overdue
-                </span>
-              </>
+            {view !== "all" && (
+              <span style={{ color: "var(--text-muted)", marginLeft: 4 }}>
+                in {VIEWS.find((v) => v.value === view)?.label}
+              </span>
             )}
           </span>
-          <span className="hidden lg:inline">↑↓ navigate · / search</span>
+          <span className="hidden lg:inline" style={{ letterSpacing: "0.02em" }}>
+            ↑↓ navigate · / search
+          </span>
         </div>
       </div>
 
       <div className="flex-1 overflow-y-auto">
         {rows.length === 0 ? (
-          <div className="p-6 text-sm" style={{ color: "var(--text-muted)" }}>
+          <div
+            className="m-3 rounded-lg p-5 text-center"
+            style={{
+              background: "color-mix(in oklab, var(--surface-2) 40%, transparent)",
+              border: "1px dashed var(--border-subtle)",
+              color: "var(--text-muted)",
+              fontSize: 12.5,
+            }}
+          >
             No invoices match these filters.{" "}
-            <Link href={`/t/${slug}/invoices`} className="underline">
+            <Link
+              href={`/t/${slug}/invoices`}
+              className="underline"
+              style={{ color: "var(--accent-primary)" }}
+            >
               Clear filters
             </Link>
           </div>
@@ -341,29 +421,105 @@ export default async function InvoicesPage({
   let panelNode: React.ReactNode;
   if (!panelData || !panelData.invoice) {
     panelNode = (
-      <div className="flex h-full min-h-[400px] items-center justify-center p-10">
-        <div className="max-w-md text-center">
+      <div
+        className="flex h-full min-h-[400px] items-center justify-center p-10"
+        style={{
+          background:
+            "radial-gradient(720px circle at 50% -20%, var(--accent-surface), transparent 55%)",
+        }}
+      >
+        <div className="max-w-sm text-center">
           <div
-            className="mx-auto flex h-14 w-14 items-center justify-center rounded-full"
-            style={{ background: "var(--surface-1)", color: "var(--text-muted)" }}
+            className="mx-auto flex h-16 w-16 items-center justify-center rounded-2xl"
+            style={{
+              background:
+                "linear-gradient(135deg, var(--accent-surface-strong), var(--accent-surface))",
+              color: "var(--accent-primary)",
+              border:
+                "1px solid color-mix(in oklab, var(--accent-primary) 28%, transparent)",
+              boxShadow:
+                "inset 0 1px 0 0 color-mix(in oklab, white 6%, transparent)",
+            }}
           >
-            <svg width="24" height="24" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="1.5">
+            <svg width="28" height="28" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="1.5">
               <path d="M6 4h12v16l-3-2-3 2-3-2-3 2V4z" />
               <path d="M9 9h6M9 13h6M9 17h3" />
             </svg>
           </div>
-          <h2 className="mt-4 text-lg font-semibold" style={{ color: "var(--text-default)" }}>
+          <h2
+            className="mt-5 font-semibold"
+            style={{
+              color: "var(--text-default)",
+              fontSize: 18,
+              letterSpacing: "-0.015em",
+              lineHeight: 1.25,
+            }}
+          >
             Select an invoice
           </h2>
-          <p className="mt-1 text-sm" style={{ color: "var(--text-muted)" }}>
-            Pick a row on the left to see line items, payments, and activity without leaving the page.
+          <p
+            className="mt-1.5"
+            style={{
+              color: "var(--text-muted)",
+              fontSize: 13,
+              lineHeight: 1.5,
+            }}
+          >
+            Pick a row on the left to see line items, payments, and activity — without leaving the page.
           </p>
-          <p className="mt-4 text-xs" style={{ color: "var(--text-muted)" }}>
-            Use <kbd className="rounded border px-1" style={{ borderColor: "var(--border-subtle)" }}>↑</kbd>{" "}
-            <kbd className="rounded border px-1" style={{ borderColor: "var(--border-subtle)" }}>↓</kbd>{" "}
-            to navigate, <kbd className="rounded border px-1" style={{ borderColor: "var(--border-subtle)" }}>/</kbd>{" "}
-            to search.
-          </p>
+          <div
+            className="mt-5 inline-flex items-center gap-3 rounded-lg px-3 py-2"
+            style={{
+              background: "color-mix(in oklab, var(--surface-2) 50%, transparent)",
+              border: "1px solid var(--border-subtle)",
+              fontSize: 11,
+              color: "var(--text-muted)",
+            }}
+          >
+            <span className="inline-flex items-center gap-1">
+              <kbd
+                style={{
+                  fontSize: 10,
+                  fontWeight: 600,
+                  color: "var(--text-default)",
+                  background: "var(--surface-1)",
+                  border: "1px solid var(--border-subtle)",
+                  padding: "1px 5px",
+                  borderRadius: 4,
+                  fontFamily: "var(--font-mono, ui-monospace, monospace)",
+                }}
+              >↑</kbd>
+              <kbd
+                style={{
+                  fontSize: 10,
+                  fontWeight: 600,
+                  color: "var(--text-default)",
+                  background: "var(--surface-1)",
+                  border: "1px solid var(--border-subtle)",
+                  padding: "1px 5px",
+                  borderRadius: 4,
+                  fontFamily: "var(--font-mono, ui-monospace, monospace)",
+                }}
+              >↓</kbd>
+              navigate
+            </span>
+            <span style={{ color: "var(--text-faint)" }}>·</span>
+            <span className="inline-flex items-center gap-1">
+              <kbd
+                style={{
+                  fontSize: 10,
+                  fontWeight: 600,
+                  color: "var(--text-default)",
+                  background: "var(--surface-1)",
+                  border: "1px solid var(--border-subtle)",
+                  padding: "1px 5px",
+                  borderRadius: 4,
+                  fontFamily: "var(--font-mono, ui-monospace, monospace)",
+                }}
+              >/</kbd>
+              search
+            </span>
+          </div>
         </div>
       </div>
     );
@@ -384,45 +540,167 @@ export default async function InvoicesPage({
 
   return (
     <div>
-      <div className="flex items-center justify-between">
-        <div>
-          <h1 className="text-2xl font-semibold">Invoices</h1>
-          <p className="mt-1 text-sm" style={{ color: "var(--text-muted)" }}>
-            {invoices.length} {invoices.length === 1 ? "invoice" : "invoices"}
-            {" · Outstanding "}
-            <span style={{ color: "var(--text-default)" }}>
-              {formatMoney(outstanding, ctx.tenant.currency)}
-            </span>
-            {overdueTotal > 0 && (
-              <>
-                {" · "}
-                <span style={{ color: "var(--danger-fg)" }}>
+      <div
+        className="relative overflow-hidden rounded-2xl"
+        style={{
+          padding: "18px 22px",
+          background:
+            "radial-gradient(880px circle at -10% -50%, var(--accent-surface), transparent 55%), " +
+            "linear-gradient(180deg, color-mix(in oklab, var(--surface-1) 92%, white 8%) 0%, var(--surface-1) 100%)",
+          border: "1px solid var(--border-subtle)",
+          boxShadow:
+            "inset 0 1px 0 0 color-mix(in oklab, white 4%, transparent), " +
+            "0 1px 2px 0 rgba(0,0,0,0.18)",
+        }}
+      >
+        <div className="flex flex-wrap items-center justify-between gap-4">
+          <div className="min-w-0">
+            <div className="flex items-center gap-2.5 flex-wrap">
+              <h1
+                className="font-semibold"
+                style={{
+                  color: "var(--text-default)",
+                  fontSize: 24,
+                  letterSpacing: "-0.02em",
+                  lineHeight: 1.15,
+                }}
+              >
+                Invoices
+              </h1>
+              <span
+                style={{
+                  display: "inline-flex",
+                  alignItems: "center",
+                  fontSize: 11,
+                  fontWeight: 700,
+                  letterSpacing: "0.04em",
+                  color: "var(--accent-primary)",
+                  background: "var(--accent-surface)",
+                  border:
+                    "1px solid color-mix(in oklab, var(--accent-primary) 22%, transparent)",
+                  padding: "3px 8px",
+                  borderRadius: 999,
+                  fontFeatureSettings: "'tnum' 1",
+                  lineHeight: 1,
+                }}
+              >
+                {invoices.length}
+              </span>
+              {outstanding > 0 && (
+                <span
+                  style={{
+                    display: "inline-flex",
+                    alignItems: "baseline",
+                    gap: 4,
+                    fontSize: 11.5,
+                    color: "var(--text-muted)",
+                  }}
+                >
+                  <span
+                    style={{
+                      fontSize: 10,
+                      fontWeight: 700,
+                      letterSpacing: "0.06em",
+                      textTransform: "uppercase",
+                      color: "var(--text-faint)",
+                    }}
+                  >
+                    Outstanding
+                  </span>
+                  <span
+                    style={{
+                      fontWeight: 700,
+                      color: "var(--text-default)",
+                      fontFeatureSettings: "'tnum' 1",
+                    }}
+                  >
+                    {formatMoney(outstanding, ctx.tenant.currency)}
+                  </span>
+                </span>
+              )}
+              {overdueTotal > 0 && (
+                <span
+                  style={{
+                    display: "inline-flex",
+                    alignItems: "center",
+                    gap: 5,
+                    fontSize: 11,
+                    fontWeight: 700,
+                    letterSpacing: "0.04em",
+                    color: "var(--danger-fg, var(--rose-500))",
+                    background:
+                      "color-mix(in oklab, var(--rose-500) 14%, transparent)",
+                    border:
+                      "1px solid color-mix(in oklab, var(--rose-500) 30%, transparent)",
+                    padding: "3px 8px",
+                    borderRadius: 999,
+                    lineHeight: 1,
+                    fontFeatureSettings: "'tnum' 1",
+                  }}
+                >
+                  <span
+                    aria-hidden
+                    style={{
+                      width: 5,
+                      height: 5,
+                      borderRadius: 999,
+                      background: "var(--danger-fg, var(--rose-500))",
+                      boxShadow:
+                        "0 0 0 2px color-mix(in oklab, var(--rose-500) 25%, transparent)",
+                    }}
+                  />
                   {formatMoney(overdueTotal, ctx.tenant.currency)} overdue
                 </span>
-              </>
-            )}
-          </p>
-        </div>
-        <div className="flex items-center gap-2">
-          <SavedViewPicker
-            slug={slug}
-            entityKind="invoices"
-            views={savedViews}
-            canShare={ctx.role === "OWNER" || ctx.role === "ADMIN"}
-          />
-          {canManage && (
-            <Link
-              href={`/t/${slug}/invoices/new`}
-              className="rounded-md px-3 py-1.5 text-sm font-medium"
-              style={{ background: "var(--accent-primary)", color: "var(--accent-fg)" }}
+              )}
+            </div>
+            <p
+              className="mt-1.5"
+              style={{
+                color: "var(--text-muted)",
+                fontSize: 12.5,
+                lineHeight: 1.45,
+              }}
             >
-              New invoice
-            </Link>
-          )}
+              Track what&apos;s billed and what&apos;s still out — paid invoices close the loop on every order.
+            </p>
+          </div>
+          <div className="flex items-center gap-2">
+            <SavedViewPicker
+              slug={slug}
+              entityKind="invoices"
+              views={savedViews}
+              canShare={ctx.role === "OWNER" || ctx.role === "ADMIN"}
+            />
+            {canManage && (
+              <Link
+                href={`/t/${slug}/invoices/new`}
+                className="ts-focus inline-flex items-center gap-1.5 rounded-lg font-semibold transition-transform"
+                style={{
+                  height: 32,
+                  padding: "0 14px",
+                  background:
+                    "linear-gradient(180deg, color-mix(in oklab, var(--accent-primary) 96%, white 4%) 0%, var(--accent-primary) 100%)",
+                  color: "var(--accent-fg)",
+                  border:
+                    "1px solid color-mix(in oklab, var(--accent-primary) 80%, black 20%)",
+                  boxShadow:
+                    "0 1px 0 0 rgba(255,255,255,0.15) inset, " +
+                    "0 1px 2px 0 rgba(0,0,0,0.35)",
+                  fontSize: 12.5,
+                  letterSpacing: "-0.005em",
+                }}
+              >
+                <svg width="13" height="13" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2.5">
+                  <path d="M12 5v14M5 12h14" />
+                </svg>
+                New invoice
+              </Link>
+            )}
+          </div>
         </div>
       </div>
 
-      <div className="mt-4">
+      <div className="mt-5">
         {invoices.length === 0 ? (
           <Card className="mt-4">
             <EmptyState
