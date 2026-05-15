@@ -3,6 +3,10 @@
 import * as React from "react";
 import { useRouter, useSearchParams } from "next/navigation";
 
+// Premium-redesign order row used by the split-view Orders list.
+// Same visual treatment as the redesigned Quote + Invoice rows with
+// order-specific details (priority, due date, blockers, deposit owed).
+
 export type OrderListRowData = {
   id: string;
   number: string;
@@ -24,11 +28,6 @@ interface OrderListRowProps {
   selected: boolean;
 }
 
-/**
- * Single row in the split-view order list. Clicking pushes `?selected=<id>`
- * which re-renders the page with the detail panel focused on this order.
- * We `router.push` with scroll:false so the list doesn't jump.
- */
 export function OrderListRow({ row, selected }: OrderListRowProps) {
   const router = useRouter();
   const sp = useSearchParams();
@@ -39,87 +38,243 @@ export function OrderListRow({ row, selected }: OrderListRowProps) {
     router.push(`?${params.toString()}`, { scroll: false });
   }, [router, sp, row.id]);
 
+  const initial = (row.customerName ?? "?").trim().charAt(0).toUpperCase() || "?";
+
   return (
     <button
       type="button"
       onClick={onActivate}
       data-entity-id={row.id}
-      className="block w-full text-left transition-colors outline-none"
+      className="ts-focus group/row relative block w-full text-left outline-none transition-colors"
       style={{
-        background: selected ? "var(--accent-surface)" : "transparent",
+        background: selected
+          ? "linear-gradient(90deg, var(--accent-surface) 0%, color-mix(in oklab, var(--accent-surface) 30%, transparent) 75%, transparent 100%)"
+          : "transparent",
         borderBottom: "1px solid var(--border-subtle)",
-        borderLeft: selected
-          ? "3px solid var(--accent-primary)"
-          : "3px solid transparent",
-        padding: "10px 16px 10px 13px",
+        padding: "11px 16px",
       }}
       aria-pressed={selected}
     >
-      <div className="flex items-center justify-between gap-2">
-        <div className="flex min-w-0 items-center gap-2">
-          <span
-            className="text-sm font-semibold"
-            style={{ color: selected ? "var(--accent-primary)" : "var(--text-default)" }}
-          >
-            {row.number}
-          </span>
-          <span
-            className="rounded-full px-1.5 py-0.5 text-[10px] font-medium"
-            style={{ background: row.statusColor, color: "white" }}
-          >
-            {row.statusLabel}
-          </span>
-          {row.priority !== "NORMAL" && (
+      {selected && (
+        <span
+          aria-hidden
+          style={{
+            position: "absolute",
+            left: 3,
+            top: 9,
+            bottom: 9,
+            width: 2.5,
+            borderRadius: 999,
+            background: "var(--accent-primary)",
+            boxShadow:
+              "0 0 0 0.5px var(--accent-primary), 0 0 8px color-mix(in oklab, var(--accent-primary) 50%, transparent)",
+          }}
+        />
+      )}
+      {!selected && (
+        <span
+          aria-hidden
+          className="pointer-events-none absolute inset-0 opacity-0 transition-opacity group-hover/row:opacity-100"
+          style={{ background: "color-mix(in oklab, var(--surface-3) 50%, transparent)" }}
+        />
+      )}
+
+      <div className="relative flex items-center gap-3">
+        <span
+          aria-hidden
+          style={{
+            display: "inline-flex",
+            alignItems: "center",
+            justifyContent: "center",
+            width: 28,
+            height: 28,
+            borderRadius: 999,
+            background: "var(--accent-surface)",
+            color: "var(--accent-primary)",
+            border:
+              "1px solid color-mix(in oklab, var(--accent-primary) 28%, transparent)",
+            fontSize: 11.5,
+            fontWeight: 700,
+            flexShrink: 0,
+          }}
+        >
+          {initial}
+        </span>
+
+        <div className="min-w-0 flex-1">
+          <div className="flex flex-wrap items-center gap-2">
             <span
-              className="rounded-full px-1.5 py-0.5 text-[10px] font-medium"
-              style={{ background: row.priorityColor, color: "white" }}
-              title={`Priority: ${row.priority}`}
+              style={{
+                fontSize: 13,
+                fontWeight: 600,
+                letterSpacing: "-0.005em",
+                color: selected ? "var(--accent-primary)" : "var(--text-default)",
+                fontFeatureSettings: "'tnum' 1",
+              }}
             >
-              {row.priority === "RUSH" ? "⚡" : "!"}
+              {row.number}
             </span>
+            <Pill label={row.statusLabel} accent={row.statusColor} />
+            {row.priority !== "NORMAL" && (
+              <Pill
+                label={row.priority === "RUSH" ? "⚡ Rush" : "High"}
+                accent={row.priorityColor}
+                solid
+              />
+            )}
+          </div>
+          <div
+            className="mt-1 flex items-center gap-1.5 truncate"
+            style={{
+              fontSize: 11.5,
+              color: "var(--text-muted)",
+              lineHeight: 1.3,
+            }}
+          >
+            <span className="truncate">{row.customerName}</span>
+            {row.dueLabel && (
+              <>
+                <span style={{ color: "var(--text-faint)" }}>·</span>
+                <span
+                  style={{
+                    color: row.overdue
+                      ? "var(--danger-fg, var(--rose-500))"
+                      : "var(--text-muted)",
+                    fontFeatureSettings: "'tnum' 1",
+                  }}
+                  title={row.overdue ? "Past due" : "Due date"}
+                >
+                  {row.overdue ? "⚠ " : ""}due {row.dueLabel}
+                </span>
+              </>
+            )}
+          </div>
+          {(row.blockerCount > 0 || row.depositOwedLabel) && (
+            <div className="mt-1.5 flex flex-wrap items-center gap-1">
+              {row.blockerCount > 0 && (
+                <span
+                  style={{
+                    display: "inline-flex",
+                    alignItems: "center",
+                    gap: 4,
+                    fontSize: 10,
+                    fontWeight: 700,
+                    letterSpacing: "0.04em",
+                    color: "var(--danger-fg, var(--rose-500))",
+                    background:
+                      "color-mix(in oklab, var(--rose-500) 14%, transparent)",
+                    border:
+                      "1px solid color-mix(in oklab, var(--rose-500) 30%, transparent)",
+                    padding: "2px 7px",
+                    borderRadius: 999,
+                    lineHeight: 1,
+                  }}
+                  title={row.blockerHint ?? "Blocked"}
+                >
+                  <span aria-hidden>⏸</span>
+                  {row.blockerCount > 1 ? `${row.blockerCount} blockers` : "Blocked"}
+                </span>
+              )}
+              {row.depositOwedLabel && (
+                <span
+                  style={{
+                    display: "inline-flex",
+                    alignItems: "center",
+                    gap: 4,
+                    fontSize: 10,
+                    fontWeight: 700,
+                    letterSpacing: "0.04em",
+                    color: "var(--warning-fg, var(--amber-500))",
+                    background:
+                      "color-mix(in oklab, var(--amber-500) 14%, transparent)",
+                    border:
+                      "1px solid color-mix(in oklab, var(--amber-500) 30%, transparent)",
+                    padding: "2px 7px",
+                    borderRadius: 999,
+                    lineHeight: 1,
+                    fontFeatureSettings: "'tnum' 1",
+                  }}
+                  title="Deposit must be paid before production starts"
+                >
+                  Deposit {row.depositOwedLabel}
+                </span>
+              )}
+            </div>
           )}
         </div>
-        <span className="shrink-0 text-sm font-semibold tabular-nums" style={{ color: "var(--text-default)" }}>
+
+        <span
+          style={{
+            fontSize: 13,
+            fontWeight: 600,
+            color: "var(--text-default)",
+            fontFeatureSettings: "'tnum' 1",
+            letterSpacing: "-0.005em",
+            flexShrink: 0,
+          }}
+        >
           {row.total}
         </span>
       </div>
-      <div className="mt-0.5 flex items-center justify-between gap-2">
-        <span className="min-w-0 truncate text-xs" style={{ color: "var(--text-muted)" }}>
-          {row.customerName}
-        </span>
-        {row.dueLabel && (
-          <span
-            className="shrink-0 text-xs tabular-nums"
-            style={{ color: row.overdue ? "var(--danger-fg)" : "var(--text-muted)" }}
-            title={row.overdue ? "Past due" : "Due date"}
-          >
-            {row.overdue ? "⚠ " : ""}
-            {row.dueLabel}
-          </span>
-        )}
-      </div>
-      {(row.blockerCount > 0 || row.depositOwedLabel) && (
-        <div className="mt-1 flex flex-wrap items-center gap-1">
-          {row.blockerCount > 0 && (
-            <span
-              className="rounded-full px-1.5 py-0.5 text-[10px] font-medium"
-              style={{ background: "var(--danger-fg)", color: "white" }}
-              title={row.blockerHint ?? "Blocked"}
-            >
-              ⏸ {row.blockerCount > 1 ? `${row.blockerCount} blockers` : "Blocked"}
-            </span>
-          )}
-          {row.depositOwedLabel && (
-            <span
-              className="rounded-full px-1.5 py-0.5 text-[10px] font-medium"
-              style={{ background: "var(--danger-fg)", color: "white" }}
-              title="Deposit must be paid before production starts"
-            >
-              💰 {row.depositOwedLabel}
-            </span>
-          )}
-        </div>
-      )}
     </button>
+  );
+}
+
+function Pill({ label, accent, solid }: { label: string; accent: string; solid?: boolean }) {
+  if (solid) {
+    return (
+      <span
+        style={{
+          display: "inline-flex",
+          alignItems: "center",
+          gap: 4,
+          fontSize: 9.5,
+          fontWeight: 700,
+          letterSpacing: "0.06em",
+          textTransform: "uppercase",
+          padding: "2px 6px",
+          borderRadius: 999,
+          color: "white",
+          background: accent,
+          border: `1px solid color-mix(in oklab, ${accent} 60%, black 40%)`,
+          lineHeight: 1,
+          whiteSpace: "nowrap",
+        }}
+      >
+        {label}
+      </span>
+    );
+  }
+  return (
+    <span
+      style={{
+        display: "inline-flex",
+        alignItems: "center",
+        gap: 4,
+        fontSize: 9.5,
+        fontWeight: 700,
+        letterSpacing: "0.06em",
+        textTransform: "uppercase",
+        padding: "2px 6px",
+        borderRadius: 999,
+        color: accent,
+        background: `color-mix(in oklab, ${accent} 16%, transparent)`,
+        border: `1px solid color-mix(in oklab, ${accent} 32%, transparent)`,
+        lineHeight: 1,
+        whiteSpace: "nowrap",
+      }}
+    >
+      <span
+        aria-hidden
+        style={{
+          width: 4,
+          height: 4,
+          borderRadius: 999,
+          background: accent,
+          boxShadow: `0 0 0 1.5px color-mix(in oklab, ${accent} 25%, transparent)`,
+        }}
+      />
+      {label}
+    </span>
   );
 }

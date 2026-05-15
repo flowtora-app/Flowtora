@@ -195,33 +195,61 @@ export default async function OrdersPage({
   /* ---------- LEFT RAIL: toolbar + list ---------- */
   const listNode = (
     <>
-      {/* Search + filters */}
       <div
-        className="flex flex-col gap-2 px-3 py-3"
-        style={{ borderBottom: "1px solid var(--border-subtle)" }}
+        className="flex flex-col gap-3 px-3 py-3"
+        style={{
+          borderBottom: "1px solid var(--border-subtle)",
+          background:
+            "linear-gradient(180deg, color-mix(in oklab, var(--surface-1) 60%, transparent) 0%, transparent 100%)",
+        }}
       >
-        <form className="flex flex-col gap-2" method="get">
+        <form className="flex flex-col gap-2.5" method="get">
           {sp.assignee === "mine" && <input type="hidden" name="assignee" value="mine" />}
           {view !== "all" && <input type="hidden" name="view" value={view} />}
-          <div className="flex gap-2">
+          <div
+            style={{
+              position: "relative",
+              display: "flex",
+              alignItems: "center",
+              gap: 8,
+              height: 34,
+              padding: "0 10px",
+              borderRadius: 8,
+              background: "color-mix(in oklab, var(--surface-2) 75%, transparent)",
+              border: "1px solid var(--border-subtle)",
+            }}
+          >
+            <svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" style={{ color: "var(--text-faint)", flexShrink: 0 }}>
+              <circle cx="11" cy="11" r="7" />
+              <path d="m21 21-4.3-4.3" />
+            </svg>
             <input
               name="q"
               defaultValue={sp.q ?? ""}
               placeholder="Search order # or customer…"
-              className="flex-1 rounded-md px-3 py-1.5 text-sm outline-none"
               style={{
-                background: "var(--surface-1)",
-                border: "1px solid var(--border-subtle)",
+                flex: 1,
+                minWidth: 0,
+                background: "transparent",
+                border: 0,
+                outline: "none",
                 color: "var(--text-default)",
+                fontSize: 12.5,
+                fontWeight: 500,
+                letterSpacing: "-0.005em",
               }}
             />
             <button
               type="submit"
-              className="rounded-md px-3 py-1.5 text-sm"
               style={{
-                border: "1px solid var(--border-subtle)",
-                color: "var(--text-default)",
+                flexShrink: 0,
+                fontSize: 11,
+                fontWeight: 600,
+                color: "var(--text-muted)",
                 background: "var(--surface-1)",
+                border: "1px solid var(--border-subtle)",
+                padding: "3px 8px",
+                borderRadius: 5,
               }}
             >
               Go
@@ -231,11 +259,15 @@ export default async function OrdersPage({
             <select
               name="status"
               defaultValue={sp.status ?? ""}
-              className="rounded-md px-2 py-1 outline-none"
+              className="ts-focus rounded-md outline-none"
               style={{
-                background: "var(--surface-1)",
+                background: "var(--surface-2)",
                 border: "1px solid var(--border-subtle)",
                 color: "var(--text-default)",
+                fontSize: 11.5,
+                fontWeight: 500,
+                padding: "4px 8px",
+                height: 28,
               }}
             >
               <option value="">All statuses</option>
@@ -247,11 +279,15 @@ export default async function OrdersPage({
               <select
                 name="branch"
                 defaultValue={sp.branch ?? ""}
-                className="rounded-md px-2 py-1 outline-none"
+                className="ts-focus rounded-md outline-none"
                 style={{
-                  background: "var(--surface-1)",
+                  background: "var(--surface-2)",
                   border: "1px solid var(--border-subtle)",
                   color: "var(--text-default)",
+                  fontSize: 11.5,
+                  fontWeight: 500,
+                  padding: "4px 8px",
+                  height: 28,
                 }}
               >
                 <option value="">All branches</option>
@@ -263,7 +299,6 @@ export default async function OrdersPage({
           </div>
         </form>
 
-        {/* View chips */}
         <div className="flex flex-wrap gap-1">
           {VIEWS.map((v) => {
             const active = v.value === view;
@@ -272,12 +307,20 @@ export default async function OrdersPage({
                 key={v.value}
                 href={buildHref(v.value)}
                 title={v.hint}
-                className="rounded-md px-2 py-1 text-xs"
+                className="ts-focus inline-flex items-center rounded-md transition-colors"
                 style={{
-                  background: active ? "var(--accent-surface)" : "transparent",
-                  border: "1px solid var(--border-subtle)",
+                  background: active
+                    ? "var(--accent-surface)"
+                    : "color-mix(in oklab, var(--surface-2) 60%, transparent)",
+                  border: active
+                    ? "1px solid color-mix(in oklab, var(--accent-primary) 28%, transparent)"
+                    : "1px solid var(--border-subtle)",
                   color: active ? "var(--accent-primary)" : "var(--text-muted)",
-                  fontWeight: active ? 600 : undefined,
+                  fontWeight: active ? 700 : 500,
+                  fontSize: 11.5,
+                  letterSpacing: "-0.005em",
+                  padding: "4px 10px",
+                  height: 26,
                 }}
               >
                 {v.label}
@@ -286,20 +329,41 @@ export default async function OrdersPage({
           })}
         </div>
 
-        <div className="flex items-center justify-between text-[11px]" style={{ color: "var(--text-muted)" }}>
-          <span>
+        <div
+          className="flex items-center justify-between"
+          style={{ color: "var(--text-faint)", fontSize: 10.5 }}
+        >
+          <span style={{ fontWeight: 600, letterSpacing: "0.02em" }}>
             {orders.length} {orders.length === 1 ? "order" : "orders"}
+            {view !== "all" && (
+              <span style={{ color: "var(--text-muted)", marginLeft: 4 }}>
+                in {VIEWS.find((v) => v.value === view)?.label}
+              </span>
+            )}
           </span>
-          <span className="hidden lg:inline">↑↓ navigate · / search</span>
+          <span className="hidden lg:inline" style={{ letterSpacing: "0.02em" }}>
+            ↑↓ navigate · / search
+          </span>
         </div>
       </div>
 
-      {/* List */}
       <div className="flex-1 overflow-y-auto">
         {rows.length === 0 ? (
-          <div className="p-6 text-sm" style={{ color: "var(--text-muted)" }}>
+          <div
+            className="m-3 rounded-lg p-5 text-center"
+            style={{
+              background: "color-mix(in oklab, var(--surface-2) 40%, transparent)",
+              border: "1px dashed var(--border-subtle)",
+              color: "var(--text-muted)",
+              fontSize: 12.5,
+            }}
+          >
             No orders match these filters.{" "}
-            <Link href={`/t/${slug}/orders`} className="underline">
+            <Link
+              href={`/t/${slug}/orders`}
+              className="underline"
+              style={{ color: "var(--accent-primary)" }}
+            >
               Clear filters
             </Link>
           </div>
@@ -316,29 +380,105 @@ export default async function OrdersPage({
   let panelNode: React.ReactNode;
   if (!panelData || !panelData.order) {
     panelNode = (
-      <div className="flex h-full min-h-[400px] items-center justify-center p-10">
-        <div className="max-w-md text-center">
+      <div
+        className="flex h-full min-h-[400px] items-center justify-center p-10"
+        style={{
+          background:
+            "radial-gradient(720px circle at 50% -20%, var(--accent-surface), transparent 55%)",
+        }}
+      >
+        <div className="max-w-sm text-center">
           <div
-            className="mx-auto flex h-14 w-14 items-center justify-center rounded-full"
-            style={{ background: "var(--surface-1)", color: "var(--text-muted)" }}
+            className="mx-auto flex h-16 w-16 items-center justify-center rounded-2xl"
+            style={{
+              background:
+                "linear-gradient(135deg, var(--accent-surface-strong), var(--accent-surface))",
+              color: "var(--accent-primary)",
+              border:
+                "1px solid color-mix(in oklab, var(--accent-primary) 28%, transparent)",
+              boxShadow:
+                "inset 0 1px 0 0 color-mix(in oklab, white 6%, transparent)",
+            }}
           >
-            <svg width="24" height="24" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="1.5">
+            <svg width="28" height="28" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="1.5">
               <rect x="4" y="5" width="16" height="14" rx="2" />
               <path d="M8 9h8M8 13h8M8 17h5" />
             </svg>
           </div>
-          <h2 className="mt-4 text-lg font-semibold" style={{ color: "var(--text-default)" }}>
+          <h2
+            className="mt-5 font-semibold"
+            style={{
+              color: "var(--text-default)",
+              fontSize: 18,
+              letterSpacing: "-0.015em",
+              lineHeight: 1.25,
+            }}
+          >
             Select an order
           </h2>
-          <p className="mt-1 text-sm" style={{ color: "var(--text-muted)" }}>
-            Pick a row on the left to see line items, invoices, blockers and activity without leaving the page.
+          <p
+            className="mt-1.5"
+            style={{
+              color: "var(--text-muted)",
+              fontSize: 13,
+              lineHeight: 1.5,
+            }}
+          >
+            Pick a row on the left to see line items, invoices, blockers, and activity — without leaving the page.
           </p>
-          <p className="mt-4 text-xs" style={{ color: "var(--text-muted)" }}>
-            Use <kbd className="rounded border px-1" style={{ borderColor: "var(--border-subtle)" }}>↑</kbd>{" "}
-            <kbd className="rounded border px-1" style={{ borderColor: "var(--border-subtle)" }}>↓</kbd>{" "}
-            to navigate, <kbd className="rounded border px-1" style={{ borderColor: "var(--border-subtle)" }}>/</kbd>{" "}
-            to search.
-          </p>
+          <div
+            className="mt-5 inline-flex items-center gap-3 rounded-lg px-3 py-2"
+            style={{
+              background: "color-mix(in oklab, var(--surface-2) 50%, transparent)",
+              border: "1px solid var(--border-subtle)",
+              fontSize: 11,
+              color: "var(--text-muted)",
+            }}
+          >
+            <span className="inline-flex items-center gap-1">
+              <kbd
+                style={{
+                  fontSize: 10,
+                  fontWeight: 600,
+                  color: "var(--text-default)",
+                  background: "var(--surface-1)",
+                  border: "1px solid var(--border-subtle)",
+                  padding: "1px 5px",
+                  borderRadius: 4,
+                  fontFamily: "var(--font-mono, ui-monospace, monospace)",
+                }}
+              >↑</kbd>
+              <kbd
+                style={{
+                  fontSize: 10,
+                  fontWeight: 600,
+                  color: "var(--text-default)",
+                  background: "var(--surface-1)",
+                  border: "1px solid var(--border-subtle)",
+                  padding: "1px 5px",
+                  borderRadius: 4,
+                  fontFamily: "var(--font-mono, ui-monospace, monospace)",
+                }}
+              >↓</kbd>
+              navigate
+            </span>
+            <span style={{ color: "var(--text-faint)" }}>·</span>
+            <span className="inline-flex items-center gap-1">
+              <kbd
+                style={{
+                  fontSize: 10,
+                  fontWeight: 600,
+                  color: "var(--text-default)",
+                  background: "var(--surface-1)",
+                  border: "1px solid var(--border-subtle)",
+                  padding: "1px 5px",
+                  borderRadius: 4,
+                  fontFamily: "var(--font-mono, ui-monospace, monospace)",
+                }}
+              >/</kbd>
+              search
+            </span>
+          </div>
         </div>
       </div>
     );
@@ -364,37 +504,99 @@ export default async function OrdersPage({
   /* ---------- Page ---------- */
   return (
     <div>
-      <div className="flex items-center justify-between">
-        <div>
-          <h1 className="text-2xl font-semibold">Orders</h1>
-          <p className="mt-1 text-sm" style={{ color: "var(--text-muted)" }}>
-            Browse on the left, work on the right — orders open instantly without leaving the page.
-          </p>
-        </div>
-        <div className="flex items-center gap-2">
-          <OrdersViewToggle slug={slug} active="list" />
-          <Link
-            href={`/t/${slug}/orders?assignee=mine${view !== "all" ? `&view=${view}` : ""}`}
-            className="rounded-md px-3 py-1.5 text-xs"
-            style={{
-              background: sp.assignee === "mine" ? "var(--accent-surface)" : "transparent",
-              border: "1px solid var(--border-subtle)",
-              color: sp.assignee === "mine" ? "var(--accent-primary)" : "var(--text-default)",
-              fontWeight: sp.assignee === "mine" ? 600 : undefined,
-            }}
-          >
-            {sp.assignee === "mine" ? "✓ Mine" : "Assigned to me"}
-          </Link>
-          <SavedViewPicker
-            slug={slug}
-            entityKind="orders"
-            views={savedViews}
-            canShare={ctx.role === "OWNER" || ctx.role === "ADMIN"}
-          />
+      <div
+        className="relative overflow-hidden rounded-2xl"
+        style={{
+          padding: "18px 22px",
+          background:
+            "radial-gradient(880px circle at -10% -50%, var(--accent-surface), transparent 55%), " +
+            "linear-gradient(180deg, color-mix(in oklab, var(--surface-1) 92%, white 8%) 0%, var(--surface-1) 100%)",
+          border: "1px solid var(--border-subtle)",
+          boxShadow:
+            "inset 0 1px 0 0 color-mix(in oklab, white 4%, transparent), " +
+            "0 1px 2px 0 rgba(0,0,0,0.18)",
+        }}
+      >
+        <div className="flex flex-wrap items-center justify-between gap-4">
+          <div className="min-w-0">
+            <div className="flex items-center gap-2.5">
+              <h1
+                className="font-semibold"
+                style={{
+                  color: "var(--text-default)",
+                  fontSize: 24,
+                  letterSpacing: "-0.02em",
+                  lineHeight: 1.15,
+                }}
+              >
+                Orders
+              </h1>
+              <span
+                style={{
+                  display: "inline-flex",
+                  alignItems: "center",
+                  fontSize: 11,
+                  fontWeight: 700,
+                  letterSpacing: "0.04em",
+                  color: "var(--accent-primary)",
+                  background: "var(--accent-surface)",
+                  border:
+                    "1px solid color-mix(in oklab, var(--accent-primary) 22%, transparent)",
+                  padding: "3px 8px",
+                  borderRadius: 999,
+                  fontFeatureSettings: "'tnum' 1",
+                  lineHeight: 1,
+                }}
+              >
+                {orders.length}
+              </span>
+            </div>
+            <p
+              className="mt-1.5"
+              style={{
+                color: "var(--text-muted)",
+                fontSize: 12.5,
+                lineHeight: 1.45,
+              }}
+            >
+              Production work in flight — pivot from sales to execution. Browse on the left, open on the right.
+            </p>
+          </div>
+          <div className="flex items-center gap-2">
+            <OrdersViewToggle slug={slug} active="list" />
+            <Link
+              href={`/t/${slug}/orders?assignee=mine${view !== "all" ? `&view=${view}` : ""}`}
+              className="ts-focus inline-flex items-center gap-1.5 rounded-lg transition-colors"
+              style={{
+                height: 32,
+                padding: "0 12px",
+                background: sp.assignee === "mine"
+                  ? "var(--accent-surface)"
+                  : "color-mix(in oklab, var(--surface-2) 75%, transparent)",
+                border: sp.assignee === "mine"
+                  ? "1px solid color-mix(in oklab, var(--accent-primary) 28%, transparent)"
+                  : "1px solid var(--border-subtle)",
+                color: sp.assignee === "mine"
+                  ? "var(--accent-primary)"
+                  : "var(--text-default)",
+                fontWeight: sp.assignee === "mine" ? 700 : 500,
+                fontSize: 12,
+                letterSpacing: "-0.005em",
+              }}
+            >
+              {sp.assignee === "mine" ? "✓ Mine" : "Assigned to me"}
+            </Link>
+            <SavedViewPicker
+              slug={slug}
+              entityKind="orders"
+              views={savedViews}
+              canShare={ctx.role === "OWNER" || ctx.role === "ADMIN"}
+            />
+          </div>
         </div>
       </div>
 
-      <div className="mt-4">
+      <div className="mt-5">
         {orders.length === 0 ? (
           <Card className="mt-4">
             <EmptyState
