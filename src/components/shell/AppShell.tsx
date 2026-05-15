@@ -61,7 +61,7 @@ export function AppShell({
 }: AppShellProps) {
   const [paletteOpen, setPaletteOpen] = React.useState(false);
   const [shortcutsOpen, setShortcutsOpen] = React.useState(false);
-  const [openPopover, setOpenPopover] = React.useState<"user" | "create" | "tenant" | "notifications" | null>(null);
+  const [openPopover, setOpenPopover] = React.useState<"user" | "create" | "tenant" | "notifications" | "help" | null>(null);
 
   // Phase 3 — global "?" opens the shortcut cheat-sheet. We hook the
   // event here (not in TopBar) because the dialog is rendered at this

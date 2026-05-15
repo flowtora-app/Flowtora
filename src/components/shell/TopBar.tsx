@@ -1,6 +1,7 @@
 "use client";
 
 import * as React from "react";
+import Link from "next/link";
 import { Icon } from "./icons";
 import { Breadcrumbs } from "./Breadcrumbs";
 import { Popover, PopoverItem, PopoverSection } from "./Popover";
@@ -9,24 +10,25 @@ import { ThemeToggle } from "./ThemeToggle";
 import { cn } from "@/lib/cn";
 import { signOutAction } from "@/app/actions/auth";
 
-// Phase 18 Slice B — TopBar.
+// Tenant workspace topbar — premium redesign (Page T-shell spec).
 //
-// Sticky bar at the top of the tenant app. Left side shows auto-derived
-// breadcrumbs for orientation. Right side groups the "tools" users
-// reach for most: search, quick-create, notifications, user menu.
+// Layout (sticky 56px):
+//   [ Breadcrumbs ] ─── [ Search ] [ Production ] │ [ + New ] [ Switcher ] [ Bell ] [ Help ] [ Profile ]
 //
-// Shortcuts:
-//   ⌘K / Ctrl+K → open command palette
-//   / (outside an input) → open command palette
+// Premium polish matches the redesigned sidebar:
+//   • Subtle accent halo + hairline + scroll-shadow background
+//   • Wider, more inviting search trigger with refined ⌘K kbd
+//   • Production status link (per spec — clickable into the floor)
+//   • New "+ New" primary button with gradient + accent ring
+//   • Help menu (spec calls for Help center, shortcuts, feedback,
+//     status, what's new)
+//   • Profile avatar gets an accent ring + online dot, matching the
+//     sidebar workspace card
 //
-// All four trigger clusters are controlled via shared state inside
-// AppShell, so e.g. opening the quick-create menu also closes the
-// user menu automatically (mutually exclusive popovers).
+// Shortcuts preserved:
+//   ⌘K / Ctrl+K → command palette
+//   /           → command palette (outside inputs)
 
-// Phase 3 — memberships now carry lifecycle context so the switcher can
-// render a "TRIAL · 4d" / "PAST DUE" chip inline. `status` is the raw
-// TenantStatus string (ACTIVE / TRIAL / PAST_DUE); `trialEndsAt` only
-// matters when status === "TRIAL".
 export type MembershipSummary = {
   id: string;
   name: string;
@@ -44,8 +46,8 @@ export interface TopBarProps {
   memberships: MembershipSummary[];
   onOpenPalette: () => void;
   // Which popover is open. Passed through so callers can coordinate.
-  openPopover: "user" | "create" | "tenant" | "notifications" | null;
-  setOpenPopover: (v: "user" | "create" | "tenant" | "notifications" | null) => void;
+  openPopover: "user" | "create" | "tenant" | "notifications" | "help" | null;
+  setOpenPopover: (v: "user" | "create" | "tenant" | "notifications" | "help" | null) => void;
 }
 
 export function TopBar({
@@ -80,21 +82,36 @@ export function TopBar({
     return () => document.removeEventListener("keydown", onKey);
   }, [onOpenPalette]);
 
+  // Scroll shadow — subtle elevation appears once content scrolls.
+  const [scrolled, setScrolled] = React.useState(false);
+  React.useEffect(() => {
+    const onScroll = () => setScrolled(window.scrollY > 4);
+    onScroll();
+    window.addEventListener("scroll", onScroll, { passive: true });
+    return () => window.removeEventListener("scroll", onScroll);
+  }, []);
+
   return (
     <header
-      className="sticky top-0 z-10 flex items-center gap-3 px-6 py-2.5"
+      className="sticky top-0 z-10 flex items-center gap-3 px-6"
       style={{
-        background: "var(--surface-0)",
+        height: 56,
+        background:
+          "radial-gradient(540px circle at 8% -120%, var(--accent-surface), transparent 50%), " +
+          "color-mix(in oklab, var(--surface-0) 92%, var(--surface-1) 8%)",
         borderBottom: "1px solid var(--border-subtle)",
+        boxShadow: scrolled
+          ? "0 1px 0 0 var(--border-subtle), 0 6px 14px -8px rgba(0,0,0,0.35)"
+          : "none",
+        transition: "box-shadow 180ms ease",
+        backdropFilter: "saturate(140%) blur(4px)",
       }}
     >
       <div className="min-w-0 flex-1">
         <Breadcrumbs />
       </div>
 
-      {/* Search trigger — click opens the palette; Shift+Enter while
-          the trigger is focused jumps straight to the full search page
-          for keyboard users who prefer the richer results view. */}
+      {/* ── Search trigger ─────────────────────────────────────── */}
       <button
         type="button"
         onClick={onOpenPalette}
@@ -104,33 +121,98 @@ export function TopBar({
             window.location.href = `/t/${slug}/search`;
           }
         }}
-        aria-label="Open command palette (Shift+Enter for full search page)"
+        aria-label="Search or jump to (⌘K, Shift+Enter for full search page)"
         className={cn(
-          "ts-focus group flex items-center gap-2 rounded-md px-2.5 py-1.5 text-xs transition-colors",
-          "hover:brightness-110",
+          "ts-focus group inline-flex h-9 items-center gap-2 rounded-lg px-3 text-[12.5px] transition-colors",
         )}
         style={{
-          background: "var(--surface-1)",
+          background: "color-mix(in oklab, var(--surface-1) 80%, transparent)",
           border: "1px solid var(--border-subtle)",
           color: "var(--text-muted)",
-          width: 260,
+          width: 320,
         }}
       >
-        <Icon.Search size={13} />
-        <span className="flex-1 text-left">Search or jump to…</span>
+        <Icon.Search size={13} style={{ color: "var(--text-faint)" }} />
+        <span className="flex-1 text-left" style={{ letterSpacing: "-0.005em" }}>
+          Search or jump to…
+        </span>
         <kbd
-          className="rounded px-1.5 py-0.5 text-[10px] font-semibold"
           style={{
+            fontSize: 10,
+            fontWeight: 600,
+            color: "var(--text-faint)",
             background: "var(--surface-2)",
             border: "1px solid var(--border-subtle)",
-            color: "var(--text-faint)",
+            padding: "1px 5px",
+            borderRadius: 4,
+            fontFamily:
+              "var(--font-mono, ui-monospace, SFMono-Regular, monospace)",
+            letterSpacing: "0.02em",
+            lineHeight: 1.2,
           }}
         >
           ⌘K
         </kbd>
       </button>
 
-      {/* Tenant switcher — only if multi-tenant */}
+      {/* ── Production status link ─────────────────────────────── */}
+      <Link
+        href={`/t/${slug}/production`}
+        aria-label="Go to production"
+        title="Production floor"
+        className="ts-focus group inline-flex h-9 items-center gap-2 rounded-lg px-3 text-[12.5px] transition-colors"
+        style={{
+          background: "color-mix(in oklab, var(--surface-1) 80%, transparent)",
+          border: "1px solid var(--border-subtle)",
+          color: "var(--text-default)",
+        }}
+      >
+        <span
+          aria-hidden
+          style={{
+            position: "relative",
+            display: "inline-flex",
+            alignItems: "center",
+            justifyContent: "center",
+            width: 14,
+            height: 14,
+          }}
+        >
+          <span
+            style={{
+              width: 7,
+              height: 7,
+              borderRadius: 999,
+              background: "var(--emerald-500)",
+              boxShadow:
+                "0 0 0 2px color-mix(in oklab, var(--emerald-500) 25%, transparent)",
+            }}
+          />
+        </span>
+        <span style={{ fontWeight: 600, letterSpacing: "-0.005em" }}>Production</span>
+        <span style={{ color: "var(--text-faint)" }}>·</span>
+        <span style={{ color: "var(--text-muted)" }}>Live</span>
+      </Link>
+
+      {/* Vertical separator before the action cluster — subtle. */}
+      <span
+        aria-hidden
+        style={{
+          width: 1,
+          height: 22,
+          background: "var(--border-subtle)",
+          margin: "0 2px",
+        }}
+      />
+
+      {/* ── Quick create (primary CTA) ─────────────────────────── */}
+      <QuickCreateMenu
+        slug={slug}
+        open={openPopover === "create"}
+        onOpenChange={(o) => setOpenPopover(o ? "create" : null)}
+      />
+
+      {/* ── Tenant switcher (only multi-tenant) ────────────────── */}
       {memberships.length > 1 && (
         <TenantSwitcher
           memberships={memberships}
@@ -139,14 +221,7 @@ export function TopBar({
         />
       )}
 
-      {/* Quick create */}
-      <QuickCreateMenu
-        slug={slug}
-        open={openPopover === "create"}
-        onOpenChange={(o) => setOpenPopover(o ? "create" : null)}
-      />
-
-      {/* Notifications */}
+      {/* ── Notifications ──────────────────────────────────────── */}
       <NotificationsMenu
         slug={slug}
         unread={unread}
@@ -155,7 +230,14 @@ export function TopBar({
         onOpenChange={(o) => setOpenPopover(o ? "notifications" : null)}
       />
 
-      {/* User menu */}
+      {/* ── Help (?) menu ──────────────────────────────────────── */}
+      <HelpMenu
+        slug={slug}
+        open={openPopover === "help"}
+        onOpenChange={(o) => setOpenPopover(o ? "help" : null)}
+      />
+
+      {/* ── Profile / user menu ────────────────────────────────── */}
       <UserMenu
         user={user}
         open={openPopover === "user"}
@@ -177,10 +259,6 @@ function TenantSwitcher({
   onOpenChange: (o: boolean) => void;
 }) {
   const active = memberships.find((m) => m.active);
-  // Phase 3 — filter input. Shops with >5 workspaces benefit a lot; at
-  // <5 the list is already short enough that the input adds no value.
-  // We render it unconditionally for consistency but it auto-focuses on
-  // open so a user who wants typeahead pays no cost for its presence.
   const [filter, setFilter] = React.useState("");
   React.useEffect(() => {
     if (!open) setFilter("");
@@ -193,23 +271,31 @@ function TenantSwitcher({
       open={open}
       onOpenChange={onOpenChange}
       align="end"
-      width={280}
+      width={300}
       trigger={
         <button
           type="button"
           aria-label="Switch workspace"
           onClick={() => onOpenChange(!open)}
-          className="ts-focus inline-flex items-center gap-2 rounded-md px-2.5 py-1.5 text-xs"
+          className="ts-focus inline-flex h-9 items-center gap-1.5 rounded-lg px-2.5 text-[12.5px] transition-colors"
           style={{
-            background: "var(--surface-1)",
+            background: "color-mix(in oklab, var(--surface-1) 80%, transparent)",
             border: "1px solid var(--border-subtle)",
             color: "var(--text-default)",
           }}
         >
           <Icon.Building size={13} style={{ color: "var(--text-muted)" }} />
-          <span className="max-w-[110px] truncate">{active?.name ?? "Workspace"}</span>
-          {active && <WorkspaceStatusChip status={active.status} trialEndsAt={active.trialEndsAt} compact />}
-          <Icon.ChevronDown size={12} style={{ color: "var(--text-muted)" }} />
+          <span className="max-w-[110px] truncate" style={{ fontWeight: 600 }}>
+            {active?.name ?? "Workspace"}
+          </span>
+          {active && (
+            <WorkspaceStatusChip
+              status={active.status}
+              trialEndsAt={active.trialEndsAt}
+              compact
+            />
+          )}
+          <Icon.ChevronDown size={12} style={{ color: "var(--text-faint)" }} />
         </button>
       }
     >
@@ -257,6 +343,11 @@ function TenantSwitcher({
             <span className="truncate">{m.name}</span>
           </PopoverItem>
         ))}
+      </PopoverSection>
+      <PopoverSection>
+        <PopoverItem href="/select-tenant" leftIcon={<Icon.ArrowRight size={12} />}>
+          Manage workspaces
+        </PopoverItem>
       </PopoverSection>
     </Popover>
   );
@@ -337,42 +428,162 @@ function QuickCreateMenu({
       open={open}
       onOpenChange={onOpenChange}
       align="end"
-      width={220}
+      width={240}
       trigger={
         <button
           type="button"
           aria-label="Quick create"
           onClick={() => onOpenChange(!open)}
-          className="ts-focus inline-flex h-8 items-center gap-1.5 rounded-md px-2.5 text-xs font-medium transition-colors"
+          className="ts-focus inline-flex h-9 items-center gap-1.5 rounded-lg px-3 text-[12.5px] font-semibold transition-transform"
           style={{
-            background: "var(--accent-primary)",
+            background:
+              "linear-gradient(180deg, color-mix(in oklab, var(--accent-primary) 96%, white 4%) 0%, var(--accent-primary) 100%)",
             color: "var(--accent-fg)",
-            border: "1px solid var(--accent-primary)",
+            border: "1px solid color-mix(in oklab, var(--accent-primary) 80%, black 20%)",
+            boxShadow:
+              "0 1px 0 0 rgba(255,255,255,0.15) inset, " +
+              "0 1px 2px 0 rgba(0,0,0,0.35), " +
+              "0 0 0 1px color-mix(in oklab, var(--accent-primary) 30%, transparent)",
+            letterSpacing: "-0.005em",
           }}
         >
           <Icon.Plus size={13} />
-          Create
+          New
+          <Icon.ChevronDown
+            size={11}
+            style={{ opacity: 0.85, marginLeft: 2 }}
+          />
         </button>
       }
     >
-      <PopoverSection>
-        <PopoverItem href={`/t/${slug}/customers/new`} leftIcon={<Icon.Customers size={14} />}>
+      <PopoverSection label="Create new">
+        <PopoverItem
+          href={`/t/${slug}/customers/new`}
+          leftIcon={<Icon.Customers size={14} />}
+          rightSlot={<KbdHint label="C" />}
+        >
           Customer
         </PopoverItem>
-        <PopoverItem href={`/t/${slug}/quotes/new`} leftIcon={<Icon.Quotes size={14} />}>
+        <PopoverItem
+          href={`/t/${slug}/quotes/new`}
+          leftIcon={<Icon.Quotes size={14} />}
+          rightSlot={<KbdHint label="Q" />}
+        >
           Quote
         </PopoverItem>
-        <PopoverItem href={`/t/${slug}/orders/new`} leftIcon={<Icon.Orders size={14} />}>
-          Order
+        <PopoverItem
+          href={`/t/${slug}/orders/new`}
+          leftIcon={<Icon.Orders size={14} />}
+          rightSlot={<KbdHint label="J" />}
+        >
+          Order / Job
         </PopoverItem>
-        <PopoverItem href={`/t/${slug}/invoices/new`} leftIcon={<Icon.Invoices size={14} />}>
+        <PopoverItem
+          href={`/t/${slug}/invoices/new`}
+          leftIcon={<Icon.Invoices size={14} />}
+          rightSlot={<KbdHint label="I" />}
+        >
           Invoice
         </PopoverItem>
-        <PopoverItem href={`/t/${slug}/inbox?chip=tasks&new=1`} leftIcon={<Icon.Tasks size={14} />}>
+        <PopoverItem
+          href={`/t/${slug}/inbox?chip=tasks&new=1`}
+          leftIcon={<Icon.Tasks size={14} />}
+        >
           Task
         </PopoverItem>
-        <PopoverItem href={`/t/${slug}/products/new`} leftIcon={<Icon.Products size={14} />}>
+        <PopoverItem
+          href={`/t/${slug}/products/new`}
+          leftIcon={<Icon.Products size={14} />}
+        >
           Product
+        </PopoverItem>
+        <PopoverItem
+          href={`/t/${slug}/expenses/new`}
+          leftIcon={<Icon.Expenses size={14} />}
+        >
+          Expense
+        </PopoverItem>
+      </PopoverSection>
+    </Popover>
+  );
+}
+
+function HelpMenu({
+  slug,
+  open,
+  onOpenChange,
+}: {
+  slug: string;
+  open: boolean;
+  onOpenChange: (o: boolean) => void;
+}) {
+  return (
+    <Popover
+      open={open}
+      onOpenChange={onOpenChange}
+      align="end"
+      width={240}
+      trigger={
+        <button
+          type="button"
+          aria-label="Help"
+          onClick={() => onOpenChange(!open)}
+          className="ts-focus inline-flex h-9 w-9 items-center justify-center rounded-lg transition-colors"
+          style={{
+            background: open
+              ? "var(--surface-2)"
+              : "transparent",
+            border: "1px solid",
+            borderColor: open ? "var(--border-default)" : "transparent",
+            color: "var(--text-muted)",
+            fontSize: 14,
+            fontWeight: 700,
+            lineHeight: 1,
+          }}
+        >
+          <span style={{ display: "inline-block", transform: "translateY(-0.5px)" }}>?</span>
+        </button>
+      }
+    >
+      <PopoverSection label="Help">
+        <PopoverItem
+          href={`/t/${slug}/support`}
+          leftIcon={<Icon.Support size={14} />}
+        >
+          Help center
+        </PopoverItem>
+        <PopoverItem
+          href={`/t/${slug}/support`}
+          leftIcon={<Icon.Keyboard size={14} />}
+          rightSlot={<KbdHint label="?" />}
+        >
+          Keyboard shortcuts
+        </PopoverItem>
+        <PopoverItem
+          href={`/t/${slug}/support/new`}
+          leftIcon={<Icon.MessageSquare size={14} />}
+        >
+          Contact support
+        </PopoverItem>
+      </PopoverSection>
+      <PopoverSection>
+        <PopoverItem
+          href={`/t/${slug}/feedback`}
+          leftIcon={<Icon.Sparkles size={14} />}
+        >
+          Submit feedback
+        </PopoverItem>
+        <PopoverItem
+          href="/status"
+          leftIcon={<Icon.Activity size={14} />}
+        >
+          System status
+        </PopoverItem>
+        <PopoverItem
+          href="/changelog"
+          leftIcon={<Icon.Megaphone size={14} />}
+        >
+          What&apos;s new
         </PopoverItem>
       </PopoverSection>
     </Popover>
@@ -394,40 +605,89 @@ function UserMenu({
       open={open}
       onOpenChange={onOpenChange}
       align="end"
-      width={240}
+      width={260}
       trigger={
         <button
           type="button"
           aria-label="User menu"
           onClick={() => onOpenChange(!open)}
-          className="ts-focus inline-flex h-8 w-8 items-center justify-center rounded-full text-xs font-semibold"
+          className="ts-focus relative inline-flex h-9 w-9 items-center justify-center rounded-full text-[12px] font-semibold transition-transform"
           style={{
-            background: "var(--accent-surface)",
+            background:
+              "linear-gradient(135deg, var(--accent-surface-strong), var(--accent-surface))",
             color: "var(--accent-primary)",
-            border: "1px solid var(--border-subtle)",
+            border: "1px solid color-mix(in oklab, var(--accent-primary) 30%, transparent)",
+            letterSpacing: "0.02em",
           }}
         >
           {initial}
+          <span
+            aria-hidden
+            style={{
+              position: "absolute",
+              bottom: -1,
+              right: -1,
+              width: 9,
+              height: 9,
+              borderRadius: 999,
+              background: "var(--emerald-500)",
+              boxShadow: "0 0 0 2px var(--surface-0)",
+            }}
+          />
         </button>
       }
     >
-      <div className="px-3 py-3">
-        <div className="truncate text-sm font-medium" style={{ color: "var(--text-default)" }}>
-          {user.name ?? user.email}
-        </div>
-        {user.name && (
-          <div className="mt-0.5 truncate text-xs" style={{ color: "var(--text-muted)" }}>
-            {user.email}
+      <div className="px-3 py-3 flex items-center gap-2.5">
+        <span
+          aria-hidden
+          style={{
+            display: "inline-flex",
+            alignItems: "center",
+            justifyContent: "center",
+            width: 34,
+            height: 34,
+            borderRadius: 999,
+            background:
+              "linear-gradient(135deg, var(--accent-surface-strong), var(--accent-surface))",
+            color: "var(--accent-primary)",
+            border: "1px solid color-mix(in oklab, var(--accent-primary) 30%, transparent)",
+            fontSize: 13,
+            fontWeight: 700,
+            flexShrink: 0,
+          }}
+        >
+          {initial}
+        </span>
+        <div className="min-w-0 flex-1">
+          <div
+            className="truncate"
+            style={{ color: "var(--text-default)", fontSize: 13, fontWeight: 600 }}
+          >
+            {user.name ?? user.email}
           </div>
-        )}
+          {user.name && (
+            <div
+              className="mt-0.5 truncate"
+              style={{ color: "var(--text-muted)", fontSize: 11.5 }}
+            >
+              {user.email}
+            </div>
+          )}
+        </div>
       </div>
       <div
         className="px-3 py-2"
         style={{ borderTop: "1px solid var(--border-subtle)" }}
       >
         <div
-          className="mb-1.5 text-[10px] font-semibold uppercase tracking-wider"
-          style={{ color: "var(--text-faint)" }}
+          className="mb-1.5"
+          style={{
+            color: "var(--text-faint)",
+            fontSize: 10,
+            fontWeight: 700,
+            textTransform: "uppercase",
+            letterSpacing: "0.08em",
+          }}
         >
           Appearance
         </div>
@@ -455,5 +715,28 @@ function UserMenu({
         </PopoverItem>
       </PopoverSection>
     </Popover>
+  );
+}
+
+/** Small keyboard hint chip for popover rows. */
+function KbdHint({ label }: { label: string }) {
+  return (
+    <kbd
+      style={{
+        fontSize: 9.5,
+        fontWeight: 600,
+        color: "var(--text-faint)",
+        background: "var(--surface-2)",
+        border: "1px solid var(--border-subtle)",
+        padding: "1px 5px",
+        borderRadius: 4,
+        fontFamily:
+          "var(--font-mono, ui-monospace, SFMono-Regular, monospace)",
+        letterSpacing: "0.02em",
+        lineHeight: 1.2,
+      }}
+    >
+      {label}
+    </kbd>
   );
 }
