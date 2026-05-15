@@ -95,52 +95,169 @@ export default async function ProductsPage({
   const hasFilters = !!(sp.q || sp.category || sp.active || sp.kind);
   const isFirstRun = products.length === 0 && !hasFilters;
 
+  const fieldStyle = {
+    background: "var(--surface-2)",
+    border: "1px solid var(--border-subtle)",
+    color: "var(--text-default)",
+    fontSize: 12.5,
+    fontWeight: 500 as const,
+    padding: "6px 10px",
+    height: 34,
+    borderRadius: 8,
+  };
+
   return (
     <div>
-      <div className="flex items-center justify-between">
-        <div>
-          <h1 className="text-2xl font-semibold">Products & services</h1>
-          <p className="mt-1 text-sm" style={{ color: "var(--muted)" }}>
-            {products.length} {products.length === 1 ? "item" : "items"}
-          </p>
-        </div>
-        <div className="flex items-center gap-2">
-          <Link href={`/t/${slug}/products/packages`}>
-            <Button type="button" variant="secondary">
+      {/* Premium page header. */}
+      <div
+        className="relative overflow-hidden rounded-2xl"
+        style={{
+          padding: "18px 22px",
+          background:
+            "radial-gradient(880px circle at -10% -50%, var(--accent-surface), transparent 55%), " +
+            "linear-gradient(180deg, color-mix(in oklab, var(--surface-1) 92%, white 8%) 0%, var(--surface-1) 100%)",
+          border: "1px solid var(--border-subtle)",
+          boxShadow:
+            "inset 0 1px 0 0 color-mix(in oklab, white 4%, transparent), " +
+            "0 1px 2px 0 rgba(0,0,0,0.18)",
+        }}
+      >
+        <div className="flex flex-wrap items-center justify-between gap-4">
+          <div className="min-w-0">
+            <div className="flex items-center gap-2.5">
+              <h1
+                className="font-semibold"
+                style={{
+                  color: "var(--text-default)",
+                  fontSize: 24,
+                  letterSpacing: "-0.02em",
+                  lineHeight: 1.15,
+                }}
+              >
+                Products &amp; services
+              </h1>
+              <span
+                style={{
+                  display: "inline-flex",
+                  alignItems: "center",
+                  fontSize: 11,
+                  fontWeight: 700,
+                  letterSpacing: "0.04em",
+                  color: "var(--accent-primary)",
+                  background: "var(--accent-surface)",
+                  border:
+                    "1px solid color-mix(in oklab, var(--accent-primary) 22%, transparent)",
+                  padding: "3px 8px",
+                  borderRadius: 999,
+                  fontFeatureSettings: "'tnum' 1",
+                  lineHeight: 1,
+                }}
+              >
+                {products.length}
+              </span>
+            </div>
+            <p
+              className="mt-1.5"
+              style={{
+                color: "var(--text-muted)",
+                fontSize: 12.5,
+                lineHeight: 1.45,
+              }}
+            >
+              Your catalog — products, services, and anything priced by the unit or job. Faster quotes with every item you add.
+            </p>
+          </div>
+          <div className="flex items-center gap-2">
+            <Link
+              href={`/t/${slug}/products/packages`}
+              className="ts-focus inline-flex items-center gap-1.5 rounded-lg transition-colors hover:bg-[var(--surface-3)]"
+              style={{
+                height: 32,
+                padding: "0 12px",
+                background: "color-mix(in oklab, var(--surface-2) 75%, transparent)",
+                border: "1px solid var(--border-subtle)",
+                color: "var(--text-default)",
+                fontSize: 12.5,
+                fontWeight: 500,
+                letterSpacing: "-0.005em",
+              }}
+            >
+              <svg width="13" height="13" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2">
+                <path d="M3 7l9-4 9 4-9 4-9-4z" />
+                <path d="M3 7v10l9 4 9-4V7" />
+              </svg>
               Packages
-            </Button>
-          </Link>
-          {canManage && (
-            <Link href={`/t/${slug}/products/new`}>
-              <Button type="button">New product</Button>
             </Link>
-          )}
+            {canManage && (
+              <Link
+                href={`/t/${slug}/products/new`}
+                className="ts-focus inline-flex items-center gap-1.5 rounded-lg font-semibold transition-transform"
+                style={{
+                  height: 32,
+                  padding: "0 14px",
+                  background:
+                    "linear-gradient(180deg, color-mix(in oklab, var(--accent-primary) 96%, white 4%) 0%, var(--accent-primary) 100%)",
+                  color: "var(--accent-fg)",
+                  border:
+                    "1px solid color-mix(in oklab, var(--accent-primary) 80%, black 20%)",
+                  boxShadow:
+                    "0 1px 0 0 rgba(255,255,255,0.15) inset, " +
+                    "0 1px 2px 0 rgba(0,0,0,0.35)",
+                  fontSize: 12.5,
+                  letterSpacing: "-0.005em",
+                }}
+              >
+                <svg width="13" height="13" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2.5">
+                  <path d="M12 5v14M5 12h14" />
+                </svg>
+                New product
+              </Link>
+            )}
+          </div>
         </div>
       </div>
 
-      <form className="mt-6 flex gap-2 text-sm" method="get">
-        <input
-          name="q"
-          defaultValue={sp.q ?? ""}
-          placeholder="Search name, SKU, description…"
-          className="flex-1 rounded-md px-3 py-2 outline-none"
-          style={{ background: "var(--panel)", border: "1px solid var(--border)", color: "var(--text)" }}
-        />
-        <select
-          name="category"
-          defaultValue={sp.category ?? ""}
-          className="rounded-md px-3 py-2"
-          style={{ background: "var(--panel)", border: "1px solid var(--border)", color: "var(--text)" }}
+      {/* Premium filter form. */}
+      <form className="mt-5 flex flex-wrap items-center gap-2" method="get">
+        <div
+          className="flex flex-1 min-w-[260px]"
+          style={{
+            position: "relative",
+            alignItems: "center",
+            gap: 8,
+            height: 34,
+            padding: "0 10px",
+            borderRadius: 8,
+            background: "color-mix(in oklab, var(--surface-2) 75%, transparent)",
+            border: "1px solid var(--border-subtle)",
+          }}
         >
+          <svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" style={{ color: "var(--text-faint)", flexShrink: 0 }}>
+            <circle cx="11" cy="11" r="7" />
+            <path d="m21 21-4.3-4.3" />
+          </svg>
+          <input
+            name="q"
+            defaultValue={sp.q ?? ""}
+            placeholder="Search name, SKU, description…"
+            style={{
+              flex: 1,
+              minWidth: 0,
+              background: "transparent",
+              border: 0,
+              outline: "none",
+              color: "var(--text-default)",
+              fontSize: 12.5,
+              fontWeight: 500,
+              letterSpacing: "-0.005em",
+            }}
+          />
+        </div>
+        <select name="category" defaultValue={sp.category ?? ""} className="ts-focus outline-none" style={fieldStyle}>
           <option value="">All categories</option>
           {categories.map((c) => <option key={c} value={c}>{c}</option>)}
         </select>
-        <select
-          name="kind"
-          defaultValue={sp.kind ?? ""}
-          className="rounded-md px-3 py-2"
-          style={{ background: "var(--panel)", border: "1px solid var(--border)", color: "var(--text)" }}
-        >
+        <select name="kind" defaultValue={sp.kind ?? ""} className="ts-focus outline-none" style={fieldStyle}>
           <option value="">All kinds</option>
           {PRODUCT_KINDS.map((k) => (
             <option key={k.value} value={k.value}>
@@ -148,17 +265,27 @@ export default async function ProductsPage({
             </option>
           ))}
         </select>
-        <select
-          name="active"
-          defaultValue={sp.active ?? ""}
-          className="rounded-md px-3 py-2"
-          style={{ background: "var(--panel)", border: "1px solid var(--border)", color: "var(--text)" }}
-        >
+        <select name="active" defaultValue={sp.active ?? ""} className="ts-focus outline-none" style={fieldStyle}>
           <option value="">All statuses</option>
           <option value="active">Active only</option>
           <option value="inactive">Inactive only</option>
         </select>
-        <Button type="submit" variant="secondary">Filter</Button>
+        <button
+          type="submit"
+          className="ts-focus inline-flex items-center gap-1.5 rounded-lg transition-colors hover:bg-[var(--surface-3)]"
+          style={{
+            height: 34,
+            padding: "0 14px",
+            background: "var(--surface-2)",
+            color: "var(--text-default)",
+            border: "1px solid var(--border-subtle)",
+            fontSize: 12.5,
+            fontWeight: 600,
+            letterSpacing: "-0.005em",
+          }}
+        >
+          Filter
+        </button>
       </form>
 
       {isFirstRun ? (
