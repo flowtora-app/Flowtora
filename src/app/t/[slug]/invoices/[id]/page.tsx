@@ -250,87 +250,226 @@ export default async function InvoiceDetailPage({
         </div>
       )}
 
-      {/* STICKY HEADER — ID + status + customer + key dates + totals + primary CTA. */}
+      {/* STICKY HEADER — premium-redesigned to match Customer + Quote + Order detail. */}
       <header
-        className="sticky top-0 z-10 rounded-lg"
+        className="sticky top-0 z-10 overflow-hidden rounded-2xl"
         style={{
-          background: "var(--surface-0)",
+          background:
+            "radial-gradient(720px circle at -8% -40%, var(--accent-surface), transparent 55%), " +
+            "linear-gradient(180deg, color-mix(in oklab, var(--surface-1) 92%, white 8%) 0%, var(--surface-1) 100%)",
           border: "1px solid var(--border-subtle)",
-          boxShadow: "0 1px 2px rgb(0 0 0 / 0.04)",
+          boxShadow:
+            "inset 0 1px 0 0 color-mix(in oklab, white 4%, transparent), " +
+            "0 2px 8px -2px rgba(0,0,0,0.25)",
+          backdropFilter: "saturate(140%) blur(2px)",
         }}
       >
         <div className="flex flex-wrap items-start justify-between gap-4 px-5 py-4">
-          <div className="min-w-0 flex-1">
-            <div className="flex flex-wrap items-center gap-2.5">
-              <h1 className="text-xl font-semibold" style={{ color: "var(--text-default)" }}>
-                {invoice.number}
-              </h1>
-              <span
-                className="rounded-full px-2 py-0.5 text-[11px] font-medium"
-                style={{ background: statusColor(invoice.status), color: "white" }}
-              >
-                {statusLabel(invoice.status)}
-              </span>
-              {invoice.kind !== "STANDARD" && (
-                <span
-                  className="rounded-full px-2 py-0.5 text-[11px]"
+          <div className="flex min-w-0 flex-1 items-start gap-3.5">
+            <Link
+              href={`/t/${slug}/customers/${invoice.customer.id}`}
+              aria-label={`View ${invoice.customer.name}`}
+              style={{
+                display: "inline-flex",
+                alignItems: "center",
+                justifyContent: "center",
+                width: 48,
+                height: 48,
+                borderRadius: 12,
+                background:
+                  "linear-gradient(135deg, var(--accent-surface-strong), var(--accent-surface))",
+                color: "var(--accent-primary)",
+                border:
+                  "1px solid color-mix(in oklab, var(--accent-primary) 30%, transparent)",
+                fontSize: 18,
+                fontWeight: 700,
+                flexShrink: 0,
+                boxShadow:
+                  "inset 0 1px 0 0 color-mix(in oklab, white 6%, transparent)",
+              }}
+            >
+              {(invoice.customer.name ?? "?").trim().charAt(0).toUpperCase() || "?"}
+            </Link>
+
+            <div className="min-w-0 flex-1">
+              <div className="flex flex-wrap items-center gap-2">
+                <h1
+                  className="font-semibold"
                   style={{
-                    background: "var(--surface-1)",
-                    border: "1px solid var(--border-subtle)",
-                    color: "var(--text-muted)",
+                    color: "var(--text-default)",
+                    fontSize: 22,
+                    letterSpacing: "-0.018em",
+                    lineHeight: 1.2,
+                    fontFeatureSettings: "'tnum' 1",
                   }}
                 >
-                  {humanize(invoice.kind)}
-                </span>
-              )}
-              {isOverdue && (
-                <span
-                  className="rounded-full px-2 py-0.5 text-[11px] font-medium"
-                  style={{ background: agingBucketColor(aging.bucket), color: "white" }}
-                >
-                  {agingBucketLabel(aging.bucket)} · {aging.daysPastDue}d past due
-                </span>
-              )}
-            </div>
-            <div className="mt-1 text-sm" style={{ color: "var(--text-muted)" }}>
-              For{" "}
-              <Link
-                href={`/t/${slug}/customers/${invoice.customer.id}`}
-                className="underline"
-                style={{ color: "var(--text-default)" }}
+                  {invoice.number}
+                </h1>
+                {(() => {
+                  const sc = statusColor(invoice.status);
+                  return (
+                    <span
+                      style={{
+                        display: "inline-flex",
+                        alignItems: "center",
+                        gap: 4,
+                        fontSize: 10,
+                        fontWeight: 700,
+                        letterSpacing: "0.06em",
+                        textTransform: "uppercase",
+                        padding: "2px 7px",
+                        borderRadius: 999,
+                        color: sc,
+                        background: `color-mix(in oklab, ${sc} 16%, transparent)`,
+                        border: `1px solid color-mix(in oklab, ${sc} 32%, transparent)`,
+                        lineHeight: 1,
+                      }}
+                    >
+                      <span
+                        aria-hidden
+                        style={{
+                          width: 4,
+                          height: 4,
+                          borderRadius: 999,
+                          background: sc,
+                          boxShadow: `0 0 0 1.5px color-mix(in oklab, ${sc} 25%, transparent)`,
+                        }}
+                      />
+                      {statusLabel(invoice.status)}
+                    </span>
+                  );
+                })()}
+                {invoice.kind !== "STANDARD" && (
+                  <span
+                    style={{
+                      fontSize: 9.5,
+                      fontWeight: 700,
+                      letterSpacing: "0.08em",
+                      textTransform: "uppercase",
+                      padding: "2px 6px",
+                      borderRadius: 4,
+                      color: "var(--text-muted)",
+                      background: "var(--surface-2)",
+                      border: "1px solid var(--border-subtle)",
+                      lineHeight: 1,
+                    }}
+                  >
+                    {humanize(invoice.kind)}
+                  </span>
+                )}
+                {isOverdue && (() => {
+                  const ac = agingBucketColor(aging.bucket);
+                  return (
+                    <span
+                      style={{
+                        display: "inline-flex",
+                        alignItems: "center",
+                        gap: 5,
+                        fontSize: 10.5,
+                        fontWeight: 700,
+                        letterSpacing: "0.04em",
+                        padding: "2px 8px",
+                        borderRadius: 999,
+                        color: "white",
+                        background: ac,
+                        border: `1px solid color-mix(in oklab, ${ac} 60%, black 40%)`,
+                        lineHeight: 1,
+                        fontFeatureSettings: "'tnum' 1",
+                      }}
+                    >
+                      {agingBucketLabel(aging.bucket)} · {aging.daysPastDue}d past due
+                    </span>
+                  );
+                })()}
+              </div>
+              <div
+                className="mt-1.5 truncate"
+                style={{
+                  color: "var(--text-muted)",
+                  fontSize: 12.5,
+                  lineHeight: 1.4,
+                }}
               >
-                {invoice.customer.name}
-              </Link>
-              {invoice.order && (
-                <>
-                  {" · "}Order{" "}
-                  <Link href={`/t/${slug}/orders/${invoice.order.id}`} className="underline">
-                    {invoice.order.number}
-                  </Link>
-                </>
-              )}
-              {invoice.dueDate && <>{" · "}Due {formatDate(invoice.dueDate)}</>}
-              {" · "}Terms {termsLabel(invoice.terms)}
+                For{" "}
+                <Link
+                  href={`/t/${slug}/customers/${invoice.customer.id}`}
+                  style={{
+                    color: "var(--text-default)",
+                    fontWeight: 500,
+                    textDecoration: "none",
+                  }}
+                  className="hover:underline"
+                >
+                  {invoice.customer.name}
+                </Link>
+                {invoice.order && (
+                  <>
+                    <span style={{ color: "var(--text-faint)" }}> · </span>
+                    Order{" "}
+                    <Link
+                      href={`/t/${slug}/orders/${invoice.order.id}`}
+                      style={{
+                        color: "var(--accent-primary)",
+                        fontWeight: 500,
+                        textDecoration: "none",
+                      }}
+                      className="hover:underline"
+                    >
+                      {invoice.order.number}
+                    </Link>
+                  </>
+                )}
+                {invoice.dueDate && (
+                  <>
+                    <span style={{ color: "var(--text-faint)" }}> · </span>
+                    Due{" "}
+                    <span style={{ color: "var(--text-default)" }}>
+                      {formatDate(invoice.dueDate)}
+                    </span>
+                  </>
+                )}
+                <span style={{ color: "var(--text-faint)" }}> · </span>
+                Terms{" "}
+                <span style={{ color: "var(--text-default)" }}>
+                  {termsLabel(invoice.terms)}
+                </span>
+              </div>
             </div>
           </div>
-          <div className="flex items-center gap-5 shrink-0">
+          <div className="flex items-center gap-4 shrink-0">
             <div className="text-right">
               <div
-                className="text-[10px] uppercase tracking-wide"
-                style={{ color: "var(--text-muted)" }}
+                style={{
+                  color: "var(--text-faint)",
+                  fontSize: 10,
+                  fontWeight: 700,
+                  letterSpacing: "0.08em",
+                  textTransform: "uppercase",
+                  lineHeight: 1.1,
+                }}
               >
                 {balance > 0 ? "Balance" : "Total"}
               </div>
               <div
-                className="text-2xl font-bold tabular-nums leading-tight"
-                style={{ color: balance > 0 && isOverdue ? "var(--danger-fg)" : "var(--text-default)" }}
+                className="mt-1 font-semibold"
+                style={{
+                  color: balance > 0 && isOverdue ? "var(--danger-fg, var(--rose-500))" : "var(--text-default)",
+                  fontSize: 22,
+                  letterSpacing: "-0.018em",
+                  lineHeight: 1.1,
+                  fontFeatureSettings: "'tnum' 1",
+                }}
               >
                 {formatMoney(balance > 0 ? balance : Number(invoice.total), ctx.tenant.currency)}
               </div>
               {balance > 0 && (
                 <div
-                  className="text-[11px] tabular-nums"
-                  style={{ color: "var(--text-muted)" }}
+                  className="mt-0.5"
+                  style={{
+                    color: "var(--text-muted)",
+                    fontSize: 11,
+                    fontFeatureSettings: "'tnum' 1",
+                  }}
                 >
                   of {formatMoney(invoice.total.toString(), ctx.tenant.currency)} total
                 </div>
