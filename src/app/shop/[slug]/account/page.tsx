@@ -1,15 +1,13 @@
 import Link from "next/link";
 import { notFound } from "next/navigation";
 import { db } from "@/lib/db";
+import { requireCustomer } from "@/lib/customer-auth";
+import { customerSignOut } from "@/app/actions/customer-auth";
 
 // Customer account portal — dashboard (S-6).
 //
-// Customer-facing "My account" hub. Shows the customer's open quotes,
-// pending proofs, recent orders, and saved files. Requires customer
-// auth (separate from staff). For now this is a polished placeholder
-// that signs the visitor in implicitly so they can see the IA. Real
-// auth + per-customer queries wire up when the customer-auth system
-// ships.
+// Gates on the magic-link session (see /lib/customer-auth). Reads the
+// linked CRM Customer record (if any) to populate the activity counts.
 
 export const dynamic = "force-dynamic";
 
@@ -95,10 +93,39 @@ export default async function StorefrontAccountPage({
   const { slug } = await params;
   const tenant = await db.tenant.findUnique({
     where: { slug },
-    select: { name: true, brandPrimaryColor: true },
+    select: { id: true, name: true, brandPrimaryColor: true },
   });
   if (!tenant) notFound();
   const brand = tenant.brandPrimaryColor ?? "#7C3AED";
+
+  // Require a signed-in customer — redirects to /signin otherwise.
+  const { account } = await requireCustomer(slug);
+
+  // Pull live counts when an attached Customer (CRM) record exists.
+  let activeOrders = 0;
+  let pendingProofs = 0;
+  let openQuotes = 0;
+  if (account.customerId) {
+    [activeOrders, openQuotes] = await Promise.all([
+      db.order.count({
+        where: {
+          tenantId: tenant.id,
+          customerId: account.customerId,
+          status: { in: ["NEW", "IN_PRODUCTION", "READY"] as never[] },
+        },
+      }).catch(() => 0),
+      db.quote.count({
+        where: {
+          tenantId: tenant.id,
+          customerId: account.customerId,
+          status: { in: ["DRAFT", "SENT", "VIEWED"] as never[] },
+        },
+      }).catch(() => 0),
+    ]);
+  }
+
+  const firstName = account.firstName ?? account.email.split("@")[0];
+  const signOutAction = customerSignOut.bind(null, slug);
 
   return (
     <div style={{ paddingTop: 24 }}>
@@ -139,50 +166,74 @@ export default async function StorefrontAccountPage({
                 lineHeight: 1.15,
               }}
             >
-              Welcome back
+              Welcome back{firstName ? `, ${firstName}` : ""}
             </h1>
             <p
               className="mt-2 max-w-lg"
               style={{ color: "#4b5563", fontSize: 14, lineHeight: 1.55 }}
             >
-              Your orders, quotes, proofs, files, and saved details — all in one place.
+              Signed in as{" "}
+              <span style={{ color: "#0b0d10", fontWeight: 600 }}>{account.email}</span>
+              . Your orders, quotes, proofs, and files all live here.
             </p>
           </div>
-          <Link
-            href={`/shop/${slug}/order`}
-            style={{
-              display: "inline-flex",
-              alignItems: "center",
-              gap: 6,
-              height: 42,
-              padding: "0 18px",
-              borderRadius: 11,
-              background: `linear-gradient(180deg, color-mix(in oklab, ${brand} 96%, white 4%) 0%, ${brand} 100%)`,
-              color: "white",
-              fontSize: 13.5,
-              fontWeight: 600,
-              border: `1px solid color-mix(in oklab, ${brand} 80%, black 20%)`,
-              boxShadow:
-                "0 1px 0 0 rgba(255,255,255,0.18) inset, " +
-                `0 4px 14px -2px color-mix(in oklab, ${brand} 35%, transparent), ` +
-                "0 1px 2px 0 rgba(0,0,0,0.12)",
-              textDecoration: "none",
-            }}
-          >
-            <svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2.5">
-              <path d="M12 5v14M5 12h14" />
-            </svg>
-            Start a new order
-          </Link>
+          <div className="flex items-center gap-2">
+            <form action={signOutAction}>
+              <button
+                type="submit"
+                style={{
+                  display: "inline-flex",
+                  alignItems: "center",
+                  height: 42,
+                  padding: "0 16px",
+                  borderRadius: 11,
+                  background: "white",
+                  color: "#4b5563",
+                  fontSize: 13,
+                  fontWeight: 500,
+                  border: "1px solid #e5e7eb",
+                  cursor: "pointer",
+                }}
+              >
+                Sign out
+              </button>
+            </form>
+            <Link
+              href={`/shop/${slug}/order`}
+              style={{
+                display: "inline-flex",
+                alignItems: "center",
+                gap: 6,
+                height: 42,
+                padding: "0 18px",
+                borderRadius: 11,
+                background: `linear-gradient(180deg, color-mix(in oklab, ${brand} 96%, white 4%) 0%, ${brand} 100%)`,
+                color: "white",
+                fontSize: 13.5,
+                fontWeight: 600,
+                border: `1px solid color-mix(in oklab, ${brand} 80%, black 20%)`,
+                boxShadow:
+                  "0 1px 0 0 rgba(255,255,255,0.18) inset, " +
+                  `0 4px 14px -2px color-mix(in oklab, ${brand} 35%, transparent), ` +
+                  "0 1px 2px 0 rgba(0,0,0,0.12)",
+                textDecoration: "none",
+              }}
+            >
+              <svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2.5">
+                <path d="M12 5v14M5 12h14" />
+              </svg>
+              Start a new order
+            </Link>
+          </div>
         </div>
       </header>
 
       {/* Quick stats. */}
       <div className="mt-6 grid gap-3 sm:grid-cols-3">
         {[
-          { label: "Active orders",  value: "0", tone: brand },
-          { label: "Pending proofs", value: "0", tone: "#f59e0b" },
-          { label: "Open quotes",    value: "0", tone: "#10b981" },
+          { label: "Active orders",  value: String(activeOrders),  tone: brand },
+          { label: "Pending proofs", value: String(pendingProofs), tone: "#f59e0b" },
+          { label: "Open quotes",    value: String(openQuotes),    tone: "#10b981" },
         ].map((s) => (
           <div
             key={s.label}

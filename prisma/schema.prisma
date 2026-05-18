@@ -446,6 +446,8 @@ model Tenant {
   equipment              Equipment[]
   materials              Material[]
   purchaseOrders         PurchaseOrder[]
+  // S-6 customer auth back-relation
+  customerAccounts       CustomerAccount[]
 }
 
 // ────────────────────────────────────────────────────────────
@@ -1711,6 +1713,8 @@ model Customer {
   // against any of their invoices. Carrying the relation here lets the
   // customer detail page surface outstanding credit balance at a glance.
   creditMemos    CreditMemo[]
+  // S-6 customer account portal back-relation
+  customerAccounts CustomerAccount[] @relation("CustomerAccountToCustomer")
 
   @@index([tenantId, stage])
   @@index([tenantId, status])
@@ -16940,3 +16944,97 @@ model PurchaseOrderLine {
 
   @@index([purchaseOrderId])
 }
+
+// ────────────────────────────────────────────────────────────
+// S-6 Customer account portal — auth.
+//
+// Customer accounts are SEPARATE from staff/admin User records.
+// A CustomerAccount is keyed on { tenantId, email } and optionally
+// linked to a Customer (the workspace's CRM record). When a visitor
+// signs in with a magic link, we create the CustomerAccount on demand
+// (passwordless sign-up = sign-in) and try to attach it to a matching
+// Customer in the tenant by email.
+//
+// Sessions live in CustomerSession with a server-generated random
+// token. The browser stores only the token; verification looks up
+// the row + checks expiresAt server-side.
+//
+// Magic links are short-lived CustomerMagicLink rows. consumed-at is
+// stamped on use so reusing the same link bounces.
+// ────────────────────────────────────────────────────────────
+
+model CustomerAccount {
+  id   String @id @default(cuid())
+
+  tenantId String
+  tenant   Tenant @relation(fields: [tenantId], references: [id], onDelete: Cascade)
+
+  /** Email is the customer's primary identifier. Lowercased on write. */
+  email String
+
+  /** Optional display name — set when the visitor types it during
+   *  checkout. Falls back to the email handle elsewhere. */
+  firstName String?
+  lastName  String?
+
+  /** Optional FK to the existing Customer (CRM) record. We attach on
+   *  first sign-in if an email match exists; the link stays even if
+   *  the Customer record is later edited. */
+  customerId String?
+  customer   Customer? @relation("CustomerAccountToCustomer", fields: [customerId], references: [id], onDelete: SetNull)
+
+  createdAt DateTime @default(now())
+  lastSignInAt DateTime?
+
+  // Reverse relations
+  sessions   CustomerSession[]
+  magicLinks CustomerMagicLink[]
+
+  @@unique([tenantId, email])
+  @@index([tenantId, customerId])
+}
+
+model CustomerSession {
+  id   String @id @default(cuid())
+
+  accountId String
+  account   CustomerAccount @relation(fields: [accountId], references: [id], onDelete: Cascade)
+
+  /** Random 32-byte token (hex-encoded). Stored as-is so we can look
+   *  it up directly from the cookie value. */
+  token String @unique
+
+  expiresAt DateTime
+  createdAt DateTime @default(now())
+
+  /** Stamped each time the session is validated — drives a "Last
+   *  active" caption + 30-day inactivity cleanup. */
+  lastActiveAt DateTime @default(now())
+
+  @@index([accountId])
+  @@index([expiresAt])
+}
+
+model CustomerMagicLink {
+  id   String @id @default(cuid())
+
+  accountId String
+  account   CustomerAccount @relation(fields: [accountId], references: [id], onDelete: Cascade)
+
+  /** Random 32-byte token (hex-encoded). Visited via /account/verify/{token}. */
+  token String @unique
+
+  /** Optional return URL captured at request time — bounces the
+   *  visitor back to where they tried to access (e.g. a proof link). */
+  redirectTo String?
+
+  expiresAt DateTime
+  /** Stamped when the link is consumed — prevents replay. */
+  consumedAt DateTime?
+
+  createdAt DateTime @default(now())
+
+  @@index([accountId])
+  @@index([expiresAt])
+}
+

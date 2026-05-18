@@ -1,28 +1,33 @@
 import Link from "next/link";
 import { notFound } from "next/navigation";
 import { db } from "@/lib/db";
+import { requestMagicLink } from "@/app/actions/customer-auth";
 
-// Customer account sign-in (part of S-6).
+// Customer account sign-in (S-6).
 //
 // Passwordless flow per spec — email-only sign-in that mails a magic
-// link. Password-based fallback ships later. Backend wiring lands when
-// the customer-auth system (separate from staff auth) is built; for
-// now this is a polished placeholder.
+// link. The form posts to `requestMagicLink` which mints a token and
+// emails the visitor a one-tap link (via Resend in prod, console log
+// in dev). On submit the user is redirected to /signin/sent.
 
 export const dynamic = "force-dynamic";
 
 export default async function StorefrontSignInPage({
   params,
+  searchParams,
 }: {
   params: Promise<{ slug: string }>;
+  searchParams: Promise<{ error?: string }>;
 }) {
   const { slug } = await params;
+  const sp = await searchParams;
   const tenant = await db.tenant.findUnique({
     where: { slug },
     select: { name: true, brandPrimaryColor: true },
   });
   if (!tenant) notFound();
   const brand = tenant.brandPrimaryColor ?? "#7C3AED";
+  const action = requestMagicLink.bind(null, slug);
 
   return (
     <div
@@ -82,7 +87,23 @@ export default async function StorefrontSignInPage({
             Enter your email and we&apos;ll send you a one-tap sign-in link.
           </p>
 
-          <form className="mt-7 space-y-4">
+          {sp.error && (
+            <div
+              className="mt-5 rounded-lg px-3.5 py-2.5"
+              style={{
+                background: "color-mix(in oklab, #ef4444 14%, white)",
+                color: "#b91c1c",
+                border: "1px solid color-mix(in oklab, #ef4444 32%, transparent)",
+                fontSize: 12.5,
+                fontWeight: 500,
+                lineHeight: 1.4,
+              }}
+            >
+              {decodeURIComponent(sp.error)}
+            </div>
+          )}
+
+          <form action={action} className="mt-7 space-y-4">
             <label className="block">
               <span
                 style={{
@@ -98,6 +119,7 @@ export default async function StorefrontSignInPage({
               </span>
               <input
                 type="email"
+                name="email"
                 required
                 placeholder="you@example.com"
                 style={{
