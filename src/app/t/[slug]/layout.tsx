@@ -250,13 +250,16 @@ export default async function TenantLayout({
         { href: `${base}/orders`,     label: "Orders",     icon: "Orders"     },
         { href: `${base}/proofs`,     label: "Proofs",     icon: "Proofs"     },
         { href: `${base}/production`, label: "Production", icon: "Production" },
+        { href: `${base}/calendar`,   label: "Calendar",   icon: "Globe"      },
         { href: `${base}/installs`,   label: "Installs",   icon: "Installs"   },
+        { href: `${base}/equipment`,  label: "Equipment",  icon: "Production" },
       ],
     },
     {
       label: "Catalog",
       items: [
-        { href: `${base}/products`, label: "Products", icon: "Products" },
+        { href: `${base}/products`,         label: "Products",  icon: "Products" },
+        { href: `${base}/materials`,        label: "Materials", icon: "Package"  },
       ],
     },
     {
@@ -269,8 +272,9 @@ export default async function TenantLayout({
     {
       label: "Finance",
       items: [
-        { href: `${base}/expenses`, label: "Expenses", icon: "Expenses" },
-        { href: `${base}/vendors`,  label: "Vendors",  icon: "Vendors"  },
+        { href: `${base}/expenses`,         label: "Expenses",        icon: "Expenses" },
+        { href: `${base}/vendors`,          label: "Vendors",         icon: "Vendors"  },
+        { href: `${base}/supplier-orders`,  label: "Supplier orders", icon: "FileText" },
       ],
     },
     {
@@ -282,8 +286,9 @@ export default async function TenantLayout({
     {
       label: "Help & Settings",
       items: [
-        { href: `${base}/support`,  label: "Support",  icon: "Support"  },
-        { href: `${base}/settings`, label: "Settings", icon: "Settings" },
+        { href: `${base}/help`,     label: "Help center", icon: "Support"  },
+        { href: `${base}/support`,  label: "Support",     icon: "MessageSquare"  },
+        { href: `${base}/settings`, label: "Settings",    icon: "Settings" },
       ],
     },
   ];
