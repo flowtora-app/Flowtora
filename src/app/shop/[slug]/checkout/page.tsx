@@ -1,12 +1,14 @@
 import Link from "next/link";
 import { notFound } from "next/navigation";
 import { db } from "@/lib/db";
+import { submitStorefrontCheckout } from "@/app/actions/customer-checkout";
 
 // Customer checkout (S-5).
 //
-// 4-step checkout flow per spec. URL-driven step state so the page
-// is server rendered today; payment wiring (Stripe Checkout) lands
-// when the cart-persistence backend ships.
+// 4-step checkout flow per spec. URL-driven step state so the steps
+// are server rendered; data is collected on the final "Pay" step in
+// one consolidated form so the submission has everything it needs
+// without cross-step persistence.
 //
 // Steps:
 //   1. Contact   - name, email, phone (+ sign-in option for returning)
@@ -34,7 +36,7 @@ export default async function StorefrontCheckoutPage({
   searchParams,
 }: {
   params: Promise<{ slug: string }>;
-  searchParams: Promise<{ step?: string }>;
+  searchParams: Promise<{ step?: string; error?: string; canceled?: string }>;
 }) {
   const { slug } = await params;
   const sp = await searchParams;
@@ -414,64 +416,198 @@ export default async function StorefrontCheckoutPage({
 
           {step === "pay" && (
             <section>
-              <SectionTitle brand={brand} title="How would you like to proceed?" />
+              <SectionTitle brand={brand} title="Your details + how to proceed" />
               <p
                 className="mt-2 max-w-lg"
                 style={{ color: "#4b5563", fontSize: 13.5, lineHeight: 1.55 }}
               >
-                You can pay now to lock in the order, or send through as a quote request and pay after we confirm artwork and pricing.
+                Tell us who you are and pick how you&apos;d like to move forward. We&apos;ll send the quote to your email and{" "}
+                <Link
+                  href={`/shop/${slug}/account/signin`}
+                  style={{ color: brand, fontWeight: 500, textDecoration: "none" }}
+                >
+                  create an account
+                </Link>{" "}
+                so you can track it.
               </p>
-              <div className="mt-6 grid gap-3 sm:grid-cols-2">
-                <PaymentOption
-                  brand={brand}
-                  active
-                  title="Pay now"
-                  hint="Secure card payment via Stripe. We start production after artwork approval."
-                  badge="Recommended"
-                  icon={
-                    <svg width="20" height="20" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="1.5">
-                      <rect x="3" y="6" width="18" height="13" rx="2" />
-                      <path d="M3 10h18" />
-                    </svg>
-                  }
-                />
-                <PaymentOption
-                  brand={brand}
-                  title="Request quote"
-                  hint="We&rsquo;ll send a final quote within 24 hours. No charge until you accept."
-                  icon={
-                    <svg width="20" height="20" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="1.5">
-                      <path d="M6 4h9l5 5v11a1 1 0 0 1-1 1H6a1 1 0 0 1-1-1V5a1 1 0 0 1 1-1z" />
-                      <path d="M15 4v5h5M8 13h8M8 17h5" />
-                    </svg>
-                  }
-                />
-              </div>
-              <div
-                className="mt-6 rounded-xl px-4 py-3"
-                style={{
-                  background: `color-mix(in oklab, ${brand} 8%, white)`,
-                  border: `1px solid color-mix(in oklab, ${brand} 22%, transparent)`,
-                  fontSize: 12.5,
-                  color: "#4b5563",
-                  lineHeight: 1.5,
-                }}
-              >
-                <span
+              {sp.error && (
+                <div
+                  className="mt-4 rounded-lg px-3.5 py-2.5"
                   style={{
-                    color: brand,
-                    fontWeight: 700,
-                    fontSize: 11,
-                    letterSpacing: "0.06em",
-                    textTransform: "uppercase",
+                    background: "color-mix(in oklab, #ef4444 12%, white)",
+                    color: "#b91c1c",
+                    border: "1px solid color-mix(in oklab, #ef4444 32%, transparent)",
+                    fontSize: 12.5,
+                    fontWeight: 500,
+                    lineHeight: 1.4,
                   }}
                 >
-                  Coming soon
-                </span>
-                <p className="mt-1">
-                  Stripe Checkout integration is on the roadmap. Submit will create a quote in {tenant.name}&apos;s queue and they&apos;ll follow up to collect payment.
-                </p>
-              </div>
+                  {decodeURIComponent(sp.error)}
+                </div>
+              )}
+
+              <form
+                action={submitStorefrontCheckout.bind(null, slug)}
+                className="mt-6 space-y-5"
+                id="checkout-form"
+              >
+                {/* Contact section. */}
+                <div className="grid gap-4 sm:grid-cols-2">
+                  <label>
+                    <span style={fieldLabel("First name")}>First name</span>
+                    <input type="text" name="firstName" required placeholder="Sarah" style={inputStyle} />
+                  </label>
+                  <label>
+                    <span style={fieldLabel("Last name")}>Last name</span>
+                    <input type="text" name="lastName" placeholder="Johnson" style={inputStyle} />
+                  </label>
+                  <label>
+                    <span style={fieldLabel("Email")}>Email</span>
+                    <input type="email" name="email" required placeholder="you@example.com" style={inputStyle} />
+                  </label>
+                  <label>
+                    <span style={fieldLabel("Phone")}>Phone</span>
+                    <input type="tel" name="phone" placeholder="(555) 123-4567" style={inputStyle} />
+                  </label>
+                  <label className="sm:col-span-2">
+                    <span style={fieldLabel("Company (optional)")}>Company (optional)</span>
+                    <input type="text" name="company" placeholder="Acme Co." style={inputStyle} />
+                  </label>
+                  <label className="sm:col-span-2">
+                    <span style={fieldLabel("Project details")}>Project details</span>
+                    <textarea
+                      name="notes"
+                      rows={4}
+                      placeholder="Size, materials, deadline, where it&rsquo;s going — anything that helps us quote it."
+                      style={{
+                        ...inputStyle,
+                        height: "auto",
+                        paddingTop: 12,
+                        paddingBottom: 12,
+                        resize: "vertical",
+                        lineHeight: 1.5,
+                      }}
+                    />
+                  </label>
+                </div>
+
+                {/* Payment radios. */}
+                <div className="grid gap-3 sm:grid-cols-2 pt-1">
+                  <label
+                    className="flex cursor-pointer items-start gap-3"
+                    style={{
+                      padding: "16px 18px",
+                      borderRadius: 12,
+                      background: `color-mix(in oklab, ${brand} 8%, white)`,
+                      border: `1px solid color-mix(in oklab, ${brand} 32%, transparent)`,
+                    }}
+                  >
+                    <input
+                      type="radio"
+                      name="payment"
+                      value="now"
+                      defaultChecked
+                      style={{ width: 16, height: 16, accentColor: brand, marginTop: 3, flexShrink: 0 }}
+                    />
+                    <span className="min-w-0 flex-1">
+                      <span className="flex items-center gap-2 flex-wrap">
+                        <span
+                          aria-hidden
+                          style={{
+                            display: "inline-flex",
+                            alignItems: "center",
+                            justifyContent: "center",
+                            width: 32,
+                            height: 32,
+                            borderRadius: 8,
+                            background: `color-mix(in oklab, ${brand} 12%, white)`,
+                            color: brand,
+                            border: `1px solid color-mix(in oklab, ${brand} 22%, transparent)`,
+                          }}
+                        >
+                          <svg width="20" height="20" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="1.5">
+                            <rect x="3" y="6" width="18" height="13" rx="2" />
+                            <path d="M3 10h18" />
+                          </svg>
+                        </span>
+                        <span style={{ color: "#0b0d10", fontSize: 14, fontWeight: 600, letterSpacing: "-0.005em" }}>
+                          Reserve with $50 deposit
+                        </span>
+                        <span
+                          style={{
+                            fontSize: 9.5,
+                            fontWeight: 700,
+                            letterSpacing: "0.06em",
+                            textTransform: "uppercase",
+                            color: brand,
+                            background: `color-mix(in oklab, ${brand} 14%, white)`,
+                            border: `1px solid color-mix(in oklab, ${brand} 30%, transparent)`,
+                            padding: "2px 7px",
+                            borderRadius: 999,
+                            lineHeight: 1,
+                          }}
+                        >
+                          Recommended
+                        </span>
+                      </span>
+                      <span
+                        className="block mt-2"
+                        style={{ color: "#6b7280", fontSize: 12.5, lineHeight: 1.5 }}
+                      >
+                        Secure card payment via Stripe. Holds your slot in the queue — applied to your final invoice.
+                      </span>
+                    </span>
+                  </label>
+                  <label
+                    className="flex cursor-pointer items-start gap-3"
+                    style={{
+                      padding: "16px 18px",
+                      borderRadius: 12,
+                      background: "white",
+                      border: "1px solid #e5e7eb",
+                    }}
+                  >
+                    <input
+                      type="radio"
+                      name="payment"
+                      value="quote"
+                      style={{ width: 16, height: 16, accentColor: brand, marginTop: 3, flexShrink: 0 }}
+                    />
+                    <span className="min-w-0 flex-1">
+                      <span className="flex items-center gap-2">
+                        <span
+                          aria-hidden
+                          style={{
+                            display: "inline-flex",
+                            alignItems: "center",
+                            justifyContent: "center",
+                            width: 32,
+                            height: 32,
+                            borderRadius: 8,
+                            background: `color-mix(in oklab, ${brand} 12%, white)`,
+                            color: brand,
+                            border: `1px solid color-mix(in oklab, ${brand} 22%, transparent)`,
+                          }}
+                        >
+                          <svg width="20" height="20" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="1.5">
+                            <path d="M6 4h9l5 5v11a1 1 0 0 1-1 1H6a1 1 0 0 1-1-1V5a1 1 0 0 1 1-1z" />
+                            <path d="M15 4v5h5M8 13h8M8 17h5" />
+                          </svg>
+                        </span>
+                        <span style={{ color: "#0b0d10", fontSize: 14, fontWeight: 600, letterSpacing: "-0.005em" }}>
+                          Request quote
+                        </span>
+                      </span>
+                      <span
+                        className="block mt-2"
+                        style={{ color: "#6b7280", fontSize: 12.5, lineHeight: 1.5 }}
+                      >
+                        We&rsquo;ll send a quote within one business day. No charge until you accept.
+                      </span>
+                    </span>
+                  </label>
+                </div>
+              </form>
             </section>
           )}
         </main>
@@ -623,7 +759,8 @@ export default async function StorefrontCheckoutPage({
           </Link>
         ) : (
           <button
-            type="button"
+            type="submit"
+            form="checkout-form"
             style={{
               display: "inline-flex",
               alignItems: "center",
