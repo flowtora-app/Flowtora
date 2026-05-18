@@ -158,7 +158,7 @@ export async function submitStorefrontCheckout(slug: string, formData: FormData)
             productId:      it.productId,
             name:           it.name,
             description:    it.description,
-            pricingModel:   p?.pricingModel ?? "FLAT_PRICE",
+            pricingModel:   p?.pricingModel ?? "FIXED",
             basePrice:      new Prisma.Decimal(it.unitPrice),
             unit:           it.unit,
             taxable:        p?.taxable ?? true,
