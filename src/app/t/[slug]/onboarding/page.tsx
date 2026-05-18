@@ -94,76 +94,250 @@ export default async function OnboardingChecklist({
   ];
 
   const completedCount = items.filter((i) => i.done).length;
+  const progressPct = Math.round((completedCount / items.length) * 100);
 
   return (
-    <div className="space-y-6">
+    <div className="space-y-5">
+      {/* Welcome header — premium card with accent halo + progress bar. */}
       <section
-        className="rounded-xl p-6"
+        className="relative overflow-hidden rounded-2xl"
         style={{
-          background: "var(--accent-surface)",
-          border: "1px solid var(--accent-surface-strong, var(--accent-primary))",
+          padding: "24px 26px",
+          background:
+            "radial-gradient(720px circle at -8% -40%, var(--accent-surface), transparent 55%), " +
+            "linear-gradient(180deg, color-mix(in oklab, var(--surface-1) 92%, white 8%) 0%, var(--surface-1) 100%)",
+          border: "1px solid var(--border-subtle)",
+          boxShadow:
+            "inset 0 1px 0 0 color-mix(in oklab, white 4%, transparent), " +
+            "0 1px 2px 0 rgba(0,0,0,0.18)",
         }}
       >
-        <h2
-          className="text-base font-semibold"
-          style={{ color: "var(--accent-primary)" }}
-        >
-          Welcome to Flowtora
-        </h2>
-        <p className="mt-1 text-sm" style={{ color: "var(--text-default)" }}>
-          Five short steps to set up {tenant.name}. Each one opens the
-          matching settings page so there's one place to change this
-          later — no wizard-only forms to re-find.
-        </p>
-        <p
-          className="mt-2 text-xs"
-          style={{ color: "var(--text-muted)" }}
-        >
-          {completedCount} of {items.length} complete.
-        </p>
+        <div className="flex items-start gap-3.5">
+          <span
+            aria-hidden
+            style={{
+              display: "inline-flex",
+              alignItems: "center",
+              justifyContent: "center",
+              width: 44,
+              height: 44,
+              borderRadius: 11,
+              background:
+                "linear-gradient(135deg, var(--accent-surface-strong), var(--accent-surface))",
+              color: "var(--accent-primary)",
+              border:
+                "1px solid color-mix(in oklab, var(--accent-primary) 30%, transparent)",
+              flexShrink: 0,
+              boxShadow:
+                "inset 0 1px 0 0 color-mix(in oklab, white 6%, transparent)",
+            }}
+          >
+            <svg width="22" height="22" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="1.5">
+              <path d="M3 12h4l3-8 4 16 3-8h4" />
+            </svg>
+          </span>
+          <div className="min-w-0 flex-1">
+            <h2
+              className="font-semibold"
+              style={{
+                color: "var(--text-default)",
+                fontSize: 22,
+                letterSpacing: "-0.018em",
+                lineHeight: 1.2,
+              }}
+            >
+              Welcome to Flowtora
+            </h2>
+            <p
+              className="mt-1.5"
+              style={{
+                color: "var(--text-muted)",
+                fontSize: 13,
+                lineHeight: 1.5,
+              }}
+            >
+              Five short steps to set up{" "}
+              <span style={{ color: "var(--text-default)", fontWeight: 600 }}>
+                {tenant.name}
+              </span>
+              . Each one opens the matching settings page so there&apos;s one place to change this later.
+            </p>
+          </div>
+        </div>
+
+        {/* Progress bar — visual confirmation of how far along they are. */}
+        <div className="mt-5">
+          <div className="flex items-center justify-between mb-2">
+            <span
+              style={{
+                color: "var(--text-faint)",
+                fontSize: 10.5,
+                fontWeight: 700,
+                letterSpacing: "0.08em",
+                textTransform: "uppercase",
+              }}
+            >
+              Setup progress
+            </span>
+            <span
+              style={{
+                color: completedCount === items.length ? "var(--emerald-500)" : "var(--accent-primary)",
+                fontSize: 11.5,
+                fontWeight: 700,
+                fontFeatureSettings: "'tnum' 1",
+                letterSpacing: "-0.005em",
+              }}
+            >
+              {completedCount} of {items.length} · {progressPct}%
+            </span>
+          </div>
+          <div
+            style={{
+              position: "relative",
+              height: 8,
+              borderRadius: 999,
+              background: "color-mix(in oklab, var(--surface-2) 70%, transparent)",
+              border: "1px solid var(--border-subtle)",
+              overflow: "hidden",
+            }}
+          >
+            <div
+              style={{
+                position: "absolute",
+                inset: 0,
+                width: `${progressPct}%`,
+                background: completedCount === items.length
+                  ? "linear-gradient(90deg, var(--emerald-500), color-mix(in oklab, var(--emerald-500) 70%, white 30%))"
+                  : "linear-gradient(90deg, var(--accent-primary), color-mix(in oklab, var(--accent-primary) 70%, white 30%))",
+                borderRadius: 999,
+                transition: "width 320ms cubic-bezier(0.22, 1, 0.36, 1)",
+                boxShadow: completedCount === items.length
+                  ? "0 0 12px color-mix(in oklab, var(--emerald-500) 50%, transparent)"
+                  : "0 0 12px color-mix(in oklab, var(--accent-primary) 50%, transparent)",
+              }}
+            />
+          </div>
+        </div>
       </section>
 
-      <ol className="grid gap-3">
+      {/* Checklist — each item a premium card with hover lift + completion state. */}
+      <ol className="grid gap-2.5">
         {items.map((item, i) => (
           <li key={item.id}>
             <Link
               href={item.href(slug)}
-              className="flex items-start gap-4 rounded-lg p-4 transition-colors"
+              className="ts-focus group/step relative flex items-start gap-4 overflow-hidden rounded-xl transition-all hover:-translate-y-px"
               style={{
-                background: "var(--surface-1)",
-                border: `1px solid ${item.done ? "var(--accent-primary)" : "var(--border-subtle)"}`,
+                padding: "14px 18px",
+                background: item.done
+                  ? "radial-gradient(540px circle at 0% 0%, color-mix(in oklab, var(--emerald-500) 10%, transparent), transparent 55%), " +
+                    "linear-gradient(180deg, color-mix(in oklab, var(--surface-1) 92%, white 8%) 0%, var(--surface-1) 100%)"
+                  : "linear-gradient(180deg, color-mix(in oklab, var(--surface-1) 92%, white 8%) 0%, var(--surface-1) 100%)",
+                border: item.done
+                  ? "1px solid color-mix(in oklab, var(--emerald-500) 35%, transparent)"
+                  : "1px solid var(--border-subtle)",
+                boxShadow:
+                  "inset 0 1px 0 0 color-mix(in oklab, white 4%, transparent), " +
+                  "0 1px 2px 0 rgba(0,0,0,0.18)",
               }}
             >
+              {/* Hover accent ring. */}
               <span
-                className="flex h-8 w-8 shrink-0 items-center justify-center rounded-full text-sm font-semibold"
+                aria-hidden
+                className="pointer-events-none absolute inset-0 rounded-xl opacity-0 transition-opacity group-hover/step:opacity-100"
                 style={{
-                  background: item.done ? "var(--accent-primary)" : "var(--surface-2)",
-                  color: item.done ? "var(--accent-fg)" : "var(--text-default)",
+                  boxShadow:
+                    "0 0 0 1px color-mix(in oklab, var(--accent-primary) 35%, transparent), " +
+                    "0 8px 24px -10px rgba(0,0,0,0.45)",
+                }}
+              />
+              <span
+                className="flex items-center justify-center"
+                style={{
+                  width: 32,
+                  height: 32,
+                  borderRadius: 9,
+                  flexShrink: 0,
+                  background: item.done
+                    ? "linear-gradient(135deg, color-mix(in oklab, var(--emerald-500) 28%, transparent), color-mix(in oklab, var(--emerald-500) 14%, transparent))"
+                    : "var(--surface-2)",
+                  color: item.done ? "var(--emerald-500)" : "var(--text-default)",
+                  border: item.done
+                    ? "1px solid color-mix(in oklab, var(--emerald-500) 35%, transparent)"
+                    : "1px solid var(--border-subtle)",
+                  fontSize: 13,
+                  fontWeight: 700,
+                  fontFeatureSettings: "'tnum' 1",
+                  boxShadow: item.done
+                    ? "inset 0 1px 0 0 color-mix(in oklab, white 6%, transparent), 0 0 12px -2px color-mix(in oklab, var(--emerald-500) 40%, transparent)"
+                    : "inset 0 1px 0 0 color-mix(in oklab, white 4%, transparent)",
                 }}
                 aria-hidden
               >
-                {item.done ? "✓" : i + 1}
+                {item.done ? (
+                  <svg width="15" height="15" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2.5" strokeLinecap="round" strokeLinejoin="round">
+                    <polyline points="20 6 9 17 4 12" />
+                  </svg>
+                ) : (
+                  i + 1
+                )}
               </span>
-              <div className="min-w-0 flex-1">
-                <div
-                  className="text-sm font-semibold"
-                  style={{ color: "var(--text-default)" }}
-                >
-                  {item.title}
+              <div className="relative min-w-0 flex-1">
+                <div className="flex items-center gap-2">
+                  <span
+                    style={{
+                      color: "var(--text-default)",
+                      fontSize: 14,
+                      fontWeight: 600,
+                      letterSpacing: "-0.005em",
+                      lineHeight: 1.25,
+                    }}
+                  >
+                    {item.title}
+                  </span>
+                  {item.done && (
+                    <span
+                      style={{
+                        fontSize: 9.5,
+                        fontWeight: 700,
+                        letterSpacing: "0.06em",
+                        textTransform: "uppercase",
+                        color: "var(--emerald-500)",
+                        background:
+                          "color-mix(in oklab, var(--emerald-500) 14%, transparent)",
+                        border:
+                          "1px solid color-mix(in oklab, var(--emerald-500) 30%, transparent)",
+                        padding: "1px 6px",
+                        borderRadius: 999,
+                        lineHeight: 1,
+                      }}
+                    >
+                      Done
+                    </span>
+                  )}
                 </div>
                 <div
-                  className="mt-0.5 text-xs"
-                  style={{ color: "var(--text-muted)" }}
+                  className="mt-1"
+                  style={{
+                    color: "var(--text-muted)",
+                    fontSize: 12.5,
+                    lineHeight: 1.4,
+                  }}
                 >
                   {item.description}
                 </div>
               </div>
               <span
-                className="shrink-0 text-sm"
-                style={{ color: "var(--text-faint)" }}
                 aria-hidden
+                style={{
+                  color: "var(--text-faint)",
+                  flexShrink: 0,
+                  alignSelf: "center",
+                }}
               >
-                →
+                <svg width="13" height="13" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2.5">
+                  <path d="M5 12h14M12 5l7 7-7 7" />
+                </svg>
               </span>
             </Link>
           </li>
@@ -171,15 +345,26 @@ export default async function OnboardingChecklist({
       </ol>
 
       <div className="flex items-center justify-between pt-2">
-        <p className="text-xs" style={{ color: "var(--text-faint)" }}>
+        <p
+          style={{
+            color: "var(--text-faint)",
+            fontSize: 11.5,
+            lineHeight: 1.4,
+          }}
+        >
           Everything on this list is editable in Settings at any time.
         </p>
         <Link
           href={`/t/${slug}/onboarding/done`}
-          className="text-sm underline"
-          style={{ color: "var(--accent-primary)" }}
+          className="ts-focus inline-flex items-center gap-1 transition-colors hover:text-[var(--text-default)]"
+          style={{
+            color: "var(--accent-primary)",
+            fontSize: 12,
+            fontWeight: 600,
+            letterSpacing: "-0.005em",
+          }}
         >
-          Skip the rest &amp; finish
+          Skip the rest &amp; finish →
         </Link>
       </div>
     </div>
