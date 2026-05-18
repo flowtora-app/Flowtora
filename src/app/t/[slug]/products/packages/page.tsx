@@ -22,26 +22,101 @@ export default async function PackagesPage({
   });
 
   return (
-    <div className="space-y-6">
-      <div className="text-sm">
-        <Link href={`/t/${slug}/products`} className="underline" style={{ color: "var(--muted)" }}>
+    <div className="space-y-5">
+      <div style={{ fontSize: 12 }}>
+        <Link
+          href={`/t/${slug}/products`}
+          className="ts-focus inline-flex items-center gap-1 transition-colors hover:text-[var(--text-default)]"
+          style={{ color: "var(--text-muted)" }}
+        >
           ← Products
         </Link>
       </div>
 
-      <div className="flex items-center justify-between">
-        <div>
-          <h1 className="text-2xl font-semibold">Package templates</h1>
-          <p className="mt-1 text-sm" style={{ color: "var(--muted)" }}>
-            Reusable bundles your reps drop onto a quote in one click.{" "}
-            {packages.length} {packages.length === 1 ? "template" : "templates"}.
-          </p>
+      <div
+        className="relative overflow-hidden rounded-2xl"
+        style={{
+          padding: "18px 22px",
+          background:
+            "radial-gradient(880px circle at -10% -50%, var(--accent-surface), transparent 55%), " +
+            "linear-gradient(180deg, color-mix(in oklab, var(--surface-1) 92%, white 8%) 0%, var(--surface-1) 100%)",
+          border: "1px solid var(--border-subtle)",
+          boxShadow:
+            "inset 0 1px 0 0 color-mix(in oklab, white 4%, transparent), " +
+            "0 1px 2px 0 rgba(0,0,0,0.18)",
+        }}
+      >
+        <div className="flex flex-wrap items-center justify-between gap-4">
+          <div className="min-w-0">
+            <div className="flex items-center gap-2.5">
+              <h1
+                className="font-semibold"
+                style={{
+                  color: "var(--text-default)",
+                  fontSize: 24,
+                  letterSpacing: "-0.02em",
+                  lineHeight: 1.15,
+                }}
+              >
+                Package templates
+              </h1>
+              <span
+                style={{
+                  display: "inline-flex",
+                  alignItems: "center",
+                  fontSize: 11,
+                  fontWeight: 700,
+                  letterSpacing: "0.04em",
+                  color: "var(--accent-primary)",
+                  background: "var(--accent-surface)",
+                  border:
+                    "1px solid color-mix(in oklab, var(--accent-primary) 22%, transparent)",
+                  padding: "3px 8px",
+                  borderRadius: 999,
+                  fontFeatureSettings: "'tnum' 1",
+                  lineHeight: 1,
+                }}
+              >
+                {packages.length}
+              </span>
+            </div>
+            <p
+              className="mt-1.5"
+              style={{
+                color: "var(--text-muted)",
+                fontSize: 12.5,
+                lineHeight: 1.45,
+              }}
+            >
+              Reusable bundles your reps drop onto a quote in one click.
+            </p>
+          </div>
+          {canManage && (
+            <Link
+              href={`/t/${slug}/products/packages/new`}
+              className="ts-focus inline-flex items-center gap-1.5 rounded-lg font-semibold transition-transform"
+              style={{
+                height: 32,
+                padding: "0 14px",
+                background:
+                  "linear-gradient(180deg, color-mix(in oklab, var(--accent-primary) 96%, white 4%) 0%, var(--accent-primary) 100%)",
+                color: "var(--accent-fg)",
+                border:
+                  "1px solid color-mix(in oklab, var(--accent-primary) 80%, black 20%)",
+                boxShadow:
+                  "0 1px 0 0 rgba(255,255,255,0.15) inset, " +
+                  "0 1px 2px 0 rgba(0,0,0,0.35)",
+                fontSize: 12.5,
+                letterSpacing: "-0.005em",
+              }}
+            >
+              <svg width="13" height="13" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2.5">
+                <path d="M12 5v14M5 12h14" />
+              </svg>
+              New package
+            </Link>
+          )}
         </div>
-        {canManage && (
-          <Link href={`/t/${slug}/products/packages/new`}>
-            <Button type="button">New package</Button>
-          </Link>
-        )}
       </div>
 
       {packages.length === 0 ? (
