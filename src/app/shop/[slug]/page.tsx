@@ -49,7 +49,7 @@ export default async function StorefrontHomePage({
       id: true,
       name: true,
       description: true,
-      price: true,
+      basePrice: true,
       pricingModel: true,
       unit: true,
       category: true,
@@ -493,7 +493,7 @@ export default async function StorefrontHomePage({
                     >
                       {p.pricingModel === "CUSTOM_QUOTE"
                         ? "Custom quote"
-                        : `From ${formatMoney(p.price?.toString() ?? "0", tenant.currency)}`}
+                        : `From ${formatMoney(p.basePrice?.toString() ?? "0", tenant.currency)}`}
                     </span>
                     <span
                       style={{
