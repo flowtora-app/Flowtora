@@ -280,78 +280,254 @@ export default async function InstallEventDetailPage({
         </div>
       )}
 
-      {/* Header */}
-      <div className="flex items-start justify-between gap-4">
-        <div>
-          <div className="flex flex-wrap items-center gap-3">
-            <h1 className="text-2xl font-semibold">
-              {ev.title || `${installKindLabel(ev.kind)} for ${ev.order.number}`}
-            </h1>
-            <span
-              className="rounded-full px-2 py-0.5 text-xs"
-              style={{ background: installKindColor(ev.kind), color: "white" }}
+      {/* Premium detail header — matches workspace-wide pattern. */}
+      <header
+        className="relative overflow-hidden rounded-2xl"
+        style={{
+          padding: "18px 22px",
+          background:
+            "radial-gradient(720px circle at -8% -40%, var(--accent-surface), transparent 55%), " +
+            "linear-gradient(180deg, color-mix(in oklab, var(--surface-1) 92%, white 8%) 0%, var(--surface-1) 100%)",
+          border: "1px solid var(--border-subtle)",
+          boxShadow:
+            "inset 0 1px 0 0 color-mix(in oklab, white 4%, transparent), " +
+            "0 1px 2px 0 rgba(0,0,0,0.18)",
+        }}
+      >
+        <div className="flex flex-wrap items-start justify-between gap-4">
+          <div className="flex min-w-0 flex-1 items-start gap-3.5">
+            <Link
+              href={`/t/${slug}/customers/${ev.customer.id}`}
+              aria-label={`View ${ev.customer.name}`}
+              style={{
+                display: "inline-flex",
+                alignItems: "center",
+                justifyContent: "center",
+                width: 48,
+                height: 48,
+                borderRadius: 12,
+                background:
+                  "linear-gradient(135deg, var(--accent-surface-strong), var(--accent-surface))",
+                color: "var(--accent-primary)",
+                border:
+                  "1px solid color-mix(in oklab, var(--accent-primary) 30%, transparent)",
+                fontSize: 18,
+                fontWeight: 700,
+                flexShrink: 0,
+                boxShadow:
+                  "inset 0 1px 0 0 color-mix(in oklab, white 6%, transparent)",
+              }}
             >
-              {installKindLabel(ev.kind)}
-            </span>
-            <span
-              className="rounded-full px-2 py-0.5 text-xs"
-              style={{ background: installStatusColor(ev.status), color: "white" }}
-            >
-              {installStatusLabel(ev.status)}
-            </span>
-            {openBlockers.length > 0 && (
-              <span
-                className="rounded-full px-2 py-0.5 text-xs font-medium"
-                style={{ background: "var(--danger-surface)", color: "var(--danger-fg)", border: "1px solid var(--danger-fg)" }}
-              >
-                {openBlockers.length} blocker{openBlockers.length === 1 ? "" : "s"}
-              </span>
-            )}
-          </div>
-          <div className="mt-1 text-sm" style={{ color: "var(--text-muted)" }}>
-            <Link href={`/t/${slug}/orders/${ev.order.id}`} className="underline">
-              Order {ev.order.number}
+              {(ev.customer.name ?? "?").trim().charAt(0).toUpperCase() || "?"}
             </Link>
-            {" · "}for <Link href={`/t/${slug}/customers/${ev.customer.id}`} className="underline">{ev.customer.name}</Link>
-          </div>
-          <div className="mt-0.5 text-sm">
-            {formatDate(ev.scheduledStart)} · {formatTimeRange(ev.scheduledStart, ev.scheduledEnd)} · {durationLabel}
-          </div>
-          {addressLine && (
-            <div className="mt-0.5 text-xs" style={{ color: "var(--text-muted)" }}>
-              {addressLine}
-              {mapHref && (
-                <>
-                  {" · "}
-                  <a href={mapHref} target="_blank" rel="noreferrer" className="underline">
-                    Open in maps
-                  </a>
-                </>
+            <div className="min-w-0 flex-1">
+              <div className="flex flex-wrap items-center gap-2">
+                <h1
+                  className="font-semibold"
+                  style={{
+                    color: "var(--text-default)",
+                    fontSize: 22,
+                    letterSpacing: "-0.018em",
+                    lineHeight: 1.2,
+                  }}
+                >
+                  {ev.title || `${installKindLabel(ev.kind)} for ${ev.order.number}`}
+                </h1>
+                {(() => {
+                  const kc = installKindColor(ev.kind);
+                  return (
+                    <span
+                      style={{
+                        display: "inline-flex",
+                        alignItems: "center",
+                        gap: 4,
+                        fontSize: 10,
+                        fontWeight: 700,
+                        letterSpacing: "0.06em",
+                        textTransform: "uppercase",
+                        padding: "2px 7px",
+                        borderRadius: 999,
+                        color: kc,
+                        background: `color-mix(in oklab, ${kc} 16%, transparent)`,
+                        border: `1px solid color-mix(in oklab, ${kc} 32%, transparent)`,
+                        lineHeight: 1,
+                      }}
+                    >
+                      <span
+                        aria-hidden
+                        style={{
+                          width: 4,
+                          height: 4,
+                          borderRadius: 999,
+                          background: kc,
+                          boxShadow: `0 0 0 1.5px color-mix(in oklab, ${kc} 25%, transparent)`,
+                        }}
+                      />
+                      {installKindLabel(ev.kind)}
+                    </span>
+                  );
+                })()}
+                {(() => {
+                  const sc = installStatusColor(ev.status);
+                  return (
+                    <span
+                      style={{
+                        display: "inline-flex",
+                        alignItems: "center",
+                        gap: 4,
+                        fontSize: 10,
+                        fontWeight: 700,
+                        letterSpacing: "0.06em",
+                        textTransform: "uppercase",
+                        padding: "2px 7px",
+                        borderRadius: 999,
+                        color: sc,
+                        background: `color-mix(in oklab, ${sc} 16%, transparent)`,
+                        border: `1px solid color-mix(in oklab, ${sc} 32%, transparent)`,
+                        lineHeight: 1,
+                      }}
+                    >
+                      <span
+                        aria-hidden
+                        style={{
+                          width: 4,
+                          height: 4,
+                          borderRadius: 999,
+                          background: sc,
+                          boxShadow: `0 0 0 1.5px color-mix(in oklab, ${sc} 25%, transparent)`,
+                        }}
+                      />
+                      {installStatusLabel(ev.status)}
+                    </span>
+                  );
+                })()}
+                {openBlockers.length > 0 && (
+                  <span
+                    style={{
+                      display: "inline-flex",
+                      alignItems: "center",
+                      gap: 5,
+                      fontSize: 10.5,
+                      fontWeight: 700,
+                      letterSpacing: "0.04em",
+                      padding: "2px 8px",
+                      borderRadius: 999,
+                      color: "var(--danger-fg, var(--rose-500))",
+                      background:
+                        "color-mix(in oklab, var(--rose-500) 14%, transparent)",
+                      border:
+                        "1px solid color-mix(in oklab, var(--rose-500) 30%, transparent)",
+                      lineHeight: 1,
+                    }}
+                  >
+                    <span aria-hidden>⏸</span>
+                    {openBlockers.length} blocker{openBlockers.length === 1 ? "" : "s"}
+                  </span>
+                )}
+              </div>
+              <div
+                className="mt-1.5"
+                style={{
+                  color: "var(--text-muted)",
+                  fontSize: 12.5,
+                  lineHeight: 1.4,
+                }}
+              >
+                <Link
+                  href={`/t/${slug}/orders/${ev.order.id}`}
+                  style={{ color: "var(--accent-primary)", fontWeight: 500 }}
+                  className="hover:underline"
+                >
+                  Order {ev.order.number}
+                </Link>
+                <span style={{ color: "var(--text-faint)" }}> · </span>
+                for{" "}
+                <Link
+                  href={`/t/${slug}/customers/${ev.customer.id}`}
+                  style={{ color: "var(--text-default)", fontWeight: 500 }}
+                  className="hover:underline"
+                >
+                  {ev.customer.name}
+                </Link>
+              </div>
+              <div
+                className="mt-1"
+                style={{
+                  color: "var(--text-default)",
+                  fontSize: 12.5,
+                  fontWeight: 500,
+                  fontFeatureSettings: "'tnum' 1",
+                  lineHeight: 1.4,
+                }}
+              >
+                {formatDate(ev.scheduledStart)}
+                <span style={{ color: "var(--text-faint)" }}> · </span>
+                {formatTimeRange(ev.scheduledStart, ev.scheduledEnd)}
+                <span style={{ color: "var(--text-faint)" }}> · </span>
+                <span style={{ color: "var(--text-muted)" }}>{durationLabel}</span>
+              </div>
+              {addressLine && (
+                <div
+                  className="mt-1"
+                  style={{
+                    color: "var(--text-muted)",
+                    fontSize: 11.5,
+                    lineHeight: 1.4,
+                  }}
+                >
+                  {addressLine}
+                  {mapHref && (
+                    <>
+                      <span style={{ color: "var(--text-faint)" }}> · </span>
+                      <a
+                        href={mapHref}
+                        target="_blank"
+                        rel="noreferrer"
+                        style={{ color: "var(--accent-primary)" }}
+                        className="hover:underline"
+                      >
+                        Open in maps
+                      </a>
+                    </>
+                  )}
+                </div>
               )}
             </div>
-          )}
+          </div>
+          <div className="flex flex-col items-end gap-2 shrink-0">
+            <Link
+              href={fieldHref}
+              className="ts-focus inline-flex items-center gap-1.5 rounded-lg font-semibold transition-transform"
+              style={{
+                height: 36,
+                padding: "0 14px",
+                background:
+                  "linear-gradient(180deg, color-mix(in oklab, var(--accent-primary) 96%, white 4%) 0%, var(--accent-primary) 100%)",
+                color: "var(--accent-fg)",
+                border:
+                  "1px solid color-mix(in oklab, var(--accent-primary) 80%, black 20%)",
+                boxShadow:
+                  "0 1px 0 0 rgba(255,255,255,0.15) inset, " +
+                  "0 4px 14px -2px color-mix(in oklab, var(--accent-primary) 35%, transparent), " +
+                  "0 1px 2px 0 rgba(0,0,0,0.35)",
+                fontSize: 12.5,
+                letterSpacing: "-0.005em",
+              }}
+            >
+              <svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2">
+                <rect x="6" y="2" width="12" height="20" rx="2" />
+                <path d="M11 18h2" />
+              </svg>
+              Open field mode
+            </Link>
+            {canManage && (
+              <form action={del}>
+                <Button type="submit" variant="danger">Delete event</Button>
+              </form>
+            )}
+          </div>
         </div>
-        <div className="flex flex-col items-end gap-2">
-          {/* Phase 13 — field-mode deep link. Prominent because crew in the
-              field will bookmark it directly. */}
-          <Link
-            href={fieldHref}
-            className="inline-flex items-center gap-2 rounded-md px-3 py-2 text-sm font-medium"
-            style={{
-              background: "var(--accent-primary)",
-              color: "var(--accent-fg)",
-              border: "1px solid var(--accent-primary)",
-            }}
-          >
-            📱 Open field mode
-          </Link>
-          {canManage && (
-            <form action={del}>
-              <Button type="submit" variant="danger">Delete event</Button>
-            </form>
-          )}
-        </div>
-      </div>
+      </header>
 
       {/* Phase 13 — readiness panel. Shown for everyone (including crew) so
           they can see what's missing before arrival. Chips are color-coded. */}

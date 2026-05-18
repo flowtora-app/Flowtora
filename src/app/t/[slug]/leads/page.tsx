@@ -81,24 +81,121 @@ export default async function LeadsPage({
 
   return (
     <div>
-      <div className="flex items-center justify-between">
-        <div>
-          <h1 className="text-2xl font-semibold">Pipeline</h1>
-          <p className="mt-1 text-sm" style={{ color: "var(--muted)" }}>
-            {customers.length} active records
-            {atRiskCount > 0 && (
-              <>
-                {" · "}
-                <span style={{ color: "var(--danger-fg)" }}>
+      <div
+        className="relative overflow-hidden rounded-2xl"
+        style={{
+          padding: "18px 22px",
+          background:
+            "radial-gradient(880px circle at -10% -50%, var(--accent-surface), transparent 55%), " +
+            "linear-gradient(180deg, color-mix(in oklab, var(--surface-1) 92%, white 8%) 0%, var(--surface-1) 100%)",
+          border: "1px solid var(--border-subtle)",
+          boxShadow:
+            "inset 0 1px 0 0 color-mix(in oklab, white 4%, transparent), " +
+            "0 1px 2px 0 rgba(0,0,0,0.18)",
+        }}
+      >
+        <div className="flex flex-wrap items-center justify-between gap-4">
+          <div className="min-w-0">
+            <div className="flex items-center gap-2.5 flex-wrap">
+              <h1
+                className="font-semibold"
+                style={{
+                  color: "var(--text-default)",
+                  fontSize: 24,
+                  letterSpacing: "-0.02em",
+                  lineHeight: 1.15,
+                }}
+              >
+                Pipeline
+              </h1>
+              <span
+                style={{
+                  display: "inline-flex",
+                  alignItems: "center",
+                  fontSize: 11,
+                  fontWeight: 700,
+                  letterSpacing: "0.04em",
+                  color: "var(--accent-primary)",
+                  background: "var(--accent-surface)",
+                  border:
+                    "1px solid color-mix(in oklab, var(--accent-primary) 22%, transparent)",
+                  padding: "3px 8px",
+                  borderRadius: 999,
+                  fontFeatureSettings: "'tnum' 1",
+                  lineHeight: 1,
+                }}
+              >
+                {customers.length}
+              </span>
+              {atRiskCount > 0 && (
+                <span
+                  style={{
+                    display: "inline-flex",
+                    alignItems: "center",
+                    gap: 5,
+                    fontSize: 11,
+                    fontWeight: 700,
+                    letterSpacing: "0.04em",
+                    color: "var(--danger-fg, var(--rose-500))",
+                    background:
+                      "color-mix(in oklab, var(--rose-500) 14%, transparent)",
+                    border:
+                      "1px solid color-mix(in oklab, var(--rose-500) 30%, transparent)",
+                    padding: "3px 8px",
+                    borderRadius: 999,
+                    lineHeight: 1,
+                  }}
+                >
+                  <span
+                    aria-hidden
+                    style={{
+                      width: 5,
+                      height: 5,
+                      borderRadius: 999,
+                      background: "var(--danger-fg, var(--rose-500))",
+                      boxShadow:
+                        "0 0 0 2px color-mix(in oklab, var(--rose-500) 25%, transparent)",
+                    }}
+                  />
                   {atRiskCount} at risk
                 </span>
-              </>
-            )}
-          </p>
+              )}
+            </div>
+            <p
+              className="mt-1.5"
+              style={{
+                color: "var(--text-muted)",
+                fontSize: 12.5,
+                lineHeight: 1.45,
+              }}
+            >
+              Where deals live before they become quotes — track opportunities through the stages.
+            </p>
+          </div>
+          <Link
+            href={`/t/${slug}/customers/new`}
+            className="ts-focus inline-flex items-center gap-1.5 rounded-lg font-semibold transition-transform"
+            style={{
+              height: 32,
+              padding: "0 14px",
+              background:
+                "linear-gradient(180deg, color-mix(in oklab, var(--accent-primary) 96%, white 4%) 0%, var(--accent-primary) 100%)",
+              color: "var(--accent-fg)",
+              border:
+                "1px solid color-mix(in oklab, var(--accent-primary) 80%, black 20%)",
+              boxShadow:
+                "0 1px 0 0 rgba(255,255,255,0.15) inset, " +
+                "0 1px 2px 0 rgba(0,0,0,0.35)",
+              fontSize: 12.5,
+              letterSpacing: "-0.005em",
+            }}
+          >
+            <svg width="13" height="13" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2.5">
+              <path d="M12 5v14M5 12h14" />
+            </svg>
+            New lead
+          </Link>
         </div>
-        <Link href={`/t/${slug}/customers/new`}>
-          <Button type="button">New lead</Button>
-        </Link>
       </div>
 
       {/* Phase 7 — lead source analytics. Helps managers see which
