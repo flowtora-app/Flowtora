@@ -263,17 +263,35 @@ export default async function SupplierOrdersPage({
               const meta = STATUS_META[p.status];
               return (
                 <tr key={p.id} style={{ borderTop: "1px solid var(--border-subtle)" }}>
-                  <td
-                    className="px-4 py-3"
-                    style={{
-                      color: "var(--text-default)",
-                      fontSize: 13,
-                      fontWeight: 600,
-                      fontFamily: "var(--font-mono, ui-monospace, monospace)",
-                      fontFeatureSettings: "'tnum' 1",
-                    }}
-                  >
-                    {p.number}
+                  <td className="px-4 py-3">
+                    {usingPreview ? (
+                      <span
+                        style={{
+                          color: "var(--text-default)",
+                          fontSize: 13,
+                          fontWeight: 600,
+                          fontFamily: "var(--font-mono, ui-monospace, monospace)",
+                          fontFeatureSettings: "'tnum' 1",
+                        }}
+                      >
+                        {p.number}
+                      </span>
+                    ) : (
+                      <Link
+                        href={`/t/${slug}/supplier-orders/${p.id}`}
+                        style={{
+                          color: "var(--accent-primary)",
+                          fontSize: 13,
+                          fontWeight: 600,
+                          fontFamily: "var(--font-mono, ui-monospace, monospace)",
+                          fontFeatureSettings: "'tnum' 1",
+                          textDecoration: "none",
+                        }}
+                        className="hover:underline"
+                      >
+                        {p.number}
+                      </Link>
+                    )}
                   </td>
                   <td
                     className="px-4 py-3"
