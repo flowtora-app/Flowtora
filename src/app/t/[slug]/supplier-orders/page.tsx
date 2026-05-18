@@ -1,5 +1,6 @@
 import Link from "next/link";
 import { requirePermission } from "@/lib/tenant";
+import { db } from "@/lib/db";
 
 // Supplier orders / Purchase orders (T-11a).
 //
@@ -44,9 +45,50 @@ export default async function SupplierOrdersPage({
   params: Promise<{ slug: string }>;
 }) {
   const { slug } = await params;
-  await requirePermission(slug, "customers:view");
+  const ctx = await requirePermission(slug, "customers:view");
 
-  const outstandingTotal = EXAMPLES
+  // Pull live POs. Falls back to scaffold examples when empty.
+  const now = Date.now();
+  const liveRows = await db.purchaseOrder.findMany({
+    where: { tenantId: ctx.tenant.id },
+    orderBy: { createdAt: "desc" },
+    include: {
+      supplierVendor: { select: { name: true } },
+      _count: { select: { lines: true } },
+    },
+    take: 200,
+  });
+
+  const usingPreview = liveRows.length === 0;
+
+  const items: ExamplePO[] = usingPreview
+    ? EXAMPLES
+    : liveRows.map((p) => {
+        // Relative date helpers.
+        const fmtFromNow = (d: Date | null): string => {
+          if (!d) return "—";
+          const ms = d.getTime() - now;
+          const days = Math.round(ms / 86_400_000);
+          if (days === 0) return "Today";
+          if (days < 0) return Math.abs(days) === 1 ? "Yesterday" : `${Math.abs(days)} days ago`;
+          if (days === 1) return "in 1 day";
+          if (days < 30) return `in ${days} days`;
+          const months = Math.round(days / 30);
+          return `in ${months} month${months === 1 ? "" : "s"}`;
+        };
+        return {
+          id:         p.id,
+          number:     p.number,
+          supplier:   p.supplierVendor?.name ?? "—",
+          status:     p.status as POStatus,
+          itemsLabel: `${p._count.lines} line item${p._count.lines === 1 ? "" : "s"}`,
+          total:      Number(p.total),
+          expectedAt: p.status === "RECEIVED" ? "Delivered" : fmtFromNow(p.expectedAt),
+          issuedAt:   fmtFromNow(p.issuedAt ?? p.createdAt),
+        };
+      });
+
+  const outstandingTotal = items
     .filter((p) => p.status === "ISSUED" || p.status === "PARTIAL")
     .reduce((sum, p) => sum + p.total, 0);
 
@@ -96,7 +138,7 @@ export default async function SupplierOrdersPage({
                   lineHeight: 1,
                 }}
               >
-                {EXAMPLES.length}
+                {items.length}
               </span>
               <span
                 style={{
@@ -128,24 +170,26 @@ export default async function SupplierOrdersPage({
                   ${outstandingTotal.toFixed(2)}
                 </span>
               </span>
-              <span
-                style={{
-                  fontSize: 10.5,
-                  fontWeight: 700,
-                  letterSpacing: "0.06em",
-                  textTransform: "uppercase",
-                  color: "var(--amber-500)",
-                  background:
-                    "color-mix(in oklab, var(--amber-500) 14%, transparent)",
-                  border:
-                    "1px solid color-mix(in oklab, var(--amber-500) 30%, transparent)",
-                  padding: "3px 8px",
-                  borderRadius: 999,
-                  lineHeight: 1,
-                }}
-              >
-                Preview
-              </span>
+              {usingPreview && (
+                <span
+                  style={{
+                    fontSize: 10.5,
+                    fontWeight: 700,
+                    letterSpacing: "0.06em",
+                    textTransform: "uppercase",
+                    color: "var(--amber-500)",
+                    background:
+                      "color-mix(in oklab, var(--amber-500) 14%, transparent)",
+                    border:
+                      "1px solid color-mix(in oklab, var(--amber-500) 30%, transparent)",
+                    padding: "3px 8px",
+                    borderRadius: 999,
+                    lineHeight: 1,
+                  }}
+                >
+                  Preview
+                </span>
+              )}
             </div>
             <p
               className="mt-1.5"
@@ -158,10 +202,9 @@ export default async function SupplierOrdersPage({
               Purchase orders to your suppliers — track expected delivery, partial receipts, and outstanding spend.
             </p>
           </div>
-          <button
-            type="button"
-            disabled
-            title="POs ship in a future update"
+          <Link
+            href={`/t/${slug}/supplier-orders/new`}
+            className="ts-focus inline-flex items-center gap-1.5 rounded-lg font-semibold transition-transform"
             style={{
               height: 32,
               padding: "0 14px",
@@ -174,14 +217,14 @@ export default async function SupplierOrdersPage({
                 "0 1px 0 0 rgba(255,255,255,0.15) inset, " +
                 "0 1px 2px 0 rgba(0,0,0,0.35)",
               fontSize: 12.5,
-              fontWeight: 600,
-              borderRadius: 8,
-              opacity: 0.55,
-              cursor: "not-allowed",
+              letterSpacing: "-0.005em",
             }}
           >
+            <svg width="13" height="13" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2.5">
+              <path d="M12 5v14M5 12h14" />
+            </svg>
             New PO
-          </button>
+          </Link>
         </div>
       </div>
 
@@ -216,7 +259,7 @@ export default async function SupplierOrdersPage({
             </tr>
           </thead>
           <tbody>
-            {EXAMPLES.map((p) => {
+            {items.map((p) => {
               const meta = STATUS_META[p.status];
               return (
                 <tr key={p.id} style={{ borderTop: "1px solid var(--border-subtle)" }}>
@@ -315,49 +358,51 @@ export default async function SupplierOrdersPage({
         </table>
       </div>
 
-      <div
-        className="rounded-xl px-4 py-3"
-        style={{
-          background:
-            "radial-gradient(540px circle at 0% 0%, var(--accent-surface), transparent 55%), " +
-            "color-mix(in oklab, var(--surface-1) 80%, transparent)",
-          border:
-            "1px solid color-mix(in oklab, var(--accent-primary) 28%, transparent)",
-          fontSize: 12.5,
-          lineHeight: 1.45,
-          color: "var(--text-muted)",
-        }}
-      >
-        <div className="flex items-start gap-2.5">
-          <span
-            aria-hidden
-            style={{
-              flexShrink: 0,
-              width: 18,
-              height: 18,
-              borderRadius: 5,
-              background: "var(--accent-surface)",
-              color: "var(--accent-primary)",
-              display: "inline-flex",
-              alignItems: "center",
-              justifyContent: "center",
-              fontWeight: 700,
-              fontSize: 11,
-              border:
-                "1px solid color-mix(in oklab, var(--accent-primary) 30%, transparent)",
-              marginTop: 1,
-            }}
-          >
-            i
-          </span>
-          <div>
-            <span style={{ color: "var(--text-default)", fontWeight: 600 }}>
-              Preview data shown.
-            </span>{" "}
-            Purchase orders ship in a future update. Rows above demonstrate the full PO workflow: draft → issued → partial → received → closed, with expected delivery, line items, and outstanding spend totals.
+      {usingPreview && (
+        <div
+          className="rounded-xl px-4 py-3"
+          style={{
+            background:
+              "radial-gradient(540px circle at 0% 0%, var(--accent-surface), transparent 55%), " +
+              "color-mix(in oklab, var(--surface-1) 80%, transparent)",
+            border:
+              "1px solid color-mix(in oklab, var(--accent-primary) 28%, transparent)",
+            fontSize: 12.5,
+            lineHeight: 1.45,
+            color: "var(--text-muted)",
+          }}
+        >
+          <div className="flex items-start gap-2.5">
+            <span
+              aria-hidden
+              style={{
+                flexShrink: 0,
+                width: 18,
+                height: 18,
+                borderRadius: 5,
+                background: "var(--accent-surface)",
+                color: "var(--accent-primary)",
+                display: "inline-flex",
+                alignItems: "center",
+                justifyContent: "center",
+                fontWeight: 700,
+                fontSize: 11,
+                border:
+                  "1px solid color-mix(in oklab, var(--accent-primary) 30%, transparent)",
+                marginTop: 1,
+              }}
+            >
+              i
+            </span>
+            <div>
+              <span style={{ color: "var(--text-default)", fontWeight: 600 }}>
+                Preview data shown.
+              </span>{" "}
+              Your shop hasn&rsquo;t created any purchase orders yet. Rows above demonstrate the workflow: draft → issued → partial → received → closed. Click New PO to start your first one.
+            </div>
           </div>
         </div>
-      </div>
+      )}
     </div>
   );
 }

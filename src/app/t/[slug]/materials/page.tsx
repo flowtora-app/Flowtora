@@ -1,5 +1,6 @@
 import Link from "next/link";
 import { requirePermission } from "@/lib/tenant";
+import { db } from "@/lib/db";
 
 // Materials / Inventory (T-11).
 //
@@ -56,11 +57,36 @@ export default async function MaterialsPage({
   params: Promise<{ slug: string }>;
 }) {
   const { slug } = await params;
-  await requirePermission(slug, "customers:view");
+  const ctx = await requirePermission(slug, "customers:view");
 
-  const categories = Array.from(new Set(EXAMPLES.map((m) => m.category))).sort();
+  // Pull live materials. Falls back to scaffold examples when empty.
+  const liveRows = await db.material.findMany({
+    where: { tenantId: ctx.tenant.id, archivedAt: null },
+    orderBy: [{ category: "asc" }, { name: "asc" }],
+    include: { supplierVendor: { select: { name: true } } },
+    take: 300,
+  });
+
+  const usingPreview = liveRows.length === 0;
+
+  const items: ExampleMaterial[] = usingPreview
+    ? EXAMPLES
+    : liveRows.map((m) => ({
+        id:        m.id,
+        name:      m.name,
+        category:  m.category ?? "Uncategorized",
+        sku:       m.sku ?? "—",
+        unit:      m.unit,
+        current:   Number(m.currentStock),
+        reorderAt: Number(m.reorderAt),
+        max:       Math.max(Number(m.maxStock), Number(m.currentStock), 1),
+        unitCost:  Number(m.unitCost),
+        supplier:  m.supplierVendor?.name ?? "—",
+      }));
+
+  const categories = Array.from(new Set(items.map((m) => m.category))).sort();
   const counts: Record<StockTone, number> = { OK: 0, REORDER: 0, LOW: 0 };
-  for (const m of EXAMPLES) counts[tone(m)]++;
+  for (const m of items) counts[tone(m)]++;
 
   return (
     <div className="space-y-5">
@@ -109,7 +135,7 @@ export default async function MaterialsPage({
                   lineHeight: 1,
                 }}
               >
-                {EXAMPLES.length}
+                {items.length}
               </span>
               {counts.LOW + counts.REORDER > 0 && (
                 <span
@@ -144,24 +170,26 @@ export default async function MaterialsPage({
                   {counts.LOW + counts.REORDER} need attention
                 </span>
               )}
-              <span
-                style={{
-                  fontSize: 10.5,
-                  fontWeight: 700,
-                  letterSpacing: "0.06em",
-                  textTransform: "uppercase",
-                  color: "var(--amber-500)",
-                  background:
-                    "color-mix(in oklab, var(--amber-500) 14%, transparent)",
-                  border:
-                    "1px solid color-mix(in oklab, var(--amber-500) 30%, transparent)",
-                  padding: "3px 8px",
-                  borderRadius: 999,
-                  lineHeight: 1,
-                }}
-              >
-                Preview
-              </span>
+              {usingPreview && (
+                <span
+                  style={{
+                    fontSize: 10.5,
+                    fontWeight: 700,
+                    letterSpacing: "0.06em",
+                    textTransform: "uppercase",
+                    color: "var(--amber-500)",
+                    background:
+                      "color-mix(in oklab, var(--amber-500) 14%, transparent)",
+                    border:
+                      "1px solid color-mix(in oklab, var(--amber-500) 30%, transparent)",
+                    padding: "3px 8px",
+                    borderRadius: 999,
+                    lineHeight: 1,
+                  }}
+                >
+                  Preview
+                </span>
+              )}
             </div>
             <p
               className="mt-1.5"
@@ -174,10 +202,9 @@ export default async function MaterialsPage({
               Vinyl, substrate, ink, thread, blanks. Track on-hand vs reorder point — never run out mid-job.
             </p>
           </div>
-          <button
-            type="button"
-            disabled
-            title="Inventory ships in a future update"
+          <Link
+            href={`/t/${slug}/materials/new`}
+            className="ts-focus inline-flex items-center gap-1.5 rounded-lg font-semibold transition-transform"
             style={{
               height: 32,
               padding: "0 14px",
@@ -190,25 +217,25 @@ export default async function MaterialsPage({
                 "0 1px 0 0 rgba(255,255,255,0.15) inset, " +
                 "0 1px 2px 0 rgba(0,0,0,0.35)",
               fontSize: 12.5,
-              fontWeight: 600,
-              borderRadius: 8,
-              opacity: 0.55,
-              cursor: "not-allowed",
+              letterSpacing: "-0.005em",
             }}
           >
+            <svg width="13" height="13" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2.5">
+              <path d="M12 5v14M5 12h14" />
+            </svg>
             Add material
-          </button>
+          </Link>
         </div>
       </div>
 
       {/* Category chips. */}
       <div className="flex flex-wrap gap-1.5">
-        <CategoryChip label="All" active count={EXAMPLES.length} />
+        <CategoryChip label="All" active count={items.length} />
         {categories.map((c) => (
           <CategoryChip
             key={c}
             label={c}
-            count={EXAMPLES.filter((m) => m.category === c).length}
+            count={items.filter((m) => m.category === c).length}
           />
         ))}
       </div>
@@ -243,7 +270,7 @@ export default async function MaterialsPage({
             </tr>
           </thead>
           <tbody>
-            {EXAMPLES.map((m) => {
+            {items.map((m) => {
               const t = tone(m);
               const meta = TONE_META[t];
               const pct = Math.min(100, Math.round((m.current / m.max) * 100));
@@ -383,7 +410,9 @@ export default async function MaterialsPage({
         </table>
       </div>
 
-      <ComingSoonBanner copy="Materials inventory ships in a future update. Cards above demonstrate the surface for vinyl, substrate, ink, thread, blanks, and hardware — with current stock vs reorder point, per-unit cost, and supplier link." />
+      {usingPreview && (
+        <ComingSoonBanner copy="Your shop hasn&rsquo;t added any materials yet. Rows above demonstrate the surface for vinyl, substrate, ink, thread, blanks, and hardware. Click Add material to start your inventory." />
+      )}
     </div>
   );
 }
