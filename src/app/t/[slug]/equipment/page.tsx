@@ -1,5 +1,6 @@
 import Link from "next/link";
 import { requirePermission } from "@/lib/tenant";
+import { db } from "@/lib/db";
 
 // Equipment (T-8).
 //
@@ -112,12 +113,48 @@ export default async function EquipmentPage({
   params: Promise<{ slug: string }>;
 }) {
   const { slug } = await params;
-  await requirePermission(slug, "customers:view");
+  const ctx = await requirePermission(slug, "customers:view");
+
+  // Pull live equipment for this tenant. Falls back to example rows
+  // when the shop hasn't added anything yet, so the page is never
+  // empty and the visual direction stays reviewable.
+  const liveRows = await db.equipment.findMany({
+    where: { tenantId: ctx.tenant.id, archivedAt: null },
+    orderBy: [{ status: "asc" }, { name: "asc" }],
+    include: {
+      operator:     { select: { name: true, email: true } },
+      currentOrder: { select: { number: true } },
+    },
+    take: 60,
+  });
+
+  const usingPreview = liveRows.length === 0;
+  const now = Date.now();
+
+  const items: ExampleEquipment[] = usingPreview
+    ? EXAMPLES
+    : liveRows.map((e) => {
+        const utilization = 0; // Real utilization metric ships when stage events are aggregated.
+        const nextService = e.nextServiceDueAt
+          ? relativeFromNow(e.nextServiceDueAt.getTime() - now)
+          : null;
+        return {
+          id: e.id,
+          name: e.name,
+          kind: e.kind,
+          model: e.model ?? "—",
+          status: e.status as EquipmentStatus,
+          operator: e.operator?.name ?? e.operator?.email?.split("@")[0] ?? null,
+          currentJob: e.currentOrder ? `${e.currentOrder.number}` : null,
+          utilization,
+          nextService,
+        };
+      });
 
   const counts: Record<EquipmentStatus, number> = {
     RUNNING: 0, IDLE: 0, MAINTENANCE: 0, DOWN: 0,
   };
-  for (const e of EXAMPLES) counts[e.status]++;
+  for (const e of items) counts[e.status]++;
 
   return (
     <div className="space-y-5">
@@ -166,28 +203,30 @@ export default async function EquipmentPage({
                   lineHeight: 1,
                 }}
               >
-                {EXAMPLES.length}
+                {items.length}
               </span>
-              <span
-                style={{
-                  display: "inline-flex",
-                  alignItems: "center",
-                  fontSize: 10.5,
-                  fontWeight: 700,
-                  letterSpacing: "0.06em",
-                  textTransform: "uppercase",
-                  color: "var(--amber-500)",
-                  background:
-                    "color-mix(in oklab, var(--amber-500) 14%, transparent)",
-                  border:
-                    "1px solid color-mix(in oklab, var(--amber-500) 30%, transparent)",
-                  padding: "3px 8px",
-                  borderRadius: 999,
-                  lineHeight: 1,
-                }}
-              >
-                Preview
-              </span>
+              {usingPreview && (
+                <span
+                  style={{
+                    display: "inline-flex",
+                    alignItems: "center",
+                    fontSize: 10.5,
+                    fontWeight: 700,
+                    letterSpacing: "0.06em",
+                    textTransform: "uppercase",
+                    color: "var(--amber-500)",
+                    background:
+                      "color-mix(in oklab, var(--amber-500) 14%, transparent)",
+                    border:
+                      "1px solid color-mix(in oklab, var(--amber-500) 30%, transparent)",
+                    padding: "3px 8px",
+                    borderRadius: 999,
+                    lineHeight: 1,
+                  }}
+                >
+                  Preview
+                </span>
+              )}
             </div>
             <p
               className="mt-1.5"
@@ -200,10 +239,9 @@ export default async function EquipmentPage({
               Printers, cutters, presses, embroidery, CNC — track utilization, assigned operator, and maintenance.
             </p>
           </div>
-          <button
-            type="button"
-            disabled
-            title="Equipment registry ships in a future update"
+          <Link
+            href={`/t/${slug}/equipment/new`}
+            className="ts-focus inline-flex items-center gap-1.5 rounded-lg font-semibold transition-transform"
             style={{
               height: 32,
               padding: "0 14px",
@@ -216,14 +254,14 @@ export default async function EquipmentPage({
                 "0 1px 0 0 rgba(255,255,255,0.15) inset, " +
                 "0 1px 2px 0 rgba(0,0,0,0.35)",
               fontSize: 12.5,
-              fontWeight: 600,
-              borderRadius: 8,
-              opacity: 0.55,
-              cursor: "not-allowed",
+              letterSpacing: "-0.005em",
             }}
           >
+            <svg width="13" height="13" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2.5">
+              <path d="M12 5v14M5 12h14" />
+            </svg>
             Add equipment
-          </button>
+          </Link>
         </div>
       </div>
 
@@ -286,13 +324,13 @@ export default async function EquipmentPage({
 
       {/* Equipment grid. */}
       <div className="grid gap-3 md:grid-cols-2 xl:grid-cols-3">
-        {EXAMPLES.map((e) => (
+        {items.map((e) => (
           <EquipmentCard key={e.id} item={e} />
         ))}
       </div>
 
-      {/* "Coming soon" footnote. */}
-      <div
+      {/* "Coming soon" footnote — only shown in preview mode. */}
+      {usingPreview && <div
         className="rounded-xl px-4 py-3"
         style={{
           background:
@@ -331,12 +369,23 @@ export default async function EquipmentPage({
             <span style={{ color: "var(--text-default)", fontWeight: 600 }}>
               Preview data shown.
             </span>{" "}
-            The Equipment registry ships in a future update. Cards above demonstrate the surface for printers, cutters, presses, embroidery, and CNC — with live status, assigned operator, current job, utilization, and next-service schedule.
+            Your shop hasn&apos;t added any equipment yet. Cards above demonstrate the surface — click <strong style={{ color: "var(--text-default)" }}>Add equipment</strong> to register your first machine.
           </div>
         </div>
-      </div>
+      </div>}
     </div>
   );
+}
+
+/** Format a duration (ms) as a relative-from-now string. */
+function relativeFromNow(ms: number): string {
+  const days = Math.round(ms / 86_400_000);
+  if (ms < 0) return Math.abs(days) <= 1 ? "Overdue" : `${Math.abs(days)} days overdue`;
+  if (days < 1)  return "Today";
+  if (days < 2)  return "Tomorrow";
+  if (days < 30) return `in ${days} days`;
+  const months = Math.round(days / 30);
+  return `in ${months} month${months === 1 ? "" : "s"}`;
 }
 
 function EquipmentCard({ item }: { item: ExampleEquipment }) {

@@ -442,6 +442,10 @@ model Tenant {
   tenantBranding         TenantBranding?
   // Page 70 — Domain Management
   customDomains          CustomDomain[]
+  // T-8 / T-11 / T-11a back-relations
+  equipment              Equipment[]
+  materials              Material[]
+  purchaseOrders         PurchaseOrder[]
 }
 
 // ────────────────────────────────────────────────────────────
@@ -1417,6 +1421,9 @@ model User {
 
   // Page 52 — privacy requests assigned to this admin.
   privacyRequestsAssigned  PrivacyRequest[]     @relation("PrivacyRequestAssignee")
+
+  // T-8 — equipment currently assigned to this operator.
+  equipmentAssigned        Equipment[]          @relation("EquipmentOperator")
 }
 
 // Platform-side roles. The first three (SUPER_ADMIN, SITE_MANAGER,
@@ -3279,6 +3286,8 @@ model Order {
   // Phase 14 — job-linked expenses. Margin computation pulls these to
   // subtract costs from invoice revenue on the order detail page.
   expenses       Expense[]
+  // T-8 Equipment back-relation: machines currently running this order.
+  runningOnEquipment Equipment[] @relation("EquipmentCurrentOrder")
 
   @@unique([tenantId, number])
   @@index([tenantId, status])
@@ -7320,6 +7329,9 @@ model Vendor {
 
   tenant   Tenant    @relation(fields: [tenantId], references: [id], onDelete: Cascade)
   expenses Expense[]
+  // T-11 / T-11a back-relations
+  suppliedMaterials Material[]      @relation("MaterialSupplier")
+  purchaseOrders    PurchaseOrder[] @relation("PurchaseOrderSupplier")
 
   @@index([tenantId, name])
   @@index([tenantId, active])
@@ -16734,4 +16746,197 @@ model KeyboardShortcutOverride {
   updatedAt DateTime @updatedAt
 
   @@unique([userId, actionKey])
+}
+
+// ────────────────────────────────────────────────────────────
+// T-8 Equipment, T-11 Materials, T-11a Supplier orders.
+//
+// Three new production-floor models added to back the scaffolded
+// pages that landed without backends. Equipment tracks the physical
+// machines (printers, cutters, presses, embroidery, CNC). Material
+// is the inventory item — vinyl, substrate, ink, thread, blanks,
+// hardware. PurchaseOrder + PurchaseOrderLine cover supplier orders
+// against those materials.
+//
+// Soft delete is supported via `archivedAt` rather than CASCADE so
+// shops can pull old records out of normal views without losing the
+// history attached to past jobs.
+// ────────────────────────────────────────────────────────────
+
+enum EquipmentStatus {
+  RUNNING
+  IDLE
+  MAINTENANCE
+  DOWN
+}
+
+model Equipment {
+  id   String @id @default(cuid())
+
+  tenantId String
+  tenant   Tenant @relation(fields: [tenantId], references: [id], onDelete: Cascade)
+
+  name        String
+  /** Free-form category — "Large-format printer", "Vinyl cutter", etc. */
+  kind        String
+  /** Manufacturer + model — "Roland TrueVIS VG2-640". */
+  model       String?
+  serialNumber String?
+
+  status      EquipmentStatus @default(IDLE)
+
+  /** Optional FK to a user who's currently operating this machine. We
+   *  store the assignment so the production board can show "Now running
+   *  for {user}" without a separate AssignmentLog. */
+  operatorId  String?
+  operator    User?   @relation("EquipmentOperator", fields: [operatorId], references: [id], onDelete: SetNull)
+
+  /** Optional FK to the order currently running on this machine. */
+  currentOrderId String?
+  currentOrder   Order?  @relation("EquipmentCurrentOrder", fields: [currentOrderId], references: [id], onDelete: SetNull)
+
+  /** Maintenance metadata — last service stamp + scheduled next-service
+   *  date. The "Next service" caption in the equipment card subtracts. */
+  lastServicedAt    DateTime?
+  nextServiceDueAt  DateTime?
+
+  /** Plan note + free-form internal notes. Plan note shows in the card
+   *  body when the machine is DOWN to give context. */
+  downReason   String?
+  internalNotes String?
+
+  /** Soft-delete column. Archived rows hide from the default list view. */
+  archivedAt DateTime?
+
+  createdAt DateTime @default(now())
+  updatedAt DateTime @updatedAt
+
+  @@index([tenantId, archivedAt])
+  @@index([tenantId, status])
+}
+
+enum MaterialStatus {
+  OK
+  REORDER
+  LOW
+}
+
+model Material {
+  id   String @id @default(cuid())
+
+  tenantId String
+  tenant   Tenant @relation(fields: [tenantId], references: [id], onDelete: Cascade)
+
+  name        String
+  category    String?
+  /** Internal SKU — must be unique per tenant if set. */
+  sku         String?
+  /** "yd", "sheet", "bottle", "spool", "ea", etc. */
+  unit        String  @default("ea")
+
+  /** On-hand stock + reorder thresholds. Status is computed at read time
+   *  from current vs reorderAt; we don't denormalize the enum because
+   *  receiving a PO line is the only mutation path. */
+  currentStock Decimal @default(0) @db.Decimal(12, 3)
+  reorderAt    Decimal @default(0) @db.Decimal(12, 3)
+  maxStock     Decimal @default(0) @db.Decimal(12, 3)
+
+  /** Cost per unit at most recent PO. Drives the "Unit cost" column. */
+  unitCost     Decimal @default(0) @db.Decimal(12, 2)
+
+  /** Primary supplier — can be unset for materials sourced ad-hoc. */
+  supplierVendorId String?
+  supplierVendor   Vendor? @relation("MaterialSupplier", fields: [supplierVendorId], references: [id], onDelete: SetNull)
+
+  /** Soft-delete + active toggles. */
+  archivedAt DateTime?
+
+  createdAt DateTime @default(now())
+  updatedAt DateTime @updatedAt
+
+  // Reverse relations
+  purchaseOrderLines PurchaseOrderLine[]
+
+  @@unique([tenantId, sku])
+  @@index([tenantId, archivedAt])
+  @@index([tenantId, category])
+}
+
+enum PurchaseOrderStatus {
+  DRAFT
+  ISSUED
+  PARTIAL
+  RECEIVED
+  CLOSED
+  CANCELED
+}
+
+model PurchaseOrder {
+  id   String @id @default(cuid())
+
+  tenantId String
+  tenant   Tenant @relation(fields: [tenantId], references: [id], onDelete: Cascade)
+
+  /** Per-tenant PO number — "PO-1042" style. The tenant.numbering
+   *  schema tracks counters in a future addition; until then this
+   *  is set server-side at create time. */
+  number   String
+
+  /** Supplier the PO is issued to. */
+  supplierVendorId String
+  supplierVendor   Vendor @relation("PurchaseOrderSupplier", fields: [supplierVendorId], references: [id], onDelete: Restrict)
+
+  status   PurchaseOrderStatus @default(DRAFT)
+
+  /** Expected delivery date — drives the "in N days" / "Today" caption. */
+  expectedAt DateTime?
+  /** Stamped when the PO transitions to ISSUED — i.e. sent to the
+   *  supplier. Lets us show "Issued N days ago" without an audit table. */
+  issuedAt   DateTime?
+  /** Stamped when the PO transitions to RECEIVED (last line received). */
+  receivedAt DateTime?
+
+  /** Totals are denormalized for quick rendering. Recompute on
+   *  line-item mutation. */
+  total Decimal @default(0) @db.Decimal(12, 2)
+
+  /** Free-form notes the buyer can include on the PO PDF. */
+  notes String?
+
+  createdAt DateTime @default(now())
+  updatedAt DateTime @updatedAt
+
+  lines PurchaseOrderLine[]
+
+  @@unique([tenantId, number])
+  @@index([tenantId, status])
+  @@index([tenantId, supplierVendorId])
+}
+
+model PurchaseOrderLine {
+  id   String @id @default(cuid())
+
+  purchaseOrderId String
+  purchaseOrder   PurchaseOrder @relation(fields: [purchaseOrderId], references: [id], onDelete: Cascade)
+
+  materialId String?
+  material   Material? @relation(fields: [materialId], references: [id], onDelete: SetNull)
+
+  /** Free-form description — used when a line item isn't tied to a
+   *  catalog Material (one-off purchases). */
+  description String
+
+  quantity   Decimal @default(1) @db.Decimal(12, 3)
+  unitCost   Decimal @default(0) @db.Decimal(12, 2)
+  /** Total = quantity * unitCost, denormalized for sort/aggregate. */
+  total      Decimal @default(0) @db.Decimal(12, 2)
+
+  /** How many of this line have actually been received. When equal to
+   *  quantity, the line is fully received; partial otherwise. */
+  receivedQty Decimal @default(0) @db.Decimal(12, 3)
+
+  createdAt DateTime @default(now())
+  updatedAt DateTime @updatedAt
+
+  @@index([purchaseOrderId])
 }
