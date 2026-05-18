@@ -262,7 +262,8 @@ export default async function TenantLayout({
     {
       label: "Growth",
       items: [
-        { href: `${base}/marketing`, label: "Marketing", icon: "Megaphone" },
+        { href: `${base}/marketing`,  label: "Marketing",  icon: "Megaphone" },
+        { href: `${base}/storefront`, label: "Storefront", icon: "Globe"     },
       ],
     },
     {
