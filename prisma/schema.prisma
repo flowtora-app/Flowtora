@@ -448,6 +448,8 @@ model Tenant {
   purchaseOrders         PurchaseOrder[]
   // S-6 customer auth back-relation
   customerAccounts       CustomerAccount[]
+  // S-4 cart back-relation
+  carts                  Cart[]
 }
 
 // ────────────────────────────────────────────────────────────
@@ -1906,6 +1908,8 @@ model Product {
   templateItems     QuoteTemplateItem[]       @relation("TemplateProduct")
   // Page 25 — back-relation to the source master product (when cloned).
   masterProduct     MasterProduct?            @relation(fields: [masterProductId], references: [id], onDelete: SetNull)
+  // S-4 cart back-relation
+  cartItems         CartItem[]                @relation("CartItemProduct")
 
   @@index([tenantId, active])
   @@index([tenantId, category])
@@ -16989,6 +16993,7 @@ model CustomerAccount {
   // Reverse relations
   sessions   CustomerSession[]
   magicLinks CustomerMagicLink[]
+  carts      Cart[]
 
   @@unique([tenantId, email])
   @@index([tenantId, customerId])
@@ -17036,5 +17041,80 @@ model CustomerMagicLink {
 
   @@index([accountId])
   @@index([expiresAt])
+}
+
+// ────────────────────────────────────────────────────────────
+// S-4 Cart — anonymous + signed-in.
+//
+// One Cart row per shopper per tenant. Anonymous visitors are keyed
+// by a sessionId cookie; signed-in customers are keyed by their
+// CustomerAccount.id. When an anonymous visitor signs in, the
+// next cart resolve merges their session cart into the account cart.
+//
+// CartItem captures the product + a configJson blob holding the
+// configurator's option selections (size, material, finishing, etc.).
+// We snapshot the unit price + total at add-time so the cart total
+// stays stable even if the catalog price changes mid-session.
+// ────────────────────────────────────────────────────────────
+
+model Cart {
+  id       String @id @default(cuid())
+  tenantId String
+  tenant   Tenant @relation(fields: [tenantId], references: [id], onDelete: Cascade)
+
+  /** Either accountId or sessionId is set. Both can be set briefly
+   *  during merge after sign-in. */
+  accountId String?
+  account   CustomerAccount? @relation(fields: [accountId], references: [id], onDelete: SetNull)
+  /** Random hex id stored in the `csess_{tenantId}` cookie. */
+  sessionId String?
+
+  /** Soft expiry — anonymous carts are pruned by a cron after 30
+   *  days of inactivity. Touched on every mutation. */
+  lastActiveAt DateTime @default(now())
+
+  items CartItem[]
+
+  createdAt DateTime @default(now())
+  updatedAt DateTime @updatedAt
+
+  @@index([tenantId, accountId])
+  @@index([tenantId, sessionId])
+}
+
+model CartItem {
+  id     String @id @default(cuid())
+  cartId String
+  cart   Cart   @relation(fields: [cartId], references: [id], onDelete: Cascade)
+
+  productId String?
+  product   Product? @relation("CartItemProduct", fields: [productId], references: [id], onDelete: SetNull)
+
+  /** Display name snapshotted at add time (so a renamed Product
+   *  doesn't rewrite history). Falls back to "Custom item". */
+  name String
+
+  /** Per-row description with the configured options (size, material,
+   *  finishing). Plain text for now; structured JSON below. */
+  description String?
+
+  /** Structured snapshot of the configurator's option selections.
+   *  Shape:
+   *    { options: [{ groupName, optionId, optionLabel, priceDelta }],
+   *      attributes: { width, height, unit, ... } }
+   *  Renderers don't depend on a specific shape — they just iterate
+   *  and pretty-print. */
+  configJson Json?
+
+  quantity Decimal @default(1) @db.Decimal(12, 3)
+  unit     String  @default("ea")
+
+  /** Snapshot of the product's price at add time + total = qty * unitPrice. */
+  unitPrice Decimal @default(0) @db.Decimal(12, 2)
+  total     Decimal @default(0) @db.Decimal(12, 2)
+
+  createdAt DateTime @default(now())
+
+  @@index([cartId])
 }
 

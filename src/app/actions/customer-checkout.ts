@@ -3,9 +3,11 @@
 import { redirect } from "next/navigation";
 import { headers } from "next/headers";
 import { z } from "zod";
+import { Prisma } from "@prisma/client";
 import { db } from "@/lib/db";
 import { stripe } from "@/lib/stripe";
 import { sendEmail } from "@/lib/email";
+import { clearCart, getCartSummary, resolveOrCreateCart } from "@/lib/cart";
 
 // Storefront checkout submission (S-5).
 //
@@ -117,6 +119,28 @@ export async function submitStorefrontCheckout(slug: string, formData: FormData)
   if (parsed.data.company) customerNoteParts.push(`Company: ${parsed.data.company}`);
   if (parsed.data.notes)   customerNoteParts.push(`\nProject details:\n${parsed.data.notes}`);
 
+  // Pull the cart so we can attach the configured line items to the
+  // new quote. Anonymous carts work too — the session cookie matches
+  // them by sessionId. After the quote is created we clear the cart.
+  const { cartId } = await resolveOrCreateCart(slug);
+  const { items: cartItems, subtotal } = await getCartSummary(cartId);
+
+  // Need product detail (pricingModel + taxable) to seed QuoteItem
+  // rows correctly. Pull in one batched query.
+  const productIds = cartItems
+    .map((i) => i.productId)
+    .filter((id): id is string => !!id);
+  const products = productIds.length > 0
+    ? await db.product.findMany({
+        where: { id: { in: productIds }, tenantId: tenant.id },
+        select: {
+          id: true, pricingModel: true, taxable: true, basePrice: true,
+          unit: true, wasteFactorPct: true,
+        },
+      })
+    : [];
+  const productMap = new Map(products.map((p) => [p.id, p]));
+
   const quote = await db.quote.create({
     data: {
       tenantId:    tenant.id,
@@ -124,10 +148,33 @@ export async function submitStorefrontCheckout(slug: string, formData: FormData)
       number:      quoteNumber,
       status:      "DRAFT",
       customerNote: customerNoteParts.join("\n"),
+      subtotal:    new Prisma.Decimal(subtotal),
+      total:       new Prisma.Decimal(subtotal),
       createdBy:   "storefront", // sentinel; the workspace UI handles unknown values gracefully
+      items: cartItems.length > 0 ? {
+        create: cartItems.map((it, i) => {
+          const p = it.productId ? productMap.get(it.productId) : null;
+          return {
+            productId:      it.productId,
+            name:           it.name,
+            description:    it.description,
+            pricingModel:   p?.pricingModel ?? "FLAT_PRICE",
+            basePrice:      new Prisma.Decimal(it.unitPrice),
+            unit:           it.unit,
+            taxable:        p?.taxable ?? true,
+            quantity:       new Prisma.Decimal(it.quantity),
+            wasteFactorPct: p?.wasteFactorPct ?? new Prisma.Decimal(0),
+            subtotal:       new Prisma.Decimal(it.total),
+            sortOrder:      i,
+          };
+        }),
+      } : undefined,
     },
     select: { id: true, number: true },
   });
+
+  // Clear the cart so it doesn't reappear on the next page load.
+  await clearCart(cartId).catch(() => { /* non-fatal */ });
 
   // Best-effort notify the tenant. Resend falls back to console.log
   // in dev when no API key. Skip on send error so the submitter still

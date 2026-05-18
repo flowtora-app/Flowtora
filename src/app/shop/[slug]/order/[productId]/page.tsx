@@ -2,6 +2,7 @@ import Link from "next/link";
 import { notFound } from "next/navigation";
 import { db } from "@/lib/db";
 import { formatMoney } from "@/lib/format";
+import { addToCart } from "@/app/actions/customer-cart";
 
 // Product configurator (S-3).
 //
@@ -804,33 +805,39 @@ export default async function StorefrontConfiguratorPage({
             </svg>
           </Link>
         ) : (
-          <Link
-            href={`/shop/${slug}/cart`}
-            style={{
-              display: "inline-flex",
-              alignItems: "center",
-              gap: 6,
-              height: 44,
-              padding: "0 22px",
-              borderRadius: 11,
-              background: `linear-gradient(180deg, color-mix(in oklab, ${brand} 96%, white 4%) 0%, ${brand} 100%)`,
-              color: "white",
-              fontSize: 14,
-              fontWeight: 700,
-              letterSpacing: "-0.005em",
-              border: `1px solid color-mix(in oklab, ${brand} 80%, black 20%)`,
-              boxShadow:
-                "0 1px 0 0 rgba(255,255,255,0.18) inset, " +
-                `0 4px 14px -2px color-mix(in oklab, ${brand} 40%, transparent), ` +
-                "0 1px 2px 0 rgba(0,0,0,0.12)",
-              textDecoration: "none",
-            }}
-          >
-            Submit for quote
-            <svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2.5">
-              <polyline points="20 6 9 17 4 12" />
-            </svg>
-          </Link>
+          <form action={addToCart.bind(null, slug)}>
+            <input type="hidden" name="productId" value={product.id} />
+            <input type="hidden" name="quantity" value="1" />
+            <button
+              type="submit"
+              style={{
+                display: "inline-flex",
+                alignItems: "center",
+                gap: 6,
+                height: 44,
+                padding: "0 22px",
+                borderRadius: 11,
+                background: `linear-gradient(180deg, color-mix(in oklab, ${brand} 96%, white 4%) 0%, ${brand} 100%)`,
+                color: "white",
+                fontSize: 14,
+                fontWeight: 700,
+                letterSpacing: "-0.005em",
+                border: `1px solid color-mix(in oklab, ${brand} 80%, black 20%)`,
+                boxShadow:
+                  "0 1px 0 0 rgba(255,255,255,0.18) inset, " +
+                  `0 4px 14px -2px color-mix(in oklab, ${brand} 40%, transparent), ` +
+                  "0 1px 2px 0 rgba(0,0,0,0.12)",
+                cursor: "pointer",
+              }}
+            >
+              <svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2.5">
+                <circle cx="9" cy="21" r="1" />
+                <circle cx="20" cy="21" r="1" />
+                <path d="M1 1h4l2.7 13.4a2 2 0 0 0 2 1.6h9.7a2 2 0 0 0 2-1.6L23 6H6" />
+              </svg>
+              Add to cart
+            </button>
+          </form>
         )}
       </div>
     </div>
