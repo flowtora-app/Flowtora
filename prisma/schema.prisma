@@ -445,6 +445,7 @@ model Tenant {
   // T-8 / T-11 / T-11a back-relations
   equipment              Equipment[]
   materials              Material[]
+  materialStockEvents    MaterialStockEvent[]
   purchaseOrders         PurchaseOrder[]
   // S-6 customer auth back-relation
   customerAccounts       CustomerAccount[]
@@ -1428,6 +1429,8 @@ model User {
 
   // T-8 — equipment currently assigned to this operator.
   equipmentAssigned        Equipment[]          @relation("EquipmentOperator")
+  // T-11 — events this user wrote when adjusting material stock.
+  materialStockEvents      MaterialStockEvent[]
 }
 
 // Platform-side roles. The first three (SUPER_ADMIN, SITE_MANAGER,
@@ -16864,10 +16867,72 @@ model Material {
 
   // Reverse relations
   purchaseOrderLines PurchaseOrderLine[]
+  stockEvents        MaterialStockEvent[]
 
   @@unique([tenantId, sku])
   @@index([tenantId, archivedAt])
   @@index([tenantId, category])
+}
+
+// ────────────────────────────────────────────────────────────
+// Material stock event log.
+//
+// Append-only audit trail for every change to Material.currentStock.
+// Each adjust through the workspace ("Receive", "Use", "Count
+// adjustment") writes one row; receiving a PO line writes one too.
+// We persist a balance-after snapshot so the history view doesn't
+// have to running-sum on read — late-arriving events (clock skew,
+// out-of-order transactions) don't corrupt the displayed timeline.
+//
+// Soft-delete intentionally absent — events are a legal record of
+// what happened to inventory. Corrections happen by writing a new
+// counter-event, not by erasing the past.
+// ────────────────────────────────────────────────────────────
+
+enum StockEventReason {
+  RECEIVE         // manual receive via the material adjust form
+  USE             // manual consumption via the adjust form
+  COUNT           // signed count correction via the adjust form
+  PURCHASE_ORDER  // automatic event from receivePurchaseOrderLine
+  INITIAL         // captured at Material.create time
+}
+
+model MaterialStockEvent {
+  id         String @id @default(cuid())
+
+  tenantId   String
+  tenant     Tenant @relation(fields: [tenantId], references: [id], onDelete: Cascade)
+
+  materialId String
+  material   Material @relation(fields: [materialId], references: [id], onDelete: Cascade)
+
+  reason       StockEventReason
+  /** Signed delta. Positive = stock added; negative = consumed. */
+  delta        Decimal @db.Decimal(12, 3)
+  /** On-hand balance immediately AFTER this event. Stored so reads
+   *  don't running-sum and so a missing/late event can't corrupt the
+   *  displayed history. */
+  balanceAfter Decimal @db.Decimal(12, 3)
+
+  /** Optional free-form context — "Used on order O-1042", "spilled",
+   *  "recount after weekly inventory", etc. Keeps the timeline useful
+   *  even when the delta + reason alone don't tell the full story. */
+  note         String?
+
+  /** Who pressed the button. Null for system-originated events
+   *  (PURCHASE_ORDER) or any future automation. */
+  userId       String?
+  user         User?    @relation(fields: [userId], references: [id], onDelete: SetNull)
+
+  /** When reason=PURCHASE_ORDER, the source line. SetNull on parent
+   *  delete keeps the event row referenceable. */
+  purchaseOrderLineId String?
+  purchaseOrderLine   PurchaseOrderLine? @relation(fields: [purchaseOrderLineId], references: [id], onDelete: SetNull)
+
+  createdAt    DateTime @default(now())
+
+  @@index([tenantId, materialId, createdAt])
+  @@index([materialId, createdAt])
 }
 
 enum PurchaseOrderStatus {
@@ -16945,6 +17010,11 @@ model PurchaseOrderLine {
 
   createdAt DateTime @default(now())
   updatedAt DateTime @updatedAt
+
+  // Reverse relation — the audit trail of stock events sourced from
+  // receiving this line. One PO line can spawn multiple events when a
+  // shop receives partials over several days.
+  stockEvents MaterialStockEvent[]
 
   @@index([purchaseOrderId])
 }

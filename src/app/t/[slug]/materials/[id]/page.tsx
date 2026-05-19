@@ -1,5 +1,6 @@
 import Link from "next/link";
 import { notFound } from "next/navigation";
+import type { StockEventReason } from "@prisma/client";
 import { requirePermission } from "@/lib/tenant";
 import { db } from "@/lib/db";
 import {
@@ -8,6 +9,32 @@ import {
   unarchiveMaterial,
 } from "@/app/actions/materials";
 import { formatDate } from "@/lib/format";
+
+// Color + label mapping for stock-event reasons. Used by the Recent
+// activity timeline on the right rail. Colors mirror the rest of the
+// workspace: emerald for "stock added", rose for "consumed", amber
+// for "manual correction", accent for system-originated.
+const STOCK_EVENT_META: Record<StockEventReason, { label: string; color: string }> = {
+  INITIAL:        { label: "Initial",   color: "var(--accent-primary)" },
+  PURCHASE_ORDER: { label: "Received",  color: "var(--emerald-500)"    },
+  RECEIVE:        { label: "Received",  color: "var(--emerald-500)"    },
+  USE:            { label: "Used",      color: "var(--rose-500)"       },
+  COUNT:          { label: "Recounted", color: "var(--amber-500)"      },
+};
+
+/** "5 minutes ago" / "yesterday" / "Apr 12" / ISO for old events. */
+function formatRelative(d: Date): string {
+  const ms   = Date.now() - d.getTime();
+  const mins = Math.round(ms / 60_000);
+  if (mins < 1)   return "just now";
+  if (mins < 60)  return `${mins}m ago`;
+  const hours = Math.round(mins / 60);
+  if (hours < 24) return `${hours}h ago`;
+  const days = Math.round(hours / 24);
+  if (days < 2)   return "yesterday";
+  if (days < 7)   return `${days}d ago`;
+  return formatDate(d);
+}
 
 // Material detail page (T-11).
 //
@@ -58,6 +85,22 @@ export default async function MaterialDetailPage({
         include: {
           purchaseOrder: {
             select: { id: true, number: true, status: true, issuedAt: true },
+          },
+        },
+      },
+      // Stock-event timeline. 25 is enough for a few weeks of activity
+      // in a busy shop; a dedicated "full history" page can come later
+      // if shops ever ask for deeper drill-in.
+      stockEvents: {
+        orderBy: { createdAt: "desc" },
+        take: 25,
+        include: {
+          user: { select: { id: true, name: true, email: true } },
+          purchaseOrderLine: {
+            select: {
+              id: true,
+              purchaseOrder: { select: { id: true, number: true } },
+            },
           },
         },
       },
@@ -414,7 +457,7 @@ export default async function MaterialDetailPage({
             {!archived && (
               <form
                 action={adjustAction}
-                className="mt-5 grid items-end gap-3 sm:grid-cols-[1fr_1fr_auto]"
+                className="mt-5 grid items-end gap-3 sm:grid-cols-[1fr_1fr_auto] sm:[&>label.span-2]:col-span-3"
                 style={{
                   paddingTop: 16,
                   borderTop: "1px solid var(--border-subtle)",
@@ -500,9 +543,170 @@ export default async function MaterialDetailPage({
                 >
                   Apply
                 </button>
+                {/* Optional note — saved on the stock event row so the
+                    timeline below has context ("spilled cutting #4",
+                    "used on O-1042", etc.). */}
+                <label className="sm:col-span-3">
+                  <span
+                    style={{
+                      display: "block",
+                      marginBottom: 6,
+                      color: "var(--text-default)",
+                      fontSize: 12,
+                      fontWeight: 600,
+                    }}
+                  >
+                    Note <span style={{ color: "var(--text-faint)", fontWeight: 400 }}>(optional)</span>
+                  </span>
+                  <input
+                    type="text"
+                    name="note"
+                    maxLength={400}
+                    placeholder="What happened? Used on order, spilled, recounted, etc."
+                    style={{
+                      width: "100%",
+                      height: 36,
+                      padding: "0 10px",
+                      borderRadius: 8,
+                      background: "var(--surface-1)",
+                      border: "1px solid var(--border-subtle)",
+                      color: "var(--text-default)",
+                      fontSize: 12.5,
+                    }}
+                  />
+                </label>
               </form>
             )}
           </section>
+
+          {/* Stock-event timeline — every change to on-hand stock, why
+              it happened, and who did it. PO receives, manual adjusts,
+              and the initial seed all land here. */}
+          <SectionCard
+            title="Recent activity"
+            tag={material.stockEvents.length > 0 ? `${material.stockEvents.length}` : null}
+          >
+            {material.stockEvents.length === 0 ? (
+              <p style={{ color: "var(--text-muted)", fontSize: 13, lineHeight: 1.5 }}>
+                No stock changes recorded yet. Use the form above or
+                receive a purchase order to start the history.
+              </p>
+            ) : (
+              <ul className="space-y-2">
+                {material.stockEvents.map((ev) => {
+                  const delta   = Number(ev.delta);
+                  const balance = Number(ev.balanceAfter);
+                  const meta    = STOCK_EVENT_META[ev.reason];
+                  const positive = delta > 0;
+                  return (
+                    <li
+                      key={ev.id}
+                      className="flex items-start justify-between gap-3 rounded-lg px-3 py-2.5"
+                      style={{
+                        background: "color-mix(in oklab, var(--surface-2) 40%, transparent)",
+                        border: "1px solid var(--border-subtle)",
+                      }}
+                    >
+                      <div className="min-w-0 flex items-start gap-3">
+                        <span
+                          aria-hidden
+                          style={{
+                            flexShrink: 0,
+                            marginTop: 2,
+                            width: 8,
+                            height: 8,
+                            borderRadius: 999,
+                            background: meta.color,
+                            boxShadow: `0 0 0 2px color-mix(in oklab, ${meta.color} 25%, transparent)`,
+                          }}
+                        />
+                        <div className="min-w-0">
+                          <div
+                            className="flex flex-wrap items-baseline gap-1.5"
+                            style={{
+                              color: "var(--text-default)",
+                              fontSize: 12.5,
+                              fontWeight: 600,
+                              letterSpacing: "-0.005em",
+                            }}
+                          >
+                            <span style={{ color: meta.color }}>{meta.label}</span>
+                            <span
+                              style={{
+                                color: positive ? "var(--emerald-500)" : "var(--rose-500)",
+                                fontWeight: 700,
+                                fontFeatureSettings: "'tnum' 1",
+                              }}
+                            >
+                              {positive ? "+" : ""}{delta.toLocaleString(undefined, { maximumFractionDigits: 3 })}
+                              <span style={{ color: "var(--text-muted)", fontWeight: 400 }}>
+                                {" "}{material.unit}
+                              </span>
+                            </span>
+                            <span
+                              style={{
+                                color: "var(--text-faint)",
+                                fontSize: 11,
+                                fontWeight: 400,
+                                fontFeatureSettings: "'tnum' 1",
+                              }}
+                            >
+                              → {balance.toLocaleString(undefined, { maximumFractionDigits: 3 })} on hand
+                            </span>
+                          </div>
+                          {ev.note && (
+                            <p
+                              className="mt-0.5"
+                              style={{
+                                color: "var(--text-muted)",
+                                fontSize: 11.5,
+                                lineHeight: 1.4,
+                              }}
+                            >
+                              {ev.note}
+                            </p>
+                          )}
+                          <div
+                            className="mt-0.5"
+                            style={{
+                              color: "var(--text-faint)",
+                              fontSize: 11,
+                            }}
+                          >
+                            {ev.user?.name || ev.user?.email?.split("@")[0] || (ev.reason === "PURCHASE_ORDER" ? "System" : "—")}
+                            {ev.purchaseOrderLine?.purchaseOrder && (
+                              <>
+                                {" · "}
+                                <Link
+                                  href={`/t/${slug}/supplier-orders/${ev.purchaseOrderLine.purchaseOrder.id}`}
+                                  className="ts-focus underline-offset-2 hover:underline"
+                                  style={{ color: "var(--accent-primary)" }}
+                                >
+                                  PO {ev.purchaseOrderLine.purchaseOrder.number}
+                                </Link>
+                              </>
+                            )}
+                          </div>
+                        </div>
+                      </div>
+                      <span
+                        style={{
+                          color: "var(--text-faint)",
+                          fontSize: 11,
+                          whiteSpace: "nowrap",
+                          flexShrink: 0,
+                          fontFeatureSettings: "'tnum' 1",
+                        }}
+                        title={ev.createdAt.toISOString()}
+                      >
+                        {formatRelative(ev.createdAt)}
+                      </span>
+                    </li>
+                  );
+                })}
+              </ul>
+            )}
+          </SectionCard>
 
           {/* Recent PO history. */}
           <SectionCard

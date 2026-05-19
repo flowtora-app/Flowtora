@@ -40,19 +40,41 @@ export async function createMaterial(slug: string, formData: FormData) {
     redirect(`/t/${slug}/materials/new?error=${encodeURIComponent(msg)}`);
   }
 
-  await db.material.create({
-    data: {
-      tenantId:         ctx.tenant.id,
-      name:             parsed.data.name,
-      category:         parsed.data.category,
-      sku:              parsed.data.sku,
-      unit:             parsed.data.unit,
-      currentStock:     parsed.data.currentStock,
-      reorderAt:        parsed.data.reorderAt,
-      maxStock:         parsed.data.maxStock,
-      unitCost:         parsed.data.unitCost,
-      supplierVendorId: parsed.data.supplierVendorId || null,
-    },
+  // Create the material + INITIAL stock event in one transaction so
+  // the event log is always consistent with the on-hand counter (no
+  // stretch of time where the row exists without its origin event).
+  const initialStock = new Prisma.Decimal(parsed.data.currentStock);
+  await db.$transaction(async (tx) => {
+    const material = await tx.material.create({
+      data: {
+        tenantId:         ctx.tenant.id,
+        name:             parsed.data.name,
+        category:         parsed.data.category,
+        sku:              parsed.data.sku,
+        unit:             parsed.data.unit,
+        currentStock:     parsed.data.currentStock,
+        reorderAt:        parsed.data.reorderAt,
+        maxStock:         parsed.data.maxStock,
+        unitCost:         parsed.data.unitCost,
+        supplierVendorId: parsed.data.supplierVendorId || null,
+      },
+      select: { id: true },
+    });
+    // Only write the seed event when the operator set a non-zero
+    // starting count — a "0 → 0" event would just be noise.
+    if (parsed.data.currentStock > 0) {
+      await tx.materialStockEvent.create({
+        data: {
+          tenantId:     ctx.tenant.id,
+          materialId:   material.id,
+          reason:       "INITIAL",
+          delta:        initialStock,
+          balanceAfter: initialStock,
+          note:         "Initial on-hand at material creation",
+          userId:       ctx.userId,
+        },
+      });
+    }
   });
 
   revalidatePath(`/t/${slug}/materials`);
@@ -140,6 +162,10 @@ const adjustSchema = z.object({
   // count adjustment depending on direction.
   delta:  z.coerce.number(),
   reason: z.enum(["RECEIVE", "USE", "COUNT"]),
+  // Optional free-form note saved on the stock event row. Lets the
+  // operator capture context: "spilled cutting #4", "weekly recount",
+  // "used on O-1042".
+  note:   z.string().max(400).optional().nullable(),
 });
 
 export async function adjustMaterialStock(
@@ -152,6 +178,7 @@ export async function adjustMaterialStock(
   const parsed = adjustSchema.safeParse({
     delta:  formData.get("delta"),
     reason: formData.get("reason") || "RECEIVE",
+    note:   formData.get("note") || null,
   });
   if (!parsed.success) {
     const msg = parsed.error.issues[0]?.message ?? "Invalid input";
@@ -177,10 +204,29 @@ export async function adjustMaterialStock(
   // Clamp to zero — we never want negative on-hand.
   const clamped = next.lt(0) ? new Prisma.Decimal(0) : next;
 
-  await db.material.update({
-    where: { id },
-    data:  { currentStock: clamped },
-  });
+  // The effective delta is what we actually wrote, AFTER clamping
+  // (otherwise the event log gets a balanceAfter that doesn't match
+  // the new currentStock when someone tries to USE more than they
+  // have on hand).
+  const effectiveDelta = clamped.sub(material.currentStock);
+
+  await db.$transaction([
+    db.material.update({
+      where: { id },
+      data:  { currentStock: clamped },
+    }),
+    db.materialStockEvent.create({
+      data: {
+        tenantId:     ctx.tenant.id,
+        materialId:   id,
+        reason:       parsed.data.reason,
+        delta:        effectiveDelta,
+        balanceAfter: clamped,
+        note:         parsed.data.note?.trim() || null,
+        userId:       ctx.userId,
+      },
+    }),
+  ]);
 
   revalidatePath(`/t/${slug}/materials`);
   revalidatePath(`/t/${slug}/materials/${id}`);

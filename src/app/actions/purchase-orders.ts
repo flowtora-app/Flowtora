@@ -232,7 +232,9 @@ export async function receivePurchaseOrderLine(
     redirect(`/t/${slug}/supplier-orders/${poId}?error=${encodeURIComponent(`Cannot receive more than ${remaining} remaining`)}`);
   }
 
-  // Apply the receive. Bump Material stock if a Material is linked.
+  // Apply the receive. Bump Material stock if a Material is linked,
+  // and append a PURCHASE_ORDER stock event so the material detail
+  // timeline shows where the on-hand bump came from.
   const ops: Prisma.PrismaPromise<unknown>[] = [
     db.purchaseOrderLine.update({
       where: { id: lineId },
@@ -240,6 +242,15 @@ export async function receivePurchaseOrderLine(
     }),
   ];
   if (line.materialId) {
+    // Need the pre-receive stock to compute balanceAfter for the
+    // event row. Fetch outside the transaction since we're about to
+    // mutate it; the small race window is acceptable — receives are
+    // serialized in practice (one shipment, one operator).
+    const before = await db.material.findUnique({
+      where: { id: line.materialId },
+      select: { currentStock: true },
+    });
+    const balanceAfter = new Prisma.Decimal(before?.currentStock ?? 0).add(parsed.data.qty);
     ops.push(
       db.material.update({
         where: { id: line.materialId },
@@ -248,6 +259,18 @@ export async function receivePurchaseOrderLine(
           // Refresh unit cost to whatever we just paid — keeps the
           // "what does it cost today" caption honest.
           unitCost: line.unitCost,
+        },
+      }),
+      db.materialStockEvent.create({
+        data: {
+          tenantId:           ctx.tenant.id,
+          materialId:         line.materialId,
+          reason:             "PURCHASE_ORDER",
+          delta:              new Prisma.Decimal(parsed.data.qty),
+          balanceAfter,
+          note:               null,
+          userId:             ctx.userId,
+          purchaseOrderLineId: lineId,
         },
       }),
     );
