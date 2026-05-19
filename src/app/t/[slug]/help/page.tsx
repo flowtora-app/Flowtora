@@ -1,132 +1,111 @@
 import Link from "next/link";
 import { requireTenant } from "@/lib/tenant";
+import {
+  loadHelpCategories,
+  loadPopularArticles,
+  type HelpCategoryEntry,
+} from "@/server/tenant/help";
 
 // In-app help center (T-105).
 //
-// Searchable docs surface inside the workspace. Categories + popular
-// articles + contact-support fallback. Backend wiring (real article
-// content + search index) lands when the help knowledge base ships;
-// for now this is a polished navigable scaffold.
+// Searchable docs surface inside the workspace. Reads published KB
+// articles authored at /platform/operations/knowledge-base and shows
+// them organized by category, with popular articles in the sidebar.
+//
+// When the platform KB is empty (fresh deploy), we fall back to the
+// scaffold copy below so the page is never blank — same pattern we use
+// across the workspace.
 
 export const dynamic = "force-dynamic";
 
-type HelpCategory = {
-  slug: string;
-  title: string;
-  blurb: string;
-  count: number;
-  icon: React.ReactNode;
+// ── Scaffold copy (used when the live KB has no published articles).
+//
+// These are presentation-only stubs — the slugs map to the canonical
+// category slugs we use in the seed data, so when authors publish
+// against those slugs the same icons keep showing up.
+const CATEGORY_ICONS: Record<string, React.ReactNode> = {
+  "getting-started": (
+    <svg width="20" height="20" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="1.5">
+      <path d="m12 3 2.7 5.6 6.3.9-4.5 4.4 1 6.1-5.5-2.9-5.5 2.9 1-6.1L3 9.5l6.3-.9z" />
+    </svg>
+  ),
+  "quotes-and-invoicing": (
+    <svg width="20" height="20" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="1.5">
+      <path d="M6 4h9l5 5v11a1 1 0 0 1-1 1H6a1 1 0 0 1-1-1V5a1 1 0 0 1 1-1z" />
+      <path d="M15 4v5h5M8 13h8M8 17h5" />
+    </svg>
+  ),
+  production: (
+    <svg width="20" height="20" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="1.5">
+      <rect x="3" y="7" width="6" height="14" rx="1" />
+      <rect x="9" y="3" width="6" height="18" rx="1" />
+      <rect x="15" y="11" width="6" height="10" rx="1" />
+    </svg>
+  ),
+  "customers-and-portal": (
+    <svg width="20" height="20" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="1.5">
+      <circle cx="12" cy="8" r="4" />
+      <path d="M4 21v-1a8 8 0 0 1 16 0v1" />
+    </svg>
+  ),
+  "team-and-roles": (
+    <svg width="20" height="20" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="1.5">
+      <circle cx="9" cy="7" r="3" />
+      <circle cx="17" cy="9" r="2.5" />
+      <path d="M3 21v-1a6 6 0 0 1 12 0v1M15 21v-1a4.5 4.5 0 0 1 7.5-3.3" />
+    </svg>
+  ),
+  "billing-and-plans": (
+    <svg width="20" height="20" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="1.5">
+      <rect x="3" y="6" width="18" height="13" rx="2" />
+      <path d="M3 10h18" />
+    </svg>
+  ),
+  integrations: (
+    <svg width="20" height="20" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="1.5">
+      <circle cx="6" cy="6" r="2" />
+      <circle cx="18" cy="6" r="2" />
+      <circle cx="12" cy="18" r="2" />
+      <path d="M8 6h8M7 8l4 8M17 8l-4 8" />
+    </svg>
+  ),
+  settings: (
+    <svg width="20" height="20" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="1.5">
+      <circle cx="12" cy="12" r="3" />
+      <path d="M19.4 15a1.65 1.65 0 0 0 .33 1.82l.06.06a2 2 0 0 1-2.83 2.83l-.06-.06a1.65 1.65 0 0 0-1.82-.33 1.65 1.65 0 0 0-1 1.51V21a2 2 0 0 1-4 0v-.09A1.65 1.65 0 0 0 9 19.4a1.65 1.65 0 0 0-1.82.33l-.06.06a2 2 0 0 1-2.83-2.83l.06-.06a1.65 1.65 0 0 0 .33-1.82 1.65 1.65 0 0 0-1.51-1H3a2 2 0 0 1 0-4h.09A1.65 1.65 0 0 0 4.6 9a1.65 1.65 0 0 0-.33-1.82l-.06-.06a2 2 0 0 1 2.83-2.83l.06.06a1.65 1.65 0 0 0 1.82.33H9a1.65 1.65 0 0 0 1-1.51V3a2 2 0 0 1 4 0v.09a1.65 1.65 0 0 0 1 1.51 1.65 1.65 0 0 0 1.82-.33l.06-.06a2 2 0 0 1 2.83 2.83l-.06.06a1.65 1.65 0 0 0-.33 1.82V9a1.65 1.65 0 0 0 1.51 1H21a2 2 0 0 1 0 4h-.09a1.65 1.65 0 0 0-1.51 1z" />
+    </svg>
+  ),
 };
 
-const CATEGORIES: HelpCategory[] = [
-  {
-    slug: "getting-started",
-    title: "Getting started",
-    blurb: "First quote, first job, your shop brand — the day-one setup essentials.",
-    count: 12,
-    icon: (
-      <svg width="20" height="20" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="1.5">
-        <path d="m12 3 2.7 5.6 6.3.9-4.5 4.4 1 6.1-5.5-2.9-5.5 2.9 1-6.1L3 9.5l6.3-.9z" />
-      </svg>
-    ),
-  },
-  {
-    slug: "quotes-and-invoicing",
-    title: "Quotes & invoicing",
-    blurb: "Build a quote, send it for approval, convert to a job, collect payment.",
-    count: 18,
-    icon: (
-      <svg width="20" height="20" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="1.5">
-        <path d="M6 4h9l5 5v11a1 1 0 0 1-1 1H6a1 1 0 0 1-1-1V5a1 1 0 0 1 1-1z" />
-        <path d="M15 4v5h5M8 13h8M8 17h5" />
-      </svg>
-    ),
-  },
-  {
-    slug: "production",
-    title: "Production",
-    blurb: "Job queue, kanban board, production stages, blockers, equipment.",
-    count: 14,
-    icon: (
-      <svg width="20" height="20" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="1.5">
-        <rect x="3" y="7" width="6" height="14" rx="1" />
-        <rect x="9" y="3" width="6" height="18" rx="1" />
-        <rect x="15" y="11" width="6" height="10" rx="1" />
-      </svg>
-    ),
-  },
-  {
-    slug: "customers-and-portal",
-    title: "Customers & portal",
-    blurb: "Customer records, proof approval, the customer portal, online ordering.",
-    count: 16,
-    icon: (
-      <svg width="20" height="20" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="1.5">
-        <circle cx="12" cy="8" r="4" />
-        <path d="M4 21v-1a8 8 0 0 1 16 0v1" />
-      </svg>
-    ),
-  },
-  {
-    slug: "team-and-roles",
-    title: "Team & roles",
-    blurb: "Invite teammates, role permissions, branch access, audit trail.",
-    count: 9,
-    icon: (
-      <svg width="20" height="20" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="1.5">
-        <circle cx="9" cy="7" r="3" />
-        <circle cx="17" cy="9" r="2.5" />
-        <path d="M3 21v-1a6 6 0 0 1 12 0v1M15 21v-1a4.5 4.5 0 0 1 7.5-3.3" />
-      </svg>
-    ),
-  },
-  {
-    slug: "billing-and-plans",
-    title: "Billing & plans",
-    blurb: "Subscription, plan comparison, add-ons, invoices, cancelling.",
-    count: 11,
-    icon: (
-      <svg width="20" height="20" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="1.5">
-        <rect x="3" y="6" width="18" height="13" rx="2" />
-        <path d="M3 10h18" />
-      </svg>
-    ),
-  },
-  {
-    slug: "integrations",
-    title: "Integrations",
-    blurb: "QuickBooks, Stripe, Google Calendar, ShipStation, Slack, webhooks.",
-    count: 22,
-    icon: (
-      <svg width="20" height="20" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="1.5">
-        <circle cx="6" cy="6" r="2" />
-        <circle cx="18" cy="6" r="2" />
-        <circle cx="12" cy="18" r="2" />
-        <path d="M8 6h8M7 8l4 8M17 8l-4 8" />
-      </svg>
-    ),
-  },
-  {
-    slug: "settings",
-    title: "Workspace settings",
-    blurb: "Branding, locale, numbering, financial defaults, automations.",
-    count: 19,
-    icon: (
-      <svg width="20" height="20" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="1.5">
-        <circle cx="12" cy="12" r="3" />
-        <path d="M19.4 15a1.65 1.65 0 0 0 .33 1.82l.06.06a2 2 0 0 1-2.83 2.83l-.06-.06a1.65 1.65 0 0 0-1.82-.33 1.65 1.65 0 0 0-1 1.51V21a2 2 0 0 1-4 0v-.09A1.65 1.65 0 0 0 9 19.4a1.65 1.65 0 0 0-1.82.33l-.06.06a2 2 0 0 1-2.83-2.83l.06-.06a1.65 1.65 0 0 0 .33-1.82 1.65 1.65 0 0 0-1.51-1H3a2 2 0 0 1 0-4h.09A1.65 1.65 0 0 0 4.6 9a1.65 1.65 0 0 0-.33-1.82l-.06-.06a2 2 0 0 1 2.83-2.83l.06.06a1.65 1.65 0 0 0 1.82.33H9a1.65 1.65 0 0 0 1-1.51V3a2 2 0 0 1 4 0v.09a1.65 1.65 0 0 0 1 1.51 1.65 1.65 0 0 0 1.82-.33l.06-.06a2 2 0 0 1 2.83 2.83l-.06.06a1.65 1.65 0 0 0-.33 1.82V9a1.65 1.65 0 0 0 1.51 1H21a2 2 0 0 1 0 4h-.09a1.65 1.65 0 0 0-1.51 1z" />
-      </svg>
-    ),
-  },
+const DEFAULT_ICON = (
+  <svg width="20" height="20" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="1.5">
+    <path d="M4 4h16v16H4z" />
+    <path d="M8 9h8M8 13h6" />
+  </svg>
+);
+
+// Scaffold rows for the empty state. Click-throughs are intentionally
+// pointed at the search route so they bounce to "no results" rather
+// than 404.
+type ScaffoldCategory = { slug: string; name: string; blurb: string; count: number };
+const SCAFFOLD_CATEGORIES: ScaffoldCategory[] = [
+  { slug: "getting-started",       name: "Getting started",     blurb: "First quote, first job, your shop brand — the day-one setup essentials.", count: 12 },
+  { slug: "quotes-and-invoicing",  name: "Quotes & invoicing",  blurb: "Build a quote, send it for approval, convert to a job, collect payment.",   count: 18 },
+  { slug: "production",            name: "Production",          blurb: "Job queue, kanban board, production stages, blockers, equipment.",          count: 14 },
+  { slug: "customers-and-portal",  name: "Customers & portal",  blurb: "Customer records, proof approval, the customer portal, online ordering.",  count: 16 },
+  { slug: "team-and-roles",        name: "Team & roles",        blurb: "Invite teammates, role permissions, branch access, audit trail.",          count: 9  },
+  { slug: "billing-and-plans",     name: "Billing & plans",     blurb: "Subscription, plan comparison, add-ons, invoices, cancelling.",            count: 11 },
+  { slug: "integrations",          name: "Integrations",        blurb: "QuickBooks, Stripe, Google Calendar, ShipStation, Slack, webhooks.",       count: 22 },
+  { slug: "settings",              name: "Workspace settings",  blurb: "Branding, locale, numbering, financial defaults, automations.",            count: 19 },
 ];
 
-const POPULAR = [
-  { title: "How do I send a quote for approval?",   category: "Quotes & invoicing",  read: "3 min" },
-  { title: "Setting up your customer portal link",  category: "Customers & portal",  read: "5 min" },
-  { title: "Production blockers vs hold status",    category: "Production",          read: "4 min" },
-  { title: "Connecting QuickBooks for accounting",  category: "Integrations",        read: "8 min" },
-  { title: "Inviting your team — permissions guide", category: "Team & roles",        read: "6 min" },
-  { title: "Switching plans mid-cycle",             category: "Billing & plans",     read: "3 min" },
+const SCAFFOLD_POPULAR = [
+  { title: "How do I send a quote for approval?",   categoryName: "Quotes & invoicing",  readMinutes: 3 },
+  { title: "Setting up your customer portal link",  categoryName: "Customers & portal",  readMinutes: 5 },
+  { title: "Production blockers vs hold status",    categoryName: "Production",          readMinutes: 4 },
+  { title: "Connecting QuickBooks for accounting",  categoryName: "Integrations",        readMinutes: 8 },
+  { title: "Inviting your team — permissions guide", categoryName: "Team & roles",       readMinutes: 6 },
+  { title: "Switching plans mid-cycle",             categoryName: "Billing & plans",     readMinutes: 3 },
 ];
 
 export default async function HelpCenterPage({
@@ -136,6 +115,18 @@ export default async function HelpCenterPage({
 }) {
   const { slug } = await params;
   await requireTenant(slug);
+
+  // Pull real KB content. Categories with at least one published
+  // article surface in the live list — we hide empty ones so the page
+  // doesn't show "0 articles" cards when authors are still drafting.
+  const [allCategories, popular] = await Promise.all([
+    loadHelpCategories(),
+    loadPopularArticles(6),
+  ]);
+  const liveCategories = allCategories.filter((c) => c.articleCount > 0);
+
+  const usingScaffoldCategories = liveCategories.length === 0;
+  const usingScaffoldPopular    = popular.length === 0;
 
   return (
     <div className="space-y-5">
@@ -197,8 +188,13 @@ export default async function HelpCenterPage({
           Search guides for setup, day-to-day operations, integrations, and more.
         </p>
 
-        {/* Search input. */}
-        <form className="mx-auto mt-6" style={{ maxWidth: 520 }}>
+        {/* Search input — submits as GET to /help/search. */}
+        <form
+          method="get"
+          action={`/t/${slug}/help/search`}
+          className="mx-auto mt-6"
+          style={{ maxWidth: 520 }}
+        >
           <div
             className="flex items-center"
             style={{
@@ -219,6 +215,7 @@ export default async function HelpCenterPage({
             <input
               type="text"
               name="q"
+              autoComplete="off"
               placeholder="Search the help center…"
               style={{
                 flex: 1,
@@ -231,22 +228,21 @@ export default async function HelpCenterPage({
                 letterSpacing: "-0.005em",
               }}
             />
-            <kbd
+            <button
+              type="submit"
+              className="ts-focus rounded-md px-2 py-1"
               style={{
-                fontSize: 10,
-                fontWeight: 600,
-                color: "var(--text-faint)",
-                background: "var(--surface-1)",
-                border: "1px solid var(--border-subtle)",
-                padding: "2px 6px",
-                borderRadius: 5,
-                fontFamily: "var(--font-mono, ui-monospace, monospace)",
+                fontSize: 11,
+                fontWeight: 700,
+                color: "var(--accent-primary)",
+                background: "var(--accent-surface)",
+                border: "1px solid color-mix(in oklab, var(--accent-primary) 30%, transparent)",
                 marginLeft: 8,
-                flexShrink: 0,
+                letterSpacing: "0.04em",
               }}
             >
-              ⌘K
-            </kbd>
+              Search
+            </button>
           </div>
         </form>
       </div>
@@ -269,85 +265,33 @@ export default async function HelpCenterPage({
           >
             Browse by topic
           </h2>
+          {usingScaffoldCategories && <ScaffoldChip />}
         </div>
         <div className="grid gap-3 md:grid-cols-2 xl:grid-cols-4">
-          {CATEGORIES.map((c) => (
-            <Link
-              key={c.slug}
-              href={`/t/${slug}/help/${c.slug}`}
-              className="ts-focus group/cat relative block overflow-hidden rounded-xl transition-all hover:-translate-y-px"
-              style={{
-                padding: "16px 18px",
-                background:
-                  "linear-gradient(180deg, color-mix(in oklab, var(--surface-1) 92%, white 8%) 0%, var(--surface-1) 100%)",
-                border: "1px solid var(--border-subtle)",
-                boxShadow:
-                  "inset 0 1px 0 0 color-mix(in oklab, white 4%, transparent), " +
-                  "0 1px 2px 0 rgba(0,0,0,0.18)",
-                textDecoration: "none",
-              }}
-            >
-              <span
-                aria-hidden
-                className="pointer-events-none absolute inset-0 rounded-xl opacity-0 transition-opacity group-hover/cat:opacity-100"
-                style={{
-                  boxShadow:
-                    "0 0 0 1px color-mix(in oklab, var(--accent-primary) 35%, transparent), " +
-                    "0 8px 24px -10px rgba(0,0,0,0.45)",
-                }}
-              />
-              <div className="relative">
-                <span
-                  aria-hidden
-                  style={{
-                    display: "inline-flex",
-                    alignItems: "center",
-                    justifyContent: "center",
-                    width: 36,
-                    height: 36,
-                    borderRadius: 9,
-                    background:
-                      "linear-gradient(135deg, var(--accent-surface-strong), var(--accent-surface))",
-                    color: "var(--accent-primary)",
-                    border:
-                      "1px solid color-mix(in oklab, var(--accent-primary) 22%, transparent)",
-                  }}
-                >
-                  {c.icon}
-                </span>
-                <h3
-                  className="mt-3 font-semibold"
-                  style={{
-                    color: "var(--text-default)",
-                    fontSize: 13.5,
-                    letterSpacing: "-0.005em",
-                    lineHeight: 1.25,
-                  }}
-                >
-                  {c.title}
-                </h3>
-                <p
-                  className="mt-1"
-                  style={{ color: "var(--text-muted)", fontSize: 11.5, lineHeight: 1.4 }}
-                >
-                  {c.blurb}
-                </p>
-                <div
-                  className="mt-3"
-                  style={{
-                    color: "var(--text-faint)",
-                    fontSize: 10.5,
-                    fontWeight: 600,
-                    letterSpacing: "0.06em",
-                    textTransform: "uppercase",
-                    fontFeatureSettings: "'tnum' 1",
-                  }}
-                >
-                  {c.count} articles
-                </div>
-              </div>
-            </Link>
-          ))}
+          {usingScaffoldCategories
+            ? SCAFFOLD_CATEGORIES.map((c) => (
+                <CategoryCard
+                  key={c.slug}
+                  href={`/t/${slug}/help/search?q=${encodeURIComponent(c.name)}`}
+                  icon={CATEGORY_ICONS[c.slug] ?? DEFAULT_ICON}
+                  title={c.name}
+                  blurb={c.blurb}
+                  count={c.count}
+                  countLabel="articles"
+                  pending
+                />
+              ))
+            : liveCategories.map((c: HelpCategoryEntry) => (
+                <CategoryCard
+                  key={c.id}
+                  href={`/t/${slug}/help/${c.slug}`}
+                  icon={CATEGORY_ICONS[c.slug] ?? DEFAULT_ICON}
+                  title={c.name}
+                  blurb=""
+                  count={c.articleCount}
+                  countLabel={c.articleCount === 1 ? "article" : "articles"}
+                />
+              ))}
         </div>
       </section>
 
@@ -380,51 +324,34 @@ export default async function HelpCenterPage({
             >
               Popular this week
             </h2>
+            {usingScaffoldPopular && <ScaffoldChip />}
           </div>
           <ul>
-            {POPULAR.map((a, i) => (
-              <li
-                key={i}
-                style={{
-                  borderTop: i === 0 ? undefined : "1px solid var(--border-subtle)",
-                }}
-              >
-                <button
-                  type="button"
-                  className="block w-full text-left transition-colors hover:bg-[color-mix(in_oklab,var(--surface-3)_50%,transparent)]"
-                  style={{ padding: "12px 18px" }}
-                >
-                  <div className="flex items-center justify-between gap-3">
-                    <div className="min-w-0">
-                      <div
-                        style={{
-                          color: "var(--text-default)",
-                          fontSize: 13,
-                          fontWeight: 600,
-                          letterSpacing: "-0.005em",
-                        }}
-                      >
-                        {a.title}
-                      </div>
-                      <div
-                        className="mt-0.5"
-                        style={{
-                          color: "var(--text-muted)",
-                          fontSize: 11,
-                        }}
-                      >
-                        {a.category}
-                        <span style={{ color: "var(--text-faint)" }}> · </span>
-                        {a.read} read
-                      </div>
-                    </div>
-                    <svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" style={{ color: "var(--text-faint)", flexShrink: 0 }}>
-                      <path d="M9 18l6-6-6-6" />
-                    </svg>
-                  </div>
-                </button>
-              </li>
-            ))}
+            {usingScaffoldPopular
+              ? SCAFFOLD_POPULAR.map((a, i) => (
+                  <PopularRow
+                    key={i}
+                    href={null}
+                    title={a.title}
+                    categoryName={a.categoryName}
+                    readMinutes={a.readMinutes}
+                    firstRow={i === 0}
+                  />
+                ))
+              : popular.map((a, i) => (
+                  <PopularRow
+                    key={a.id}
+                    href={
+                      a.categorySlug
+                        ? `/t/${slug}/help/${a.categorySlug}/${a.slug}?from=popular`
+                        : null
+                    }
+                    title={a.title}
+                    categoryName={a.categoryName ?? "—"}
+                    readMinutes={a.readMinutes}
+                    firstRow={i === 0}
+                  />
+                ))}
           </ul>
         </section>
 
@@ -572,5 +499,199 @@ export default async function HelpCenterPage({
         </aside>
       </div>
     </div>
+  );
+}
+
+// ── Components ───────────────────────────────────────────────────────
+
+function ScaffoldChip() {
+  return (
+    <span
+      style={{
+        marginLeft: 8,
+        fontSize: 9.5,
+        fontWeight: 700,
+        letterSpacing: "0.08em",
+        textTransform: "uppercase",
+        color: "var(--amber-500)",
+        background: "color-mix(in oklab, var(--amber-500) 14%, transparent)",
+        border: "1px solid color-mix(in oklab, var(--amber-500) 30%, transparent)",
+        padding: "2px 7px",
+        borderRadius: 999,
+        lineHeight: 1,
+      }}
+    >
+      Coming soon
+    </span>
+  );
+}
+
+function CategoryCard({
+  href,
+  icon,
+  title,
+  blurb,
+  count,
+  countLabel,
+  pending,
+}: {
+  href: string;
+  icon: React.ReactNode;
+  title: string;
+  blurb: string;
+  count: number;
+  countLabel: string;
+  pending?: boolean;
+}) {
+  return (
+    <Link
+      href={href}
+      className="ts-focus group/cat relative block overflow-hidden rounded-xl transition-all hover:-translate-y-px"
+      style={{
+        padding: "16px 18px",
+        background:
+          "linear-gradient(180deg, color-mix(in oklab, var(--surface-1) 92%, white 8%) 0%, var(--surface-1) 100%)",
+        border: "1px solid var(--border-subtle)",
+        boxShadow:
+          "inset 0 1px 0 0 color-mix(in oklab, white 4%, transparent), " +
+          "0 1px 2px 0 rgba(0,0,0,0.18)",
+        textDecoration: "none",
+        opacity: pending ? 0.85 : 1,
+      }}
+    >
+      <span
+        aria-hidden
+        className="pointer-events-none absolute inset-0 rounded-xl opacity-0 transition-opacity group-hover/cat:opacity-100"
+        style={{
+          boxShadow:
+            "0 0 0 1px color-mix(in oklab, var(--accent-primary) 35%, transparent), " +
+            "0 8px 24px -10px rgba(0,0,0,0.45)",
+        }}
+      />
+      <div className="relative">
+        <span
+          aria-hidden
+          style={{
+            display: "inline-flex",
+            alignItems: "center",
+            justifyContent: "center",
+            width: 36,
+            height: 36,
+            borderRadius: 9,
+            background:
+              "linear-gradient(135deg, var(--accent-surface-strong), var(--accent-surface))",
+            color: "var(--accent-primary)",
+            border:
+              "1px solid color-mix(in oklab, var(--accent-primary) 22%, transparent)",
+          }}
+        >
+          {icon}
+        </span>
+        <h3
+          className="mt-3 font-semibold"
+          style={{
+            color: "var(--text-default)",
+            fontSize: 13.5,
+            letterSpacing: "-0.005em",
+            lineHeight: 1.25,
+          }}
+        >
+          {title}
+        </h3>
+        {blurb && (
+          <p
+            className="mt-1"
+            style={{ color: "var(--text-muted)", fontSize: 11.5, lineHeight: 1.4 }}
+          >
+            {blurb}
+          </p>
+        )}
+        <div
+          className="mt-3"
+          style={{
+            color: "var(--text-faint)",
+            fontSize: 10.5,
+            fontWeight: 600,
+            letterSpacing: "0.06em",
+            textTransform: "uppercase",
+            fontFeatureSettings: "'tnum' 1",
+          }}
+        >
+          {count} {countLabel}
+        </div>
+      </div>
+    </Link>
+  );
+}
+
+function PopularRow({
+  href,
+  title,
+  categoryName,
+  readMinutes,
+  firstRow,
+}: {
+  href: string | null;
+  title: string;
+  categoryName: string;
+  readMinutes: number;
+  firstRow: boolean;
+}) {
+  const inner = (
+    <>
+      <div className="flex items-center justify-between gap-3">
+        <div className="min-w-0">
+          <div
+            style={{
+              color: "var(--text-default)",
+              fontSize: 13,
+              fontWeight: 600,
+              letterSpacing: "-0.005em",
+            }}
+          >
+            {title}
+          </div>
+          <div
+            className="mt-0.5"
+            style={{
+              color: "var(--text-muted)",
+              fontSize: 11,
+            }}
+          >
+            {categoryName}
+            <span style={{ color: "var(--text-faint)" }}> · </span>
+            {readMinutes} min read
+          </div>
+        </div>
+        <svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" style={{ color: "var(--text-faint)", flexShrink: 0 }}>
+          <path d="M9 18l6-6-6-6" />
+        </svg>
+      </div>
+    </>
+  );
+
+  return (
+    <li
+      style={{
+        borderTop: firstRow ? undefined : "1px solid var(--border-subtle)",
+      }}
+    >
+      {href ? (
+        <Link
+          href={href}
+          className="ts-focus block w-full text-left transition-colors hover:bg-[color-mix(in_oklab,var(--surface-3)_50%,transparent)]"
+          style={{ padding: "12px 18px", textDecoration: "none" }}
+        >
+          {inner}
+        </Link>
+      ) : (
+        <div
+          className="block w-full text-left"
+          style={{ padding: "12px 18px", opacity: 0.7 }}
+        >
+          {inner}
+        </div>
+      )}
+    </li>
   );
 }
