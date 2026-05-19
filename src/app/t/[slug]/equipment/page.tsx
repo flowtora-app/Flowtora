@@ -325,7 +325,11 @@ export default async function EquipmentPage({
       {/* Equipment grid. */}
       <div className="grid gap-3 md:grid-cols-2 xl:grid-cols-3">
         {items.map((e) => (
-          <EquipmentCard key={e.id} item={e} />
+          <EquipmentCard
+            key={e.id}
+            item={e}
+            href={usingPreview ? null : `/t/${slug}/equipment/${e.id}`}
+          />
         ))}
       </div>
 
@@ -388,11 +392,25 @@ function relativeFromNow(ms: number): string {
   return `in ${months} month${months === 1 ? "" : "s"}`;
 }
 
-function EquipmentCard({ item }: { item: ExampleEquipment }) {
+function EquipmentCard({
+  item,
+  href,
+}: {
+  item: ExampleEquipment;
+  href: string | null;
+}) {
   const status = STATUS_META[item.status];
+  const Wrapper: React.ElementType = href ? Link : "div";
+  const wrapperProps = href
+    ? {
+        href,
+        className:
+          "ts-focus relative block overflow-hidden rounded-xl transition-colors hover:border-[color-mix(in_oklab,var(--accent-primary)_45%,var(--border-subtle))]",
+      }
+    : { className: "relative overflow-hidden rounded-xl" };
   return (
-    <div
-      className="relative overflow-hidden rounded-xl"
+    <Wrapper
+      {...wrapperProps}
       style={{
         padding: "18px 20px",
         background:
@@ -401,6 +419,7 @@ function EquipmentCard({ item }: { item: ExampleEquipment }) {
         boxShadow:
           "inset 0 1px 0 0 color-mix(in oklab, white 4%, transparent), " +
           "0 1px 2px 0 rgba(0,0,0,0.18)",
+        textDecoration: "none",
       }}
     >
       <div className="flex items-start justify-between gap-3">
@@ -608,6 +627,6 @@ function EquipmentCard({ item }: { item: ExampleEquipment }) {
           </span>
         </div>
       )}
-    </div>
+    </Wrapper>
   );
 }

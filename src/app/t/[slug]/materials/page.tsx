@@ -274,24 +274,43 @@ export default async function MaterialsPage({
               const t = tone(m);
               const meta = TONE_META[t];
               const pct = Math.min(100, Math.round((m.current / m.max) * 100));
+              const detailHref = usingPreview ? null : `/t/${slug}/materials/${m.id}`;
               return (
                 <tr
                   key={m.id}
                   style={{
                     borderTop: "1px solid var(--border-subtle)",
+                    cursor: detailHref ? "pointer" : undefined,
                   }}
+                  className={detailHref ? "hover:bg-[color-mix(in_oklab,var(--surface-2)_40%,transparent)]" : ""}
                 >
                   <td className="px-4 py-3">
-                    <div
-                      style={{
-                        color: "var(--text-default)",
-                        fontSize: 13,
-                        fontWeight: 600,
-                        letterSpacing: "-0.005em",
-                      }}
-                    >
-                      {m.name}
-                    </div>
+                    {detailHref ? (
+                      <Link
+                        href={detailHref}
+                        className="ts-focus block underline-offset-2 hover:underline"
+                        style={{
+                          color: "var(--text-default)",
+                          fontSize: 13,
+                          fontWeight: 600,
+                          letterSpacing: "-0.005em",
+                          textDecoration: "none",
+                        }}
+                      >
+                        {m.name}
+                      </Link>
+                    ) : (
+                      <div
+                        style={{
+                          color: "var(--text-default)",
+                          fontSize: 13,
+                          fontWeight: 600,
+                          letterSpacing: "-0.005em",
+                        }}
+                      >
+                        {m.name}
+                      </div>
+                    )}
                     <div
                       className="mt-0.5"
                       style={{
