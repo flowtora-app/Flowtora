@@ -2,6 +2,7 @@ import Link from "next/link";
 import { notFound } from "next/navigation";
 import { db } from "@/lib/db";
 import { submitStorefrontCheckout } from "@/app/actions/customer-checkout";
+import { CustomerFileStaging } from "@/components/storefront/CustomerFileStaging";
 
 // Customer checkout (S-5).
 //
@@ -489,6 +490,15 @@ export default async function StorefrontCheckoutPage({
                       }}
                     />
                   </label>
+
+                  {/* Optional file attachments. Drag-and-drop multi-file
+                      uploader that submits its FileList with the rest of
+                      the form. Files land on the new quote as
+                      CUSTOMER_UPLOAD kind so shop staff can see them on
+                      the quote detail page right away. */}
+                  <div className="sm:col-span-2">
+                    <CustomerFileStaging brand={brand} />
+                  </div>
                 </div>
 
                 {/* Payment radios. */}

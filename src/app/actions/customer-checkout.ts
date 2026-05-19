@@ -8,6 +8,12 @@ import { db } from "@/lib/db";
 import { stripe } from "@/lib/stripe";
 import { sendEmail } from "@/lib/email";
 import { clearCart, getCartSummary, resolveOrCreateCart } from "@/lib/cart";
+import {
+  isStorageConfigured,
+  publicUrlFor,
+  putFile,
+  StorageError,
+} from "@/lib/storage";
 
 // Storefront checkout submission (S-5).
 //
@@ -30,6 +36,13 @@ import { clearCart, getCartSummary, resolveOrCreateCart } from "@/lib/cart";
 // submitter isn't an authenticated staff user.
 
 const RESERVATION_AMOUNT_USD = 50; // configurable per-tenant later
+
+// Storefront file attachments — anonymous-friendly guards. Customers
+// can drop a few reference photos / briefs / design files alongside
+// the quote-request form; staff see them on the workspace quote
+// detail page right away.
+const MAX_STOREFRONT_ATTACHMENTS_PER_REQUEST = 6;
+const MAX_STOREFRONT_ATTACHMENT_BYTES        = 25 * 1024 * 1024; // 25 MB
 
 const submitSchema = z.object({
   firstName: z.string().min(1, "First name is required").max(80),
@@ -173,6 +186,66 @@ export async function submitStorefrontCheckout(slug: string, formData: FormData)
     select: { id: true, number: true },
   });
 
+  // ── Upload any customer-supplied attachments ──────────────────
+  //
+  // The S-5 checkout form has an optional drag-and-drop file input.
+  // Files arrive in the FormData under `files`; we keep the limits
+  // tight (6 files / 25 MB each) to match the client-side guard,
+  // and we skip anything that fails the per-file check rather than
+  // aborting the whole submission. Upload happens AFTER the quote
+  // row exists so we can foreign-key the File rows to it.
+  //
+  // The customer is anonymous (or magic-link-authed via a separate
+  // CustomerAccount that doesn't map to a staff User) — we use the
+  // "storefront" sentinel for `File.uploaderId`, mirroring the same
+  // sentinel used on `Quote.createdBy` above.
+  let uploadedFileCount = 0;
+  const rawAttachments = formData
+    .getAll("files")
+    .filter((v): v is File => v instanceof File && v.size > 0)
+    .slice(0, MAX_STOREFRONT_ATTACHMENTS_PER_REQUEST);
+
+  if (rawAttachments.length > 0 && isStorageConfigured()) {
+    for (const file of rawAttachments) {
+      if (file.size > MAX_STOREFRONT_ATTACHMENT_BYTES) continue;
+      try {
+        const { key, contentType, size } = await putFile({
+          tenantId:   tenant.id,
+          scope:      "customer-files",
+          ownerId:    quote.id,
+          file,
+          visibility: "public",
+        });
+        const url = publicUrlFor(key);
+        const isImage = contentType.startsWith("image/");
+        await db.file.create({
+          data: {
+            tenantId:     tenant.id,
+            uploaderId:   "storefront",
+            filename:     file.name,
+            storageUrl:   url,
+            thumbnailUrl: isImage ? url : null,
+            mimeType:     contentType,
+            sizeBytes:    size,
+            kind:         "CUSTOMER_UPLOAD",
+            quoteId:      quote.id,
+            customerId:   customer.id,
+          },
+        });
+        uploadedFileCount += 1;
+      } catch (err) {
+        // Best-effort — if one file fails we log + continue so the
+        // submitter still gets their confirmation and the rest of the
+        // files still land.
+        if (err instanceof StorageError) {
+          console.error("[storefront-checkout] storage error for", file.name, err.message);
+        } else {
+          console.error("[storefront-checkout] file upload failed for", file.name, err);
+        }
+      }
+    }
+  }
+
   // Clear the cart so it doesn't reappear on the next page load.
   await clearCart(cartId).catch(() => { /* non-fatal */ });
 
@@ -191,6 +264,7 @@ export async function submitStorefrontCheckout(slug: string, formData: FormData)
         (parsed.data.phone ? `Phone: ${parsed.data.phone}\n` : "") +
         (parsed.data.company ? `Company: ${parsed.data.company}\n` : "") +
         (parsed.data.notes ? `\nDetails:\n${parsed.data.notes}\n` : "") +
+        (uploadedFileCount > 0 ? `\n${uploadedFileCount} attachment${uploadedFileCount === 1 ? "" : "s"} on the quote.\n` : "") +
         `\nOpen in workspace: /t/${slug}/quotes/${quote.id}\n`,
       html:
         `<p><strong>${escapeHtml(fullName)}</strong> requested a quote via your storefront.</p>` +
@@ -199,6 +273,9 @@ export async function submitStorefrontCheckout(slug: string, formData: FormData)
         (parsed.data.phone ? `<strong>Phone:</strong> ${escapeHtml(parsed.data.phone)}<br>` : "") +
         (parsed.data.company ? `<strong>Company:</strong> ${escapeHtml(parsed.data.company)}<br>` : "") +
         `</p>` +
+        (uploadedFileCount > 0
+          ? `<p style="color:#6b7280">📎 ${uploadedFileCount} attachment${uploadedFileCount === 1 ? "" : "s"} on this quote — open the workspace to view.</p>`
+          : "") +
         (parsed.data.notes
           ? `<p><strong>Project details:</strong></p><p style="white-space:pre-wrap">${escapeHtml(parsed.data.notes)}</p>`
           : ""),
