@@ -4,6 +4,8 @@ import { requirePermission } from "@/lib/tenant";
 import { db } from "@/lib/db";
 import { Card, CardHeader } from "@/components/Card";
 import { CommentThread } from "@/components/CommentThread";
+import { FilesCard } from "@/components/FilesCard";
+import { AttachFilesCard } from "@/components/files/AttachFilesCard";
 import { Button, Field, SelectField, TextArea, Checkbox } from "@/components/Field";
 import {
   updateQuoteMeta,
@@ -134,6 +136,7 @@ export default async function QuoteDetailPage({
       },
       sections: { orderBy: { sortOrder: "asc" } },
       comments: { orderBy: { createdAt: "asc" }, take: 200 },
+      files:    { orderBy: { createdAt: "desc" }, take: 100 },
     },
   });
   if (!quote) notFound();
@@ -1765,6 +1768,37 @@ export default async function QuoteDetailPage({
                 />
               </Card>
             )}
+          </CollapsibleSection>
+
+          {/* Files attached to this quote. Mounted as a collapsible so
+              the editor stays focused — open when there's artwork /
+              reference material to manage. */}
+          <CollapsibleSection
+            id="files"
+            title="Files"
+            summary={`${quote.files.filter((f) => !f.archivedAt).length} file${quote.files.filter((f) => !f.archivedAt).length === 1 ? "" : "s"}`}
+            defaultOpen={quote.files.length > 0}
+          >
+            {canManage && (
+              <AttachFilesCard
+                slug={slug}
+                parent={{ kind: "quote", id: quote.id }}
+                defaultKind="REFERENCE"
+                title="Attach files to this quote"
+                description="Reference photos, briefs, mockups — anything that helps shape the job. Drag and drop or click to browse."
+              />
+            )}
+            <FilesCard
+              slug={slug}
+              files={quote.files}
+              parent={{ kind: "quote", id: quote.id }}
+              canUpload={canManage}
+              backUrl={`/t/${slug}/quotes/${quote.id}`}
+              title="Quote files"
+              defaultKind="REFERENCE"
+              memberMap={memberMap}
+              suppressUploadForm
+            />
           </CollapsibleSection>
 
           {/* Former "Activity" tab — timeline, revisions, comments. Tucked

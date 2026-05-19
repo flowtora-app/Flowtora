@@ -260,6 +260,7 @@ export default async function TenantLayout({
       items: [
         { href: `${base}/products`,         label: "Products",  icon: "Products" },
         { href: `${base}/materials`,        label: "Materials", icon: "Package"  },
+        { href: `${base}/files`,            label: "Files",     icon: "FileText" },
       ],
     },
     {
